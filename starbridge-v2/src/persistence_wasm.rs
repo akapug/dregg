@@ -31,12 +31,16 @@ impl std::error::Error for StoreError {}
 pub enum OpenError {
     Store(StoreError),
     Divergent { got: [u8; 32], expected: [u8; 32] },
+    UnsupportedHistory { reason: String },
 }
 
 impl std::fmt::Display for OpenError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             OpenError::Store(e) => write!(f, "durable store error: {e}"),
+            OpenError::UnsupportedHistory { reason } => {
+                write!(f, "durable history format unavailable: {reason}")
+            }
             OpenError::Divergent { got, expected } => {
                 write!(f, "recovery convergence FAILED: {got:?} != {expected:?}")
             }
@@ -60,11 +64,19 @@ pub struct RecoveredImage {
 pub enum WorldPersist {}
 
 impl WorldPersist {
-    pub fn record_genesis(&self, _cell: &dregg_cell::Cell) -> Result<(), StoreError> {
+    pub fn record_genesis(
+        &mut self,
+        _cell: &dregg_cell::Cell,
+        _before: &dregg_cell::Ledger,
+    ) -> Result<(), StoreError> {
         match *self {}
     }
 
-    pub fn record_genesis_batch(&self, _cells: &[dregg_cell::Cell]) -> Result<(), StoreError> {
+    pub fn record_genesis_batch(
+        &mut self,
+        _cells: &[dregg_cell::Cell],
+        _before: &dregg_cell::Ledger,
+    ) -> Result<(), StoreError> {
         match *self {}
     }
 

@@ -594,8 +594,8 @@ impl Turn {
 // ReversibleHistory — undo_to, the backward dual of replay_to
 // ===========================================================================
 
-/// One recorded step of reversible history — genesis installs and committed
-/// turns, in order. Replaying `0..=k` reconstructs the world at step k; undoing
+/// One recorded step of reversible history — genesis installs, trusted setup
+/// updates and committed turns, in order. Replaying `0..=k` reconstructs the world at step k; undoing
 /// `k+1..head` reverses back to it. Mirrors starbridge's `replay::RecordedStep`
 /// (which is off-limits to this crate), self-contained here so the un-turn lives
 /// beside `Effect::invert`.
@@ -603,6 +603,10 @@ impl Turn {
 pub enum ReversibleStep {
     /// A cell installed directly at genesis (bypasses the executor).
     Genesis { cell: Cell },
+    /// An existing cell replaced by trusted setup, without a turn or receipt.
+    /// Both images are retained so replay checks the preimage and historical
+    /// undo restores it. This is not an authorized runtime effect.
+    GenesisUpdate { before: Cell, cell: Cell },
     /// A turn committed against the embedded executor. Carries the input turn
     /// (so replay RE-EXECUTES it), the receipt, and the canonical post-state
     /// root tooth.
@@ -628,6 +632,8 @@ pub enum ReversibleError {
     },
     /// A recorded turn that committed when first run did NOT commit on replay.
     NondeterministicReplay { step: usize, got: String },
+    /// A trusted setup replacement was missing its cell or exact preimage.
+    InvalidSetupUpdate { step: usize, reason: String },
     /// `undo_to(k)` hit a committed (irreversible) step in `k+1..head` — you
     /// cannot undo *past* a commit. This is the RCCS islands-of-irreversibility
     /// made an API boundary (`FIRST-CLASS-REVERSIBILITY.md` §3.2).
@@ -651,6 +657,9 @@ impl std::fmt::Display for ReversibleError {
             }
             ReversibleError::NondeterministicReplay { step, got } => {
                 write!(f, "nondeterministic replay at step {step}: {got}")
+            }
+            ReversibleError::InvalidSetupUpdate { step, reason } => {
+                write!(f, "invalid setup update at step {step}: {reason}")
             }
             ReversibleError::IrreversibleStep { step, reason } => write!(
                 f,
@@ -698,6 +707,7 @@ pub struct ReversibleHistory {
     roots: Vec<[u8; 32]>,
     timestamp: i64,
     costs: ComputronCosts,
+    factories: Vec<dregg_cell::FactoryDescriptor>,
 }
 
 impl ReversibleHistory {
@@ -715,14 +725,34 @@ impl ReversibleHistory {
             roots,
             timestamp,
             costs,
+            factories: Vec::new(),
         }
+    }
+
+    /// Retain the same factory registry used to execute the recorded history.
+    /// Deployment chronology remains the source World's setup responsibility.
+    pub fn with_factories(mut self, factories: Vec<dregg_cell::FactoryDescriptor>) -> Self {
+        self.factories = factories;
+        self
     }
 
     /// The recording executor (pinned costs + timestamp), so a recorded turn
     /// re-derives bit-identically on replay/undo.
     pub fn fresh_executor(&self) -> TurnExecutor {
         let mut e = TurnExecutor::new(self.costs.clone());
-        e.set_timestamp(self.timestamp);
+        for descriptor in &self.factories {
+            e.deploy_factory(descriptor.clone());
+        }
+        let floor = self
+            .steps
+            .iter()
+            .filter_map(|step| match step.as_ref() {
+                ReversibleStep::Committed { receipt, .. } => Some(receipt.timestamp),
+                _ => None,
+            })
+            .min()
+            .map_or(self.timestamp, |earliest| earliest.min(self.timestamp));
+        e.set_timestamp(floor);
         e
     }
 
@@ -760,6 +790,29 @@ impl ReversibleHistory {
         self.steps.push(Arc::new(ReversibleStep::Genesis { cell }));
         self.roots.push(ledger.root());
         id
+    }
+
+    /// Record an existing-cell setup replacement at this exact position. The
+    /// prior image remains part of the immutable history, not a rewritten birth.
+    pub fn record_genesis_update(
+        &mut self,
+        ledger: &mut Ledger,
+        cell: Cell,
+    ) -> Result<(), ReversibleError> {
+        let step = self.steps.len();
+        let current =
+            ledger
+                .get_mut(&cell.id())
+                .ok_or_else(|| ReversibleError::InvalidSetupUpdate {
+                    step,
+                    reason: "replacement requires an existing cell".to_string(),
+                })?;
+        let before = current.clone();
+        *current = cell.clone();
+        self.steps
+            .push(Arc::new(ReversibleStep::GenesisUpdate { before, cell }));
+        self.roots.push(ledger.root());
+        Ok(())
     }
 
     /// Record a committed turn (threads the chain head exactly as the live
@@ -801,9 +854,18 @@ impl ReversibleHistory {
             });
         }
         let mut ledger = Ledger::new();
-        let executor = self.fresh_executor();
-        for step in &self.steps[..k] {
-            apply_step(&executor, &mut ledger, step)?;
+        let mut executor = self.fresh_executor();
+        for (index, step) in self.steps[..k].iter().enumerate() {
+            apply_step(&mut executor, &mut ledger, step, index)?;
+            let got = ledger.root();
+            let want = self.roots[index + 1];
+            if got != want {
+                return Err(ReversibleError::RootMismatch {
+                    step: index + 1,
+                    got,
+                    want,
+                });
+            }
         }
         let got = ledger.root();
         let want = self.roots[k];
@@ -841,14 +903,14 @@ impl ReversibleHistory {
 
         // Start from the verified head state and walk backward.
         let mut ledger = self.replay_to(head)?;
-        let executor = self.fresh_executor();
+        let mut executor = self.fresh_executor();
         // Prime the executor's per-agent chain-head table to the head by
         // replaying through `head` (so each inverse un-turn chains correctly as
         // a fresh forward turn in the agent's chain).
         {
             let mut warm = Ledger::new();
-            for step in &self.steps[..head] {
-                apply_step(&executor, &mut warm, step)?;
+            for (index, step) in self.steps[..head].iter().enumerate() {
+                apply_step(&mut executor, &mut warm, step, index)?;
             }
         }
 
@@ -856,6 +918,29 @@ impl ReversibleHistory {
         // most-recent-first — the causal cone reversed.
         for idx in (k..head).rev() {
             let step = self.steps[idx].as_ref();
+            if let ReversibleStep::GenesisUpdate { before, cell } = step {
+                let current = ledger.get_mut(&cell.id()).ok_or_else(|| {
+                    ReversibleError::InvalidSetupUpdate {
+                        step: idx,
+                        reason: "undo replacement cell is absent".to_string(),
+                    }
+                })?;
+                // Later inverse turns may have advanced the nonce. Restore the
+                // complete prior image while retaining that freshness ratchet.
+                let nonce = current.state.nonce();
+                let mut normalized = current.clone();
+                normalized.state.set_nonce(cell.state.nonce());
+                if &normalized != cell || nonce < cell.state.nonce() {
+                    return Err(ReversibleError::InvalidSetupUpdate {
+                        step: idx,
+                        reason: "undo replacement does not match its recorded postimage"
+                            .to_string(),
+                    });
+                }
+                *current = before.clone();
+                current.state.set_nonce(nonce.max(before.state.nonce()));
+                continue;
+            }
             let ReversibleStep::Committed { turn, .. } = step else {
                 // A genesis step in the undo window: its inverse is "retire the
                 // freshly-born cell". Genesis installs are at the bottom of
@@ -945,6 +1030,11 @@ impl ReversibleHistory {
         for idx in k..head {
             match self.steps[idx].as_ref() {
                 ReversibleStep::Genesis { .. } => return false,
+                ReversibleStep::GenesisUpdate { .. } => {
+                    if self.replay_to(idx + 1).is_err() {
+                        return false;
+                    }
+                }
                 ReversibleStep::Committed { turn, .. } => {
                     // Reconstruct the pre-state to test invertibility honestly.
                     let Ok(pre) = self.replay_to(idx) else {
@@ -992,15 +1082,21 @@ impl ReversibleHistory {
         }
         // The cells this turn touched.
         let mine = turn_touched_cells(turn);
-        // No LATER turn may touch any of them (else it causally depends on this
-        // turn's write — undoing in isolation would leave it dangling).
+        // No later turn or setup replacement may touch any of them: either
+        // would depend on this turn's state and forbid isolated reversal.
         for later in &self.steps[idx + 1..] {
-            if let ReversibleStep::Committed { turn: lt, .. } = later.as_ref() {
-                for c in turn_touched_cells(lt) {
-                    if mine.contains(&c) {
-                        return false;
+            match later.as_ref() {
+                ReversibleStep::Committed { turn: lt, .. } => {
+                    for c in turn_touched_cells(lt) {
+                        if mine.contains(&c) {
+                            return false;
+                        }
                     }
                 }
+                ReversibleStep::GenesisUpdate { cell, .. } if mine.contains(&cell.id()) => {
+                    return false;
+                }
+                _ => {}
             }
         }
         true
@@ -1056,6 +1152,7 @@ impl ReversibleHistory {
             roots: self.roots[..=k].to_vec(),
             timestamp: self.timestamp,
             costs: self.costs.clone(),
+            factories: self.factories.clone(),
         }
     }
 }
@@ -1112,30 +1209,57 @@ fn turn_touched_cells(turn: &Turn) -> std::collections::BTreeSet<CellId> {
 
 /// Apply one recorded step to a ledger under a (warm) executor, re-deriving it.
 fn apply_step(
-    executor: &TurnExecutor,
+    executor: &mut TurnExecutor,
     ledger: &mut Ledger,
     step: &ReversibleStep,
+    index: usize,
 ) -> Result<(), ReversibleError> {
     match step {
         ReversibleStep::Genesis { cell } => {
-            let _ = ledger.insert_cell(cell.clone());
+            ledger.insert_cell(cell.clone()).map_err(|error| {
+                ReversibleError::NondeterministicReplay {
+                    step: index,
+                    got: format!("{error:?}"),
+                }
+            })?;
+            Ok(())
+        }
+        ReversibleStep::GenesisUpdate { before, cell } => {
+            let current =
+                ledger
+                    .get_mut(&cell.id())
+                    .ok_or_else(|| ReversibleError::InvalidSetupUpdate {
+                        step: index,
+                        reason: "replacement cell is absent".to_string(),
+                    })?;
+            if current != before {
+                return Err(ReversibleError::InvalidSetupUpdate {
+                    step: index,
+                    reason: "replacement preimage does not match".to_string(),
+                });
+            }
+            *current = cell.clone();
             Ok(())
         }
         ReversibleStep::Committed { turn, receipt, .. } => {
-            let mut t = turn.clone();
-            t.previous_receipt_hash = executor.get_last_receipt_hash(&t.agent);
-            match executor.execute(&t, ledger) {
-                TurnResult::Committed { receipt: r, .. } => {
+            if turn.previous_receipt_hash != executor.get_last_receipt_hash(&turn.agent) {
+                return Err(ReversibleError::NondeterministicReplay {
+                    step: index,
+                    got: "receipt chain head differs".to_string(),
+                });
+            }
+            executor.set_timestamp(receipt.timestamp);
+            match executor.execute(turn, ledger) {
+                TurnResult::Committed { receipt: r, .. }
+                    if r.receipt_hash() == receipt.receipt_hash() =>
+                {
                     executor.set_last_receipt_hash(r.agent, r.receipt_hash());
                     Ok(())
                 }
-                other => {
-                    let _ = receipt;
-                    Err(ReversibleError::NondeterministicReplay {
-                        step: 0,
-                        got: format!("{other:?}"),
-                    })
-                }
+                other => Err(ReversibleError::NondeterministicReplay {
+                    step: index,
+                    got: format!("{other:?}"),
+                }),
             }
         }
     }
@@ -1275,6 +1399,109 @@ mod tests {
 
     fn nonce_of(l: &Ledger, id: &CellId) -> u64 {
         l.get(id).map(|c| c.state.nonce()).unwrap_or(0)
+    }
+
+    #[test]
+    fn setup_updates_preserve_order_and_restore_the_complete_prior_cell() {
+        let mut history = ReversibleHistory::new(1_700_000_000);
+        let mut ledger = Ledger::new();
+        let mut executor = history.fresh_executor();
+        let a = history.record_genesis(&mut ledger, open_cell(1, 1_000));
+        let b = history.record_genesis(&mut ledger, open_cell(2, 0));
+        let first = turn_with(
+            a,
+            nonce_of(&ledger, &a),
+            vec![Effect::Transfer {
+                from: a,
+                to: b,
+                amount: 100,
+            }],
+        );
+        assert!(
+            history
+                .record_commit(&executor, &mut ledger, first)
+                .is_some()
+        );
+        let before_root = ledger.root();
+        let before = ledger.get(&a).unwrap().clone();
+        assert!(history.can_undo_isolated(2));
+
+        let mut updated = before.clone();
+        updated.state.fields[5] = [0x71; 32];
+        updated.permissions.set_verification_key = AuthRequired::Impossible;
+        history
+            .record_genesis_update(&mut ledger, updated.clone())
+            .unwrap();
+        assert_eq!(history.root_at(3), before_root);
+        assert_eq!(history.replay_to(3).unwrap().get(&a), Some(&before));
+        assert_eq!(history.replay_to(4).unwrap().get(&a), Some(&updated));
+        assert!(
+            !history.can_undo_isolated(2),
+            "replacement depends on the prior turn"
+        );
+
+        executor.set_timestamp(1_700_000_030);
+        let second = turn_with(
+            a,
+            nonce_of(&ledger, &a),
+            vec![Effect::Transfer {
+                from: a,
+                to: b,
+                amount: 20,
+            }],
+        );
+        assert!(
+            history
+                .record_commit(&executor, &mut ledger, second)
+                .is_some()
+        );
+        assert_eq!(
+            history.replay_to(history.len()).unwrap().root(),
+            ledger.root()
+        );
+        assert!(history.window_reversible(3));
+        let undone = history
+            .undo_to(3)
+            .expect("setup replacement and later transfer can be restored");
+        let mut restored = undone.get(&a).unwrap().clone();
+        assert!(restored.state.nonce() >= ledger.get(&a).unwrap().state.nonce());
+        restored.state.set_nonce(before.state.nonce());
+        assert_eq!(
+            restored, before,
+            "restore permissions and every other prior cell field"
+        );
+        assert_eq!(undone.get(&b).unwrap().state.balance(), 100);
+
+        let fork = history.fork_at(4);
+        assert!(Arc::ptr_eq(&fork.steps()[3], &history.steps()[3]));
+        assert_eq!(fork.replay_to(4).unwrap().get(&a), Some(&updated));
+    }
+
+    #[test]
+    fn setup_updates_refuse_missing_cells_and_tampered_preimages() {
+        let mut history = ReversibleHistory::new(1_700_000_000);
+        let mut ledger = Ledger::new();
+        let cell = open_cell(1, 10);
+        let empty = ledger.root();
+        assert!(matches!(
+            history.record_genesis_update(&mut ledger, cell.clone()),
+            Err(ReversibleError::InvalidSetupUpdate { step: 0, .. })
+        ));
+        assert!(history.is_empty());
+        assert_eq!(ledger.root(), empty);
+        history.record_genesis(&mut ledger, cell.clone());
+        let mut updated = cell;
+        updated.state.fields[0] = [0x42; 32];
+        history.record_genesis_update(&mut ledger, updated).unwrap();
+        let ReversibleStep::GenesisUpdate { before, .. } = Arc::make_mut(&mut history.steps[1])
+        else {
+            panic!("recorded update must remain distinct from birth");
+        };
+        before.state.fields[0] = [0x99; 32];
+        assert!(matches!(
+            history.replay_to(2),
+            Err(ReversibleError::InvalidSetupUpdate { step: 1, .. })
+        ));
     }
 
     // --- THE HEADLINE: undo-backward == replay-forward, same verified root ---

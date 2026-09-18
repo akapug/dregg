@@ -52,7 +52,7 @@ use crate::persistence::WorldPersist;
 // `open_with_timestamp` paths, which are `not(wasm32)`-gated (no `dregg-persist`
 // on wasm — the browser image is always ephemeral).
 #[cfg(not(target_arch = "wasm32"))]
-use crate::persistence::{OpenError, RecoveredImage};
+use crate::persistence::{OpenError, RecoveredImage, RecoveredStep};
 use crate::replay::History;
 
 // THE SEAM (commit 0 of the remediation program). Two regions of this file are owned by
@@ -336,21 +336,12 @@ impl World {
     /// **Open a durable World image** from the redb store at `path`, recovering it
     /// to exactly where it was closed (`docs/deos/WORLD-PERSISTENCE-PLAN.md` A.3).
     ///
-    /// Runs the EXACT node boot-recovery (`node/src/state.rs:676-767`):
-    /// checkpoint-load → durable commit-log overlay via last-writer-wins
-    /// `upsert_cell` → FAIL-CLOSED convergence check (the reconstructed canonical
-    /// root MUST equal the root the last committed turn durably recorded, else
-    /// [`OpenError::Divergent`] — refuse to open). Because the overlay semantics
-    /// are byte-identical, the recovered ledger inherits
-    /// `CrashRecovery.lean::recover_eq_replay`: it equals the genesis replay.
-    ///
-    /// Then it rebuilds the in-RAM view spine (engine / [`History`] / receipts /
-    /// dynamics / per-agent chain heads) by REINSTALLING the durable genesis cells
-    /// and RE-EXECUTING the durable input turns through the same embedded executor
-    /// — re-deriving the real receipts and re-priming each chain head for free.
-    /// The store is attached LAST (with the cursor mirror), so the rebuild itself
-    /// never re-persists. `costs` must match the costs the image was created with
-    /// (the receipts re-derive bit-identically only under the same cost model).
+    /// Checks the versioned ordered journal, then replays births, trusted setup
+    /// updates and accepted turns at their actual positions. Every intermediate
+    /// root and actual turn receipt must agree; complete checkpoint bytes are
+    /// checked at their exact ordered boundary. The writer is attached only
+    /// after successful replay, so rebuilding never republishes history.
+    /// `costs` must match the costs under which recorded turns executed.
     ///
     /// First run on an empty store returns an empty durable World (no genesis, no
     /// turns); the caller seeds the demo genesis, which then persists.
@@ -359,86 +350,111 @@ impl World {
         Self::open_with_timestamp(path, costs, now_unix())
     }
 
-    /// [`World::open`] with the wall-clock PINNED to `timestamp` (the value the
-    /// image was created under). The receipts re-derive bit-identically only when
-    /// the timestamp matches the live world's that produced the durable turns, so
-    /// a deterministic image (tests, the houyhnhnm-clock semihost) pins it here.
+    /// [`World::open`] with an explicit new live clock. Historical turns replay
+    /// under their own stored timestamps; afterward the live clock advances to
+    /// this value. Deterministic tests can keep it fixed across launches.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn open_with_timestamp(
         path: &std::path::Path,
         costs: ComputronCosts,
         timestamp: i64,
     ) -> Result<World, OpenError> {
-        let persist = WorldPersist::open(path)?;
+        Self::open_ordered_image(path, costs, timestamp, false).map(|(world, _)| world)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn open_ordered_image(
+        path: &std::path::Path,
+        costs: ComputronCosts,
+        timestamp: i64,
+        recover_unpublished: bool,
+    ) -> Result<(World, u64), OpenError> {
+        let mut persist = WorldPersist::open(path)?;
         let RecoveredImage {
             ledger: recovered,
-            genesis_cells,
-            committed,
+            steps,
+            checkpoint,
             cursor,
-        } = persist.recover()?;
-
-        // Build a fresh EPHEMERAL world (no store yet) and rebuild the spine on it
-        // by re-running the durable genesis installs + input turns through the
-        // normal (non-persisting) paths. `persist` is None here, so neither the
-        // genesis mirror nor the dual-write fires during rebuild — we attach the
-        // store only AFTER, so the rebuild never duplicates the durable log.
-        //
-        // ⚑ THE IMAGE CARRIES ITS OWN CLOCK, PER TURN. The canonical ledger root is
-        // a function of the executor wall-clock (receipt.timestamp → the next turn's
-        // `previous_receipt_hash` → `Turn::hash` → an installed cap's provenance →
-        // the cell → the root; see `crate::persistence::DurableTurn`). So the
-        // rebuild is started at the EARLIEST recorded clock and each turn is
-        // replayed under its OWN (`TurnExecutor::set_timestamp` only moves forward,
-        // so starting above the first turn's clock would silently replay it under
-        // the wrong one). `timestamp` is applied at the END, as the LIVE clock new
-        // turns are stamped with — which is why cap-expiry / `valid_until` gates
-        // still advance instead of freezing at the image's birth instant.
-        let replay_start = committed
-            .first()
-            .map(|d| d.timestamp)
+        } = if recover_unpublished {
+            persist.recover_published(true)?
+        } else {
+            persist.recover()?
+        };
+        // Rebuild from the actual interleaving. The store stays detached until
+        // every accepted turn receipt and every step root has been checked.
+        let replay_start = steps
+            .iter()
+            .filter_map(|step| match step {
+                RecoveredStep::Turn { durable, .. } => Some(durable.timestamp),
+                _ => None,
+            })
+            .min()
             .unwrap_or(timestamp)
             .min(timestamp);
         let mut world = Self::with_costs_and_timestamp(costs, replay_start);
-
-        // Reinstall the durable genesis cells (genesis-time content), in order.
-        for cell in genesis_cells {
-            let balance = cell.state.balance();
-            world.install_genesis(cell, balance);
+        if let Some(cp) = checkpoint.as_ref().filter(|cp| cp.next_step == 0) {
+            crate::persistence::verify_world_checkpoint(cp, world.ledger(), 0)?;
         }
-        // Re-execute the durable input turns: this rebuilds History (verified root
-        // teeth), the receipts provenance log, the engine ledger, AND re-primes
-        // every agent's receipt-chain head — the real receipt is re-derived, never
-        // carried across the durable boundary.
-        for durable in committed {
-            // Pin the clock to the one THIS turn committed under, or the receipt
-            // chain (and therefore the ledger) re-derives differently.
-            world.set_clock(durable.timestamp);
-            // Re-executing a recorded committed turn must commit again (the
-            // `recover_eq_replay` determinism). A rejection here would mean the
-            // durable turn does not re-derive — a real integrity event.
-            let outcome = world.commit_turn(durable.turn);
-            if !outcome.is_committed() {
+        for (index, step) in steps.into_iter().enumerate() {
+            let expected = match step {
+                RecoveredStep::GenesisBirth { cells, post_root } => {
+                    world.try_genesis_install_batch(cells).map_err(|reason| {
+                        OpenError::Store(dregg_persist::StoreError::Integrity(reason))
+                    })?;
+                    post_root
+                }
+                RecoveredStep::GenesisUpdate { cell, post_root } => {
+                    let id = cell.id();
+                    world.commit_genesis_update(*cell).map_err(|reason| {
+                        OpenError::Store(dregg_persist::StoreError::Integrity(reason))
+                    })?;
+                    world.emit_dynamics(WorldEvent::CellMutated { cell: id });
+                    post_root
+                }
+                RecoveredStep::Turn {
+                    durable,
+                    receipt_hash,
+                    post_root,
+                } => {
+                    if durable.turn.previous_receipt_hash != world.chain_head(&durable.turn.agent) {
+                        return Err(OpenError::Store(dregg_persist::StoreError::Integrity(
+                            format!("durable input receipt chain mismatch at World step {index}"),
+                        )));
+                    }
+                    world.set_clock(durable.timestamp);
+                    match world.commit_turn(durable.turn) {
+                        CommitOutcome::Committed { receipt, .. } if receipt.receipt_hash() == receipt_hash => {}
+                        outcome => return Err(OpenError::Store(dregg_persist::StoreError::Integrity(
+                            format!("durable turn did not reproduce its exact receipt at World step {index}: {outcome:?}")
+                        ))),
+                    }
+                    post_root
+                }
+            };
+            if crate::persistence::canonical_ledger_root(world.ledger()) != expected {
                 return Err(OpenError::Store(dregg_persist::StoreError::Integrity(
-                    "a durable committed turn did NOT re-commit on recovery — \
-                     image is non-deterministic or corrupt"
-                        .to_string(),
+                    format!("durable execution root mismatch at World step {index}"),
                 )));
             }
+            if let Some(cp) = checkpoint
+                .as_ref()
+                .filter(|cp| cp.next_step == index as u64 + 1)
+            {
+                crate::persistence::verify_world_checkpoint(cp, world.ledger(), world.height)?;
+            }
         }
-        // The replay is done: run the LIVE clock forward to the caller's wall-clock
-        // so turns committed in THIS session are stamped honestly.
         world.set_clock(timestamp);
-
-        // FAIL-CLOSED cross-check: the rebuilt engine ledger MUST equal the
-        // checkpoint⊕overlay recovered ledger (both are `recover_eq_replay`). This
-        // catches any genesis/turn divergence the per-turn replay would miss.
-        if crate::persistence::canonical_ledger_root(world.engine.ledger())
+        if crate::persistence::canonical_ledger_root(world.ledger())
             != crate::persistence::canonical_ledger_root(&recovered)
         {
-            return Err(OpenError::Divergent {
-                got: crate::persistence::canonical_ledger_root(world.engine.ledger()),
-                expected: crate::persistence::canonical_ledger_root(&recovered),
-            });
+            return Err(OpenError::Store(dregg_persist::StoreError::Integrity(
+                "ordered World replay differs from its durable change sets".to_string(),
+            )));
+        }
+        if world.height != cursor {
+            return Err(OpenError::Store(dregg_persist::StoreError::Integrity(
+                "rebuilt World height differs from durable turn cursor".to_string(),
+            )));
         }
 
         // Attach the durable store LAST, with the cursor mirror primed, so every
@@ -447,26 +463,23 @@ impl World {
             world.height, cursor,
             "rebuilt height must equal the durable commit cursor"
         );
+        // Repair only after exact execution established every published step.
+        let discarded = if recover_unpublished {
+            persist.discard_unpublished_tail()?
+        } else {
+            0
+        };
         world.persist = Some(persist);
-        Ok(world)
+        Ok((world, discarded))
     }
 
-    /// Open a durable image, RECOVERING a torn/divergent one instead of refusing
-    /// it (the never-strand path — the login front door uses this).
-    ///
-    /// A clean [`World::open`] fails closed with [`OpenError::Divergent`] when the
-    /// reconstructed root does not match the last committed turn's recorded root
-    /// (a crash mid-write, a poisoned cell, a torn tail). Refusing strands the
-    /// owner: a single divergent tail makes the whole durable session unopenable.
-    /// This instead TRUNCATES the divergent tail to the last root-converging
-    /// ordinal ([`WorldPersist::recover_to_last_consistent`]) and reopens at the
-    /// last-good state — the convergence check then passes at the recovered point.
-    ///
-    /// Returns `Ok((world, recovered))` where `recovered` is the number of turns
-    /// dropped to reach consistency (0 ⇒ the image was clean — identical to a
-    /// plain `open`). Errs only when the image is unsalvageable (NO prefix
-    /// reconstructs to its claim), so the caller can offer the explicit
-    /// "start fresh" choice — login is ALWAYS able to proceed (recovered or fresh).
+    /// Open a durable image, optionally removing an unpublished commit-log tail.
+    /// Recovery first re-executes every published ordered step, checking receipt
+    /// hashes, roots and the complete checkpoint. Only log records beyond that
+    /// validated journal may be removed, under transactional cursor/head guards.
+    /// Corrupt published history and legacy images with unknown chronology are
+    /// preserved and refused; this method never invents a replacement history.
+    /// Returns the World and the number of unpublished records discarded.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn open_recovering(
         path: &std::path::Path,
@@ -486,20 +499,7 @@ impl World {
         match Self::open_with_timestamp(path, costs.clone(), timestamp) {
             Ok(world) => Ok((world, 0)),
             Err(OpenError::Divergent { .. }) => {
-                // The image is torn — recover it to its last consistent ordinal,
-                // then reopen. The recovery handle is released before reopen
-                // (redb single-writer per file): open a short-lived store, truncate
-                // the divergent tail, drop it, then `open` the recovered image.
-                let recovered = {
-                    let persist = WorldPersist::open(path)?;
-                    persist.recover_to_last_consistent()?
-                    // `persist` dropped here → the redb lock is released.
-                };
-                // Reopen the recovered image. If it STILL diverges, the tear was
-                // not in the commit-log tail (unsalvageable) — surface it so the
-                // caller offers "start fresh".
-                let world = Self::open_with_timestamp(path, costs, timestamp)?;
-                Ok((world, recovered))
+                Self::open_ordered_image(path, costs, timestamp, true)
             }
             Err(other) => Err(other),
         }
@@ -713,6 +713,78 @@ impl World {
     /// real turn history — rather than a separately re-recorded one.
     pub fn recorded_turns(&self) -> &History {
         &self.history
+    }
+
+    pub(crate) fn replay_costs(&self) -> ComputronCosts {
+        self.engine.executor().costs.clone()
+    }
+
+    pub(crate) fn replay_factories(&self) -> &[dregg_cell::FactoryDescriptor] {
+        &self.deployed_factories
+    }
+
+    /// Reconstruct a historical view with the same costs, turn clocks and
+    /// installed factories, checking every recorded root and turn receipt.
+    /// The returned World is a detached view, never a durable writer.
+    pub fn replay_to_step(&self, step: usize) -> Result<World, String> {
+        use crate::replay::RecordedStep;
+        if step > self.history.len() {
+            return Err(format!(
+                "history step {step} exceeds {}",
+                self.history.len()
+            ));
+        }
+        let steps = &self.history.steps()[..step];
+        let start = steps
+            .iter()
+            .filter_map(|recorded| match recorded {
+                RecordedStep::Committed { timestamp, .. } => Some(*timestamp),
+                _ => None,
+            })
+            .min()
+            .unwrap_or(self.timestamp)
+            .min(self.timestamp);
+        let mut rebuilt =
+            Self::with_costs_and_timestamp(self.engine.executor().costs.clone(), start);
+        for descriptor in &self.deployed_factories {
+            rebuilt.try_deploy_factory(descriptor.clone())?;
+        }
+        for (index, recorded) in steps.iter().enumerate() {
+            match recorded {
+                RecordedStep::Genesis { cell } => {
+                    rebuilt.try_genesis_install(*cell.clone())?;
+                }
+                RecordedStep::GenesisUpdate { cell } => {
+                    rebuilt.commit_genesis_update(*cell.clone())?;
+                }
+                RecordedStep::Committed {
+                    turn,
+                    receipt,
+                    timestamp,
+                    ..
+                } => {
+                    if turn.previous_receipt_hash != rebuilt.chain_head(&turn.agent) {
+                        return Err(format!("history receipt chain mismatch at step {index}"));
+                    }
+                    rebuilt.set_clock(*timestamp);
+                    match rebuilt.commit_turn(*turn.clone()) {
+                        CommitOutcome::Committed {
+                            receipt: actual, ..
+                        } if actual.receipt_hash() == receipt.receipt_hash() => {}
+                        outcome => {
+                            return Err(format!(
+                                "history receipt mismatch at step {index}: {outcome:?}"
+                            ))
+                        }
+                    }
+                }
+            }
+            if self.history.root_at(index + 1) != Some(rebuilt.ledger().root()) {
+                return Err(format!("history root mismatch at step {}", index + 1));
+            }
+        }
+        rebuilt.durability_failure = self.durability_failure.clone();
+        Ok(rebuilt)
     }
 
     /// A fresh `TurnExecutor` configured IDENTICALLY to this world's live engine
@@ -1041,8 +1113,8 @@ impl World {
         // Persist before exposing any cell or adding it to the replay tape. A
         // failed response can be ambiguous: latch and let reopen decide whether
         // disk committed it, without publishing an in-memory success.
-        if let Some(p) = self.persist.as_ref() {
-            if let Err(error) = p.record_genesis_batch(&cells) {
+        if let Some(p) = self.persist.as_mut() {
+            if let Err(error) = p.record_genesis_batch(&cells, self.engine.ledger()) {
                 return Err(self.latch_durability_failure(error));
             }
         }
@@ -1110,8 +1182,8 @@ impl World {
     fn commit_genesis_update(&mut self, cell: Cell) -> Result<(), String> {
         self.mutation_guard()?;
         let id = cell.id();
-        if let Some(p) = self.persist.as_ref() {
-            if let Err(error) = p.record_genesis(&cell) {
+        if let Some(p) = self.persist.as_mut() {
+            if let Err(error) = p.record_genesis(&cell, self.engine.ledger()) {
                 return Err(self.latch_durability_failure(error));
             }
         }
@@ -1121,30 +1193,26 @@ impl World {
             .ledger_mut()
             .get_mut(&id)
             .expect("a staged genesis update retains its existing cell") = cell.clone();
-        if let Some(recorded) = self.record_ledger.get_mut(&id) {
-            *recorded = cell;
-        }
+        self.history
+            .record_genesis_update(&mut self.record_ledger, cell);
         self.state_root_memo.set(None);
         Ok(())
     }
 
-    /// Would an in-place genesis-path mutation of `cell` corrupt the DURABLE image's
-    /// reopen? TRUE iff this is a durable image AND a committed turn already touched
-    /// `cell` — the genesis-mirror-after-turn bug (HORIZONLOG): the post-mutation
-    /// cell, recorded as timeless "genesis" by [`Self::commit_genesis_update`], poisons
-    /// recovery's re-execution of that turn (it re-executes against the wrong base,
-    /// diverges, and the fail-closed integrity check REFUSES the image). Genesis-SETUP
-    /// mutations (before the cell's first turn) and ephemeral (non-durable) worlds
-    /// return false — they are sound. The genesis-path mutators consult this to
-    /// REFUSE fail-fast rather than silently corrupt the image on reopen.
-    fn genesis_mutation_would_break_reopen(&self, cell: &CellId) -> bool {
+    /// Trusted setup remains limited to a cell before its first committed turn.
+    /// Ordered storage can represent later writes, but that does not authorize
+    /// them. Runtime updates must use an accepted kernel effect; recording a
+    /// raw owner write is not a substitute for that effect's authority checks.
+    /// Storage unavailability refuses setup for every cell, touched or not.
+    fn genesis_setup_mutation_is_refused(&self, cell: &CellId) -> bool {
         self.durability_failure.is_some()
             || (self.is_durable()
                 && self.history.steps().iter().any(|s| match s {
                     crate::replay::RecordedStep::Committed { turn, .. } => {
                         touched_cells(turn).iter().any(|c| c == cell)
                     }
-                    crate::replay::RecordedStep::Genesis { .. } => false,
+                    crate::replay::RecordedStep::Genesis { .. }
+                    | crate::replay::RecordedStep::GenesisUpdate { .. } => false,
                 }))
     }
 
@@ -3169,6 +3237,112 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
+    fn durable_ordered_setup_preserves_births_updates_receipts_and_every_history_root() {
+        let path = scratch_redb("ordered-setup-history");
+        let mut world =
+            World::open_with_timestamp(&path, ComputronCosts::zero(), 1_700_000_000).unwrap();
+        let a = world.genesis_cell(1, 100);
+        let b = world.genesis_cell(2, 0);
+        let first = world.turn(a, vec![transfer(a, b, 10)]);
+        assert!(world.commit_turn(first).is_committed());
+        world.try_checkpoint_now().unwrap();
+
+        // These writes are AFTER a turn, and the final one follows the last
+        // turn too. They cannot be moved back into a timeless genesis image.
+        let late = world.try_genesis_cell(3, 0).unwrap();
+        assert!(world.set_cell_program(&late, dregg_cell::CellProgram::Predicate(vec![])));
+        // Same turn height, distinct ordered boundary: checkpoint must support it.
+        world.try_checkpoint_now().unwrap();
+        let second = world.turn(a, vec![transfer(a, b, 5)]);
+        assert!(world.commit_turn(second).is_committed());
+        assert!(world.set_cell_heap(&late, doc_shaped_heap()));
+        let roots: Vec<_> = (0..=world.history.len())
+            .map(|step| world.history.root_at(step).unwrap())
+            .collect();
+        let receipts: Vec<_> = world
+            .receipts()
+            .iter()
+            .map(|receipt| receipt.receipt_hash())
+            .collect();
+        let root = world.state_root();
+        for step in 0..roots.len() {
+            assert_eq!(
+                world.replay_to_step(step).unwrap().ledger().root(),
+                roots[step]
+            );
+        }
+        drop(world);
+
+        let reopened =
+            World::open_with_timestamp(&path, ComputronCosts::zero(), 1_700_000_100).unwrap();
+        assert_eq!(reopened.state_root(), root);
+        assert_eq!(
+            reopened
+                .receipts()
+                .iter()
+                .map(|receipt| receipt.receipt_hash())
+                .collect::<Vec<_>>(),
+            receipts
+        );
+        assert_eq!(reopened.history.len() + 1, roots.len());
+        for step in 0..roots.len() {
+            assert_eq!(reopened.history.root_at(step), Some(roots[step]));
+            assert_eq!(
+                reopened.history.replay_to(step).unwrap().root(),
+                roots[step]
+            );
+            assert_eq!(
+                reopened.replay_to_step(step).unwrap().ledger().root(),
+                roots[step]
+            );
+        }
+        assert_eq!(
+            reopened.ledger().get(&late).unwrap().state.heap_map,
+            doc_shaped_heap()
+        );
+        drop(reopened);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn durable_genesis_error_after_commit_reopens_the_actual_ordered_birth() {
+        let path = scratch_redb("genesis-lost-response");
+        let mut world =
+            World::open_with_timestamp(&path, ComputronCosts::zero(), 1_700_000_000).unwrap();
+        let a = world.genesis_cell(1, 100);
+        let b = world.genesis_cell(2, 0);
+        let first = world.turn(a, vec![transfer(a, b, 10)]);
+        assert!(world.commit_turn(first).is_committed());
+        let prior_cells = world.cell_count();
+        let newborn = make_open_cell(3, 0);
+        let id = newborn.id();
+        world
+            .persist
+            .as_ref()
+            .unwrap()
+            .fail_genesis_response_for_test();
+        assert!(world.try_genesis_install(newborn).is_err());
+        assert_eq!(world.durability_status(), DurabilityStatus::Unavailable);
+        assert_eq!(world.cell_count(), prior_cells);
+        assert!(world.ledger().get(&id).is_none());
+        assert!(world.try_genesis_cell(4, 0).is_err());
+        drop(world);
+
+        let reopened =
+            World::open_with_timestamp(&path, ComputronCosts::zero(), 1_700_000_000).unwrap();
+        assert_eq!(reopened.cell_count(), prior_cells + 1);
+        assert!(reopened.ledger().get(&id).is_some());
+        assert_eq!(reopened.height(), 1);
+        assert!(
+            matches!(reopened.history.steps().last(), Some(crate::replay::RecordedStep::Genesis { cell }) if cell.id() == id)
+        );
+        drop(reopened);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
     fn durable_genesis_update_storage_failure_keeps_both_ledgers_and_events_unchanged() {
         for kind in 0..4 {
             let path = scratch_redb(&format!("genesis-update-storage-failure-{kind}"));
@@ -4213,7 +4387,7 @@ mod tests {
     }
 
     /// The REFUSED leg of the reopen guard emits nothing either (success-leg-only,
-    /// half two). `genesis_mutation_would_break_reopen` fires only on a DURABLE
+    /// half two). `genesis_setup_mutation_is_refused` fires only on a DURABLE
     /// image whose cell a committed turn already touched, so this needs a real redb
     /// image — the same throwaway-path harness `durable_write_failure_fully_unwinds`
     /// uses.

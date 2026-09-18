@@ -31,12 +31,9 @@
 //! ## The witness cursor (the frustum boundary)
 //!
 //! A snapshot is **tiny** by construction: it carries the focus + the kind + a
-//! `WitnessCursor = { height, receipt_head }` — a point INTO the witness graph,
-//! NOT the projected bytes. The receipt-head hash is the SAME tooth
-//! [`World::state_root`](crate::world::World::state_root) folds in, so the cursor
-//! pins the exact published state the camera was paused on; the height is the
-//! monotone turn index [`World::height`](crate::world::World::height) the
-//! [`History`] indexes.
+//! `WitnessCursor = { height, receipt_head, history_step, ledger_root }` — a
+//! point into the witness graph, not the projected bytes. The exact history
+//! boundary distinguishes setup updates and births that share a turn height.
 //!
 //! ## The keystone honesty property
 //!
@@ -52,7 +49,7 @@
 use dregg_cell::CellId;
 
 use crate::presentable::{FocusTarget, Presentation, PresentationKind, Registry};
-use crate::replay::{History, RecordedStep};
+use crate::replay::History;
 use crate::world::World;
 
 // ===========================================================================
@@ -62,16 +59,19 @@ use crate::world::World;
 /// A **witness cursor**: the point in the durability log the snapshot is paused on.
 ///
 /// `height` is the monotone turn index ([`World::height`](crate::world::World::height));
-/// `receipt_head` is the head receipt-chain hash at that height (the SAME tooth
-/// [`World::state_root`](crate::world::World::state_root) folds in, so the cursor
-/// pins the exact published state). A snapshot is just `focus + kind + this` —
-/// tiny, the frustum boundary, never the projected bytes.
+/// `receipt_head` is the head receipt-chain hash at that height. `history_step`
+/// and `ledger_root` also pin setup changes that produce no receipt. A snapshot
+/// is just `focus + kind + this`, never the projected bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WitnessCursor {
     /// The monotone turn-height the camera was paused on.
     pub height: u64,
     /// The receipt-chain head at that height (`None` at genesis, before any turn).
     pub receipt_head: Option<[u8; 32]>,
+    /// Exact boundary in the ordered history, including births and setup updates.
+    pub history_step: usize,
+    /// Ledger root at that boundary, checked against both history and replay.
+    pub ledger_root: [u8; 32],
 }
 
 impl WitnessCursor {
@@ -80,15 +80,20 @@ impl WitnessCursor {
         WitnessCursor {
             height: world.height(),
             receipt_head: world.receipts().last().map(|r| r.receipt_hash()),
+            history_step: world.recorded_turns().len(),
+            ledger_root: world.ledger().root(),
         }
     }
 
-    /// Does this cursor name the LIVE head of `world` (same height AND same
-    /// receipt-chain head)? When true, the camera can read the live ledger directly
+    /// Does this cursor name the exact retained LIVE boundary of `world`?
+    /// When true, the camera can read the live ledger directly
     /// (a `Live` rehydration); otherwise it must re-run over the replayed log.
     pub fn is_live_head(&self, world: &World) -> bool {
         self.height == world.height()
             && self.receipt_head == world.receipts().last().map(|r| r.receipt_hash())
+            && self.history_step == world.recorded_turns().len()
+            && self.ledger_root == world.ledger().root()
+            && world.recorded_turns().root_at(self.history_step) == Some(self.ledger_root)
     }
 }
 
@@ -164,7 +169,7 @@ pub struct UiSnapshot {
     pub focus: FocusTarget,
     /// The presentation lens that was selected (the camera's frustum face).
     pub kind: PresentationKind,
-    /// The witness point the camera was paused on (height + receipt-chain head).
+    /// The exact history boundary the camera was paused on.
     pub cursor: WitnessCursor,
 }
 
@@ -212,7 +217,7 @@ impl UiSnapshot {
     ///
     ///   1. if the cursor is the LIVE head, re-project the [`Presentable`] over the
     ///      live `world` (liveness [`Liveness::Live`] — the camera never paused);
-    ///   2. else replay the world to the cursor's height via [`History::replay_to`]
+    ///   2. else replay the world to the cursor's step via [`World::replay_to_step`]
     ///      (root-verified against the recorded tooth) and re-project over THAT
     ///      reconstruction (liveness [`Liveness::ReplayedDeterministic`] — the
     ///      camera re-ran from the witnessed log);
@@ -269,77 +274,22 @@ impl UiSnapshot {
         set.into_iter().find(|p| p.kind == self.kind)
     }
 
-    /// Re-derive the historical [`World`] at the snapshot's cursor by ROOT-VERIFIED
-    /// replay of the recorded durability log, reusing [`History::replay_to`] as the
-    /// trust anchor. `None` iff the cursor's height is not reachable in the log.
-    ///
-    /// The world's [`History`] indexes BOTH genesis installs and committed turns,
-    /// while the cursor's `height` counts only committed turns. We walk the recorded
-    /// steps, counting committed turns, to find the history step `k` that lands at
-    /// `cursor.height`; [`History::replay_to(k)`] then re-derives (and root-verifies)
-    /// the ledger there, which we re-drive into a fresh [`World`] through its own
-    /// public genesis + commit paths so the projection sees the SAME presentable
-    /// surface the live inspector saw at H.
+    /// Re-derive the exact retained boundary through the World's shared replay
+    /// path, including setup updates, original costs, clocks and receipt checks.
+    /// A missing or inconsistent cursor has no supported historical view.
     fn replay_world_to_cursor(&self, world: &World) -> Option<World> {
-        let history = world.recorded_turns();
-        let step = history_step_for_height(history, self.cursor.height)?;
-
-        // The trust anchor: a root-verified reconstruction of the ledger at `step`.
-        // A replay error (out-of-range / a tampered tooth / nondeterminism) means
-        // the witnessed log does not support the cursor — surfaced as unreachable.
-        history.replay_to(step).ok()?;
-
-        // Re-drive the historical world through the World's OWN public paths so the
-        // projection reads a genuine presentable surface (the same genesis +
-        // commit_turn the live world ran). This re-execution is the verified
-        // executor's; it lands on the SAME root `replay_to` just verified.
-        let mut rebuilt = World::new();
-        for recorded in &history.steps()[..step] {
-            match recorded {
-                RecordedStep::Genesis { cell } => {
-                    rebuilt.genesis_install(*cell.clone());
-                }
-                RecordedStep::Committed { turn, .. } => {
-                    let outcome = rebuilt.commit_turn(*turn.clone());
-                    if !outcome.is_committed() {
-                        // A recorded commit that does not re-commit means the log is
-                        // not faithfully replayable into a world — surface honestly.
-                        return None;
-                    }
-                }
-            }
+        let history: &History = world.recorded_turns();
+        if history.root_at(self.cursor.history_step) != Some(self.cursor.ledger_root) {
+            return None;
+        }
+        let rebuilt = world.replay_to_step(self.cursor.history_step).ok()?;
+        if rebuilt.height() != self.cursor.height
+            || rebuilt.receipts().last().map(|r| r.receipt_hash()) != self.cursor.receipt_head
+            || rebuilt.ledger().root() != self.cursor.ledger_root
+        {
+            return None;
         }
         Some(rebuilt)
-    }
-}
-
-/// The history step index that lands at turn-`height` (the cursor counts committed
-/// turns; the [`History`] counts genesis installs + turns). Returns the step index
-/// `k` such that replaying `steps[..k]` has applied exactly `height` committed
-/// turns AND the next step is not a turn (i.e. `k` is the landing immediately after
-/// the `height`-th turn, including any trailing genesis installs at that height).
-/// `None` iff fewer than `height` committed turns exist in the log.
-fn history_step_for_height(history: &History, height: u64) -> Option<usize> {
-    let mut committed: u64 = 0;
-    let steps = history.steps();
-    for (i, step) in steps.iter().enumerate() {
-        if committed == height {
-            // We have applied `height` turns; the landing is here, but absorb any
-            // genesis installs that sit at this height (they bear no turn).
-            if matches!(step, RecordedStep::Committed { .. }) {
-                return Some(i);
-            }
-        }
-        if matches!(step, RecordedStep::Committed { .. }) {
-            committed += 1;
-        }
-    }
-    if committed >= height {
-        // The full log applied exactly `height` (or, for height past genesis-only
-        // tails, at least `height`) turns — land at the end of the recorded log.
-        Some(steps.len())
-    } else {
-        None
     }
 }
 
@@ -485,12 +435,54 @@ mod tests {
         snap.cursor = WitnessCursor {
             height: 999,
             receipt_head: Some([0xABu8; 32]),
+            history_step: 999,
+            ledger_root: [0xCDu8; 32],
         };
         let slice = snap.rehydrate(&w, treasury);
         assert_eq!(slice.liveness, Liveness::ReconstructedApproximate);
         assert!(
             slice.presentation.is_none(),
             "an unreachable cursor yields no re-derived presentation (honest)"
+        );
+    }
+
+    #[test]
+    fn a_setup_update_at_the_same_height_is_a_distinct_snapshot_boundary() {
+        let (mut world, treasury, sink) = two_cell_world();
+        let before = world.ledger().get(&treasury).unwrap().clone();
+        let snapshot = UiSnapshot::capture(
+            &world,
+            FocusTarget::Cell(treasury),
+            PresentationKind::RawFields,
+        );
+        assert!(world.genesis_grant_cap(&treasury, sink).is_some());
+        assert_eq!(world.height(), snapshot.cursor.height);
+        assert_eq!(
+            world.receipts().last().map(|r| r.receipt_hash()),
+            snapshot.cursor.receipt_head
+        );
+        assert!(!snapshot.cursor.is_live_head(&world));
+        let historical = snapshot
+            .replay_world_to_cursor(&world)
+            .expect("exact earlier boundary");
+        assert_eq!(historical.ledger().get(&treasury), Some(&before));
+        assert_eq!(historical.ledger().root(), snapshot.cursor.ledger_root);
+        assert_eq!(
+            snapshot.rehydrate(&world, treasury).liveness,
+            Liveness::ReplayedDeterministic
+        );
+
+        let mut forged = snapshot;
+        forged.cursor.ledger_root = world.ledger().root();
+        assert_eq!(
+            forged.rehydrate(&world, treasury).liveness,
+            Liveness::ReconstructedApproximate
+        );
+        forged = snapshot;
+        forged.cursor.receipt_head = Some([0xA5; 32]);
+        assert_eq!(
+            forged.rehydrate(&world, treasury).liveness,
+            Liveness::ReconstructedApproximate
         );
     }
 

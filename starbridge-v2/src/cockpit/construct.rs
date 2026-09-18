@@ -829,12 +829,20 @@ impl Cockpit {
         // Commit exactly one real turn against the shared world.
         let label = {
             let mut w = self.world.borrow_mut();
-            seed.next(&mut w)
+            seed.try_next(&mut w)
         };
-        let more = !self.pending_seed.as_ref().unwrap().is_done();
+        let label = match label {
+            Ok(label) => label,
+            Err(reason) => {
+                self.last_outcome = Some(format!("demo initialization paused: {reason}"));
+                cx.notify();
+                return false;
+            }
+        };
+        let more = !seed.is_done();
+        let remaining = seed.remaining();
         if let Some(label) = label {
             // A live status line so the operator SEES the image populating.
-            let remaining = self.pending_seed.as_ref().unwrap().remaining();
             self.last_outcome = Some(if more {
                 format!("seeding the live image — {label} ({remaining} more)")
             } else {

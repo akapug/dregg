@@ -3906,8 +3906,80 @@ impl PersistentStore {
             return Ok(0);
         }
 
+        self.truncate_commit_tail(cursor, new_cursor, None)
+    }
+
+    /// Remove only a suffix outside a caller-validated publication journal.
+    /// The caller must first validate its entire published prefix. The durable
+    /// journal head, current cursor and retained receipt are compared inside the
+    /// same transaction as every log/index/admission cleanup, so a concurrent
+    /// publication cannot be mistaken for an unpublished suffix.
+    pub fn truncate_unpublished_tail(
+        &self,
+        expected_cursor: u64,
+        retained_cursor: u64,
+        retained_receipt: Option<[u8; 32]>,
+        publication_key: &str,
+        publication_bytes: &[u8],
+    ) -> Result<u64> {
+        self.truncate_commit_tail(
+            expected_cursor,
+            retained_cursor,
+            Some((retained_receipt, publication_key, publication_bytes)),
+        )
+    }
+
+    fn truncate_commit_tail(
+        &self,
+        cursor: u64,
+        new_cursor: u64,
+        publication_guard: Option<(Option<[u8; 32]>, &str, &[u8])>,
+    ) -> Result<u64> {
         // ── TRUNCATE the divergent tail `(new_cursor, cursor)` in ONE txn ──────
         let write_txn = self.db.begin_write()?;
+        let floor;
+        {
+            let metadata = write_txn.open_table(tables::METADATA)?;
+            let actual_cursor = metadata
+                .get(tables::META_COMMIT_CURSOR)?
+                .map(|value| value.value())
+                .unwrap_or(0);
+            floor = metadata
+                .get(tables::META_COMMIT_COMPACTED)?
+                .map(|value| value.value())
+                .unwrap_or(0);
+            if actual_cursor != cursor || new_cursor < floor || new_cursor > cursor {
+                return Err(StoreError::Integrity(
+                    "commit tail changed or requested prefix is outside the live log".to_string(),
+                ));
+            }
+        }
+        if let Some((expected_receipt, config_key, expected_config)) = publication_guard {
+            let actual_receipt = if new_cursor == 0 {
+                None
+            } else {
+                let log = write_txn.open_table(tables::COMMIT_LOG)?;
+                let row = log.get(new_cursor - 1)?.ok_or_else(|| {
+                    StoreError::Integrity("retained publication receipt is missing".to_string())
+                })?;
+                Some(decode_commit_record(row.value())?.receipt_hash)
+            };
+            if actual_receipt != expected_receipt {
+                return Err(StoreError::Integrity(
+                    "retained publication receipt changed".to_string(),
+                ));
+            }
+            let config = write_txn.open_table(tables::METADATA_BYTES)?;
+            if config
+                .get(config_key)?
+                .map(|value| value.value() == expected_config)
+                != Some(true)
+            {
+                return Err(StoreError::Integrity(
+                    "ordered publication head changed before tail recovery".to_string(),
+                ));
+            }
+        }
         let truncated;
         {
             // Collect doomed records (their index keys) so we can clean the index.
@@ -4024,8 +4096,7 @@ impl PersistentStore {
             cursor,
             new_cursor,
             truncated,
-            "recover_to_last_consistent: truncated a divergent commit-log tail to the last \
-             root-converging ordinal (recovered the image instead of refusing it)"
+            "truncated a guarded unpublished or root-divergent commit-log tail"
         );
         Ok(truncated)
     }
@@ -4924,6 +4995,58 @@ pub(crate) mod tests {
             touched_cells: cells,
             removed: Vec::new(),
         }
+    }
+
+    #[test]
+    fn unpublished_tail_recovery_compares_cursor_receipt_and_publication_head_atomically() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("guarded-tail.redb");
+        let store = PersistentStore::open(&path).unwrap();
+        let first = record(0, 1, vec![]);
+        let second = record(1, 2, vec![]);
+        store.commit_finalized_turn(0, &first).unwrap();
+        store.commit_finalized_turn(1, &second).unwrap();
+        store
+            .set_config("test-publication-head", b"published-prefix")
+            .unwrap();
+
+        for (cursor, receipt, head) in [
+            (3, Some(first.receipt_hash), b"published-prefix".as_slice()),
+            (2, Some([0xEE; 32]), b"published-prefix".as_slice()),
+            (2, Some(first.receipt_hash), b"stale-prefix".as_slice()),
+        ] {
+            assert!(
+                store
+                    .truncate_unpublished_tail(cursor, 1, receipt, "test-publication-head", head)
+                    .is_err()
+            );
+            assert_eq!(store.commit_cursor().unwrap(), 2);
+            assert!(store.commit_record_at(1).unwrap().is_some());
+        }
+        assert_eq!(
+            store
+                .truncate_unpublished_tail(
+                    2,
+                    1,
+                    Some(first.receipt_hash),
+                    "test-publication-head",
+                    b"published-prefix"
+                )
+                .unwrap(),
+            1
+        );
+        drop(store);
+        let reopened = PersistentStore::open(&path).unwrap();
+        assert_eq!(reopened.commit_cursor().unwrap(), 1);
+        assert_eq!(
+            reopened.commit_record_at(0).unwrap().unwrap().receipt_hash,
+            first.receipt_hash
+        );
+        assert!(reopened.commit_record_at(1).unwrap().is_none());
+        assert_eq!(
+            reopened.get_config("test-publication-head").unwrap(),
+            Some(b"published-prefix".to_vec())
+        );
     }
 
     fn poa_event(

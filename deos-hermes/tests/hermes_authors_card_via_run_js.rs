@@ -306,7 +306,7 @@ fn an_agent_authors_a_card_via_run_js_decided_js() {
             let mut pk = [0u8; 32];
             pk[0] = 0xC1;
             let card = PortableApplet::mint(pk, [0u8; 32], &manifest);
-            (card, manifest, AuthRequired::Signature)
+            (card, manifest, Requirement::AtLeast(Credential::Signature))
         };
 
         // SpiderMonkey is already booted (one-shot, process-global); thread the test's
@@ -427,7 +427,7 @@ fn live_authors_card_via_run_js() {
         let mut pk = [0u8; 32];
         pk[0] = 0xCE;
         let card = PortableApplet::mint(pk, [0u8; 32], &manifest);
-        (card, manifest, AuthRequired::Signature)
+        (card, manifest, Requirement::AtLeast(Credential::Signature))
     };
     let hands = match LiveAuthoringHands::new(tool, hook_gw, card_factory) {
         Ok(h) => h,

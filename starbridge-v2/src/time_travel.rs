@@ -158,7 +158,10 @@ impl TimeCockpitModel {
                     crate::replay::RecordedStep::Committed { .. } => {
                         (step.label(), true, revs.get(cp.step - 1).copied().flatten())
                     }
-                    crate::replay::RecordedStep::Genesis { .. } => (step.label(), false, None),
+                    crate::replay::RecordedStep::Genesis { .. }
+                    | crate::replay::RecordedStep::GenesisUpdate { .. } => {
+                        (step.label(), false, None)
+                    }
                 }
             };
             ticks.push(ScrubTick {
@@ -314,33 +317,85 @@ impl TimeCockpitModel {
 
 /// Build a [`ReversibleHistory`] mirror of the live world's recorded history, so
 /// the cockpit can [`ReversibleHistory::fork_at`] / [`ReversibleHistory::undo_to`]
-/// the verified turn log. Each recorded step (a genesis install or a committed
-/// turn) is re-recorded into a fresh reversible history under an executor pinned
-/// to the world's timestamp; the cockpit/demo world is free-metered
-/// ([`World::new`]), so the mirror's zero-cost executor re-derives the recorded
-/// turns bit-identically (the recorded roots reproduce, and `fork_at` lands on
-/// the same teeth the live history committed).
-pub fn reversible_mirror(world: &World) -> ReversibleHistory {
+/// the verified turn log. Births, setup replacements and turns retain their
+/// exact order. Original costs, factories and per-turn clocks are reused, and
+/// every receipt and boundary must match before this mirror is returned.
+pub fn reversible_mirror(world: &World) -> Result<ReversibleHistory, BranchError> {
     let history: &History = world.recorded_turns();
-    let mut rh = ReversibleHistory::new(world.timestamp());
+    let floor = history
+        .steps()
+        .iter()
+        .filter_map(|step| match step {
+            RecordedStep::Committed { timestamp, .. } => Some(*timestamp),
+            _ => None,
+        })
+        .min()
+        .unwrap_or(world.timestamp())
+        .min(world.timestamp());
+    let mut rh = ReversibleHistory::with_costs(floor, world.replay_costs())
+        .with_factories(world.replay_factories().to_vec());
     let mut ledger = Ledger::new();
-    let ex = rh.fresh_executor();
-    for step in history.steps() {
+    let mut ex = rh.fresh_executor();
+    for (index, step) in history.steps().iter().enumerate() {
         match step {
             RecordedStep::Genesis { cell } => {
+                if ledger.contains(&cell.id()) {
+                    return Err(BranchError::ReplayRefused {
+                        step: index,
+                        reason: "duplicate birth".to_string(),
+                    });
+                }
                 rh.record_genesis(&mut ledger, (**cell).clone());
             }
-            RecordedStep::Committed { turn, .. } => {
-                rh.record_commit(&ex, &mut ledger, (**turn).clone());
+            RecordedStep::GenesisUpdate { cell } => {
+                rh.record_genesis_update(&mut ledger, (**cell).clone())
+                    .map_err(|error| BranchError::ReplayRefused {
+                        step: index,
+                        reason: error.to_string(),
+                    })?;
+            }
+            RecordedStep::Committed {
+                turn,
+                receipt,
+                timestamp,
+                ..
+            } => {
+                if turn.previous_receipt_hash != ex.get_last_receipt_hash(&turn.agent) {
+                    return Err(BranchError::ReplayRefused {
+                        step: index,
+                        reason: "receipt chain head differs".to_string(),
+                    });
+                }
+                ex.set_timestamp(*timestamp);
+                let actual = rh
+                    .record_commit(&ex, &mut ledger, (**turn).clone())
+                    .ok_or_else(|| BranchError::ReplayRefused {
+                        step: index,
+                        reason: "recorded turn did not commit".to_string(),
+                    })?;
+                if actual.receipt_hash() != receipt.receipt_hash() {
+                    return Err(BranchError::ReplayRefused {
+                        step: index,
+                        reason: "recorded receipt differs".to_string(),
+                    });
+                }
             }
         }
+        if history.root_at(index + 1) != Some(ledger.root()) {
+            return Err(BranchError::ReplayRefused {
+                step: index,
+                reason: "recorded root differs".to_string(),
+            });
+        }
     }
-    rh
+    Ok(rh)
 }
 
 /// Why a [`TimeBranch`] could not be formed (fail-closed).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BranchError {
+    /// The source history could not be reproduced exactly, including setup.
+    ReplayRefused { step: usize, reason: String },
     /// The reconstructed fork-point ledger did NOT match the recorded root tooth
     /// at `k` — the anti-substitution catch (a dishonest prefix replay would
     /// land on a different root than the one the live history committed).
@@ -358,6 +413,9 @@ pub enum BranchError {
 impl std::fmt::Display for BranchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            BranchError::ReplayRefused { step, reason } => {
+                write!(f, "history replay refused at step {step}: {reason}")
+            }
             BranchError::ForkRootMismatch { step, .. } => {
                 write!(f, "fork-point root mismatch at k{step} (fail-closed)")
             }
@@ -426,7 +484,7 @@ impl TimeBranch {
         agent: CellId,
         effects: Vec<Effect>,
     ) -> Result<TimeBranch, BranchError> {
-        let mirror = reversible_mirror(world);
+        let mirror = reversible_mirror(world)?;
         let parent_head = mirror.len();
         let k = k.min(parent_head);
         let parent_head_root_before = mirror.root_at(parent_head);
@@ -444,20 +502,57 @@ impl TimeBranch {
         // Reconstruct the fork-point ledger AND prime the executor chain-heads to
         // `k`, so the divergent turn chains as a fresh forward turn in the agent's
         // chain (the same warm-replay `undo_to` does before walking backward).
-        let ex = fork.fresh_executor();
+        let mut ex = fork.fresh_executor();
         let mut working = Ledger::new();
-        for step in fork.steps() {
+        for (index, step) in fork.steps().iter().enumerate() {
             match step.as_ref() {
                 ReversibleStep::Genesis { cell } => {
-                    let _ = working.insert_cell(cell.clone());
+                    working.insert_cell(cell.clone()).map_err(|error| {
+                        BranchError::ReplayRefused {
+                            step: index,
+                            reason: format!("{error:?}"),
+                        }
+                    })?;
                 }
-                ReversibleStep::Committed { turn, .. } => {
-                    let mut t = turn.clone();
-                    t.previous_receipt_hash = ex.get_last_receipt_hash(&t.agent);
-                    if let TurnResult::Committed { receipt, .. } = ex.execute(&t, &mut working) {
-                        ex.set_last_receipt_hash(receipt.agent, receipt.receipt_hash());
+                ReversibleStep::GenesisUpdate { before, cell } => {
+                    let current =
+                        working
+                            .get_mut(&cell.id())
+                            .ok_or_else(|| BranchError::ReplayRefused {
+                                step: index,
+                                reason: "setup replacement cell is absent".to_string(),
+                            })?;
+                    if current != before {
+                        return Err(BranchError::ReplayRefused {
+                            step: index,
+                            reason: "setup preimage differs".to_string(),
+                        });
+                    }
+                    *current = cell.clone();
+                }
+                ReversibleStep::Committed { turn, receipt, .. } => {
+                    ex.set_timestamp(receipt.timestamp);
+                    match ex.execute(turn, &mut working) {
+                        TurnResult::Committed {
+                            receipt: actual, ..
+                        } if actual.receipt_hash() == receipt.receipt_hash() => {
+                            ex.set_last_receipt_hash(actual.agent, actual.receipt_hash());
+                        }
+                        result => {
+                            return Err(BranchError::ReplayRefused {
+                                step: index,
+                                reason: format!("recorded turn differs: {result:?}"),
+                            })
+                        }
                     }
                 }
+            }
+            if working.root() != fork.root_at(index + 1) {
+                return Err(BranchError::ForkRootMismatch {
+                    step: index + 1,
+                    got: working.root(),
+                    want: fork.root_at(index + 1),
+                });
             }
         }
         // Anti-substitution: the reconstructed past MUST equal the recorded tooth.
@@ -576,6 +671,67 @@ mod tests {
             assert!(w.commit_turn(t).is_committed());
         }
         (w, treasury, sink)
+    }
+
+    #[test]
+    fn setup_updates_remain_distinct_in_ticks_mirrors_and_forks() {
+        let mut world = World::new();
+        let treasury = world.genesis_cell(0x11, 1_000);
+        let sink = world.genesis_cell(0x22, 0);
+        let before_setup = world.recorded_turns().len();
+        let before = world.ledger().get(&treasury).unwrap().clone();
+        assert!(world.genesis_grant_cap(&treasury, sink).is_some());
+        let after_setup = world.recorded_turns().len();
+        let turn = world.turn(treasury, vec![transfer(treasury, sink, 10)]);
+        assert!(world.commit_turn(turn).is_committed());
+
+        let mirror = reversible_mirror(&world).expect("exact mirror with setup update");
+        assert_eq!(mirror.len(), world.recorded_turns().len());
+        assert!(matches!(
+            mirror.steps()[before_setup].as_ref(),
+            ReversibleStep::GenesisUpdate { .. }
+        ));
+        assert_eq!(
+            mirror.replay_to(before_setup).unwrap().get(&treasury),
+            Some(&before)
+        );
+        for step in 0..=mirror.len() {
+            assert_eq!(
+                Some(mirror.root_at(step)),
+                world.recorded_turns().root_at(step)
+            );
+        }
+        let model = TimeCockpitModel::build(&world, after_setup, &MetaStack::new());
+        assert!(!model.ticks[after_setup].is_turn);
+        assert!(model.ticks[after_setup].label.starts_with("setup update"));
+        assert_eq!(model.ticks[after_setup].reversible, None);
+        let branch = TimeBranch::fork_and_drive(
+            &world,
+            after_setup,
+            treasury,
+            vec![transfer(treasury, sink, 20)],
+        )
+        .expect("fork retains setup update");
+        assert_eq!(branch.fork_root, mirror.root_at(after_setup));
+        assert!(branch.parent_untouched);
+        assert!(branch.verified);
+    }
+
+    #[test]
+    fn reversible_mirror_uses_the_worlds_actual_costs() {
+        let mut costs = dregg_turn::ComputronCosts::zero();
+        costs.action_base = 1;
+        let mut world = World::with_costs_and_timestamp(costs, 1_700_000_000);
+        let treasury = world.genesis_cell(0x11, 1_000);
+        let sink = world.genesis_cell(0x22, 0);
+        let mut turn = world.turn(treasury, vec![transfer(treasury, sink, 10)]);
+        turn.fee = 10;
+        assert!(world.commit_turn(turn).is_committed());
+        let mirror = reversible_mirror(&world).expect("metered receipt must be reproduced");
+        assert_eq!(
+            mirror.replay_to(mirror.len()).unwrap().root(),
+            world.ledger().root()
+        );
     }
 
     // ── the SCRUBBER classifies per-step REVERSIBILITY (the un-turn frontier) ─

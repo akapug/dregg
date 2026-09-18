@@ -76,6 +76,9 @@ pub enum RecordedStep {
     /// node seeds its genesis block). Carries the full cell so replay
     /// reinstalls it verbatim.
     Genesis { cell: Box<Cell> },
+    /// A trusted setup replacement at its actual position in history. This is
+    /// neither a new cell nor a kernel-authorized/conserving turn.
+    GenesisUpdate { cell: Box<Cell> },
     /// A turn committed against the embedded verified executor. Carries the
     /// input turn (so replay RE-EXECUTES it), the real receipt, and the
     /// canonical ledger root tooth recorded immediately after the commit.
@@ -130,7 +133,7 @@ impl RecordedStep {
     /// inspection (timeline UIs, diagnostics), and today has no in-tree consumer.
     pub fn root_after(&self) -> Option<[u8; 32]> {
         match self {
-            RecordedStep::Genesis { .. } => None,
+            RecordedStep::Genesis { .. } | RecordedStep::GenesisUpdate { .. } => None,
             RecordedStep::Committed { post_root, .. } => Some(*post_root),
         }
     }
@@ -144,6 +147,9 @@ impl RecordedStep {
                     short(cell.id().as_bytes()),
                     cell.state.balance()
                 )
+            }
+            RecordedStep::GenesisUpdate { cell } => {
+                format!("setup update · cell {}", short(cell.id().as_bytes()))
             }
             RecordedStep::Committed { receipt, .. } => format!(
                 "turn · agent {} · {} actions",
@@ -255,7 +261,7 @@ impl History {
             .iter()
             .filter_map(|s| match s {
                 RecordedStep::Committed { timestamp, .. } => Some(*timestamp),
-                RecordedStep::Genesis { .. } => None,
+                RecordedStep::Genesis { .. } | RecordedStep::GenesisUpdate { .. } => None,
             })
             .min()
             .map_or(self.timestamp, |earliest| earliest.min(self.timestamp))
@@ -310,6 +316,18 @@ impl History {
         // Capture the umem boundary of the post-state (the reify_to fast-restore image).
         self.boundaries.push(project_ledger(ledger));
         id
+    }
+
+    /// Record an existing-cell setup update without rewriting any earlier step.
+    pub fn record_genesis_update(&mut self, ledger: &mut Ledger, cell: Cell) {
+        *ledger
+            .get_mut(&cell.id())
+            .expect("genesis update requires an existing cell") = cell.clone();
+        self.steps.push(RecordedStep::GenesisUpdate {
+            cell: Box::new(cell),
+        });
+        self.roots.push(ledger.root());
+        self.boundaries.push(project_ledger(ledger));
     }
 
     /// Record a committed turn. Drives `executor.execute` against `ledger`
@@ -460,7 +478,7 @@ impl History {
                     // `ledger` here == replay_to(i): the pre-state for this turn.
                     out.push(Some(turn.is_reversible(&ledger)));
                 }
-                RecordedStep::Genesis { .. } => out.push(None),
+                RecordedStep::Genesis { .. } | RecordedStep::GenesisUpdate { .. } => out.push(None),
             }
             if apply_step(&mut executor, &mut ledger, step).is_err() {
                 while out.len() < self.steps.len() {
@@ -625,6 +643,14 @@ fn apply_step(
         RecordedStep::Genesis { cell } => {
             // Genesis is an idempotent direct install (fresh slot on replay).
             let _ = ledger.insert_cell(*cell.clone());
+            Ok(())
+        }
+        RecordedStep::GenesisUpdate { cell } => {
+            let id = cell.id();
+            let existing = ledger
+                .get_mut(&id)
+                .ok_or(ReplayError::MissingGenesisCell { cell: id })?;
+            *existing = *cell.clone();
             Ok(())
         }
         RecordedStep::Committed {
@@ -852,8 +878,14 @@ pub enum ScrubSource {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReplayError {
+    MissingGenesisCell {
+        cell: CellId,
+    },
     /// Asked to replay/diff to a step beyond the recorded history.
-    OutOfRange { step: usize, len: usize },
+    OutOfRange {
+        step: usize,
+        len: usize,
+    },
     /// The reconstructed ledger root did NOT match the recorded tooth — the
     /// anti-substitution failure (fail-closed). If this fires on honest history
     /// it indicates a determinism bug; on tampered history it is the tooth
@@ -874,6 +906,7 @@ pub enum ReplayError {
 impl std::fmt::Display for ReplayError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            ReplayError::MissingGenesisCell { cell } => write!(f, "genesis update refers to absent cell {}", short(cell.as_bytes())),
             ReplayError::OutOfRange { step, len } => {
                 write!(f, "replay step {step} out of range (history len {len})")
             }

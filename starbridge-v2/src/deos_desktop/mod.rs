@@ -1988,8 +1988,8 @@ impl DeosDesktop {
                 })
                 .collect()
         };
-        let reseeded = pw::reseeded_flags(w.recorded_turns());
-        let rows = pw::walk_rows(w.receipts(), &effects, &reseeded);
+        let setup = pw::setup_boundaries(w.recorded_turns());
+        let rows = pw::walk_rows(w.receipts(), &effects, &setup);
         *self.prov_walker_rows.borrow_mut() = Some(ProvWalkerRowsCache {
             token,
             rows: rows.clone(),
@@ -4984,11 +4984,11 @@ impl DeosDesktop {
     /// back-edge, blake3-recomputed) and demands the newest `n` receipts' links
     /// all check out ([`provenance_walker::chain_verifies_to_depth`]) — with
     /// out-of-band genesis boundaries named off the recorded History
-    /// ([`provenance_walker::reseeded_flags`]), exactly as the window paints
+    /// ([`provenance_walker::setup_boundaries`]), exactly as the window paints
     /// them. The bake's tooth on "the chain on screen is a chain, not a list".
     pub fn bake_walk_verify(&self, n: usize) -> bool {
         let w = self.world.borrow();
-        let flags = provenance_walker::reseeded_flags(w.recorded_turns());
+        let flags = provenance_walker::setup_boundaries(w.recorded_turns());
         provenance_walker::chain_verifies_to_depth(w.receipts(), &flags, n)
     }
 

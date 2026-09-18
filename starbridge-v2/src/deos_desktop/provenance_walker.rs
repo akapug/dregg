@@ -14,7 +14,8 @@
 //!     genesis install between two commits — a hire's mid-session seed — is a
 //!     lawful out-of-band root move; the walk names it
 //!     [`LinkVerdict::Reseeded`] off the recorded History instead of crying
-//!     broken.)
+//!     broken. An existing-cell setup replacement is separately named
+//!     [`LinkVerdict::SetupUpdated`]; the receipt chain cannot verify it.)
 //!   * **the blocklace back-edge** — this receipt's `previous_receipt_hash`
 //!     must equal the blake3 [`TurnReceipt::receipt_hash`] of the SAME AGENT's
 //!     previous receipt, recomputed here from the receipt's own fields (the
@@ -119,12 +120,16 @@ pub enum LinkVerdict {
     /// there is nothing to compare); the recorded History still root-verifies
     /// the install itself on replay.
     Reseeded,
+    /// Trusted setup replaced an EXISTING cell between receipts. Ordered replay
+    /// records the change, but these receipts provide no authorization or
+    /// conservation check for it. This boundary is not a verified receipt link.
+    SetupUpdated,
 }
 
 impl LinkVerdict {
     /// Whether this link counts as VERIFIED (recomputed + matched, or a link
     /// with genuinely nothing to compare — an origin / a reseed boundary).
-    /// `Deferred`/`Unanchored`/`Broken` all fail — verification means
+    /// `Deferred`/`Unanchored`/`Broken`/`SetupUpdated` all fail — verification means
     /// verified, not "not known broken".
     pub fn is_sound(self) -> bool {
         matches!(
@@ -143,6 +148,7 @@ impl LinkVerdict {
             LinkVerdict::Deferred => "?",
             LinkVerdict::Unanchored => "…",
             LinkVerdict::Reseeded => "+",
+            LinkVerdict::SetupUpdated => "~",
         }
     }
 
@@ -193,24 +199,30 @@ pub fn hash4(h: &[u8; 32]) -> String {
     h[..4].iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Which receipts follow an out-of-band GENESIS install — `out[i]` is true iff
-/// at least one [`RecordedStep::Genesis`] landed between receipt `i-1`'s commit
-/// and receipt `i`'s (installs before the FIRST commit shape row 0, which is an
-/// origin anyway). Built from the SAME recorded [`History`] the rewind rail
-/// replays; the state handoff across such a boundary legitimately moved
-/// without a turn, so [`walk_rows`] names it [`LinkVerdict::Reseeded`] instead
-/// of crying BROKEN on a lawful world. PURE.
-pub fn reseeded_flags(history: &History) -> Vec<bool> {
+/// Out-of-band changes between two receipts. A birth and a replacement carry
+/// different meaning even when both move the ledger root without a turn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SetupBoundary {
+    pub births: bool,
+    pub updates: bool,
+}
+
+/// One setup boundary per receipt, derived from the same ordered history the
+/// rewind view replays. Pre-first-receipt setup belongs to its origin.
+pub fn setup_boundaries(history: &History) -> Vec<SetupBoundary> {
     let mut out = Vec::new();
-    let mut pending = false;
+    let mut pending = SetupBoundary::default();
     for step in history.steps() {
         match step {
-            RecordedStep::Genesis { .. } => pending = true,
+            RecordedStep::Genesis { .. } => pending.births = true,
+            RecordedStep::GenesisUpdate { .. } => pending.updates = true,
             RecordedStep::Committed { .. } => {
-                // Installs before the FIRST commit are world setup shaping row 0
-                // (an origin anyway), not a mid-session reseed boundary.
-                out.push(pending && !out.is_empty());
-                pending = false;
+                out.push(if out.is_empty() {
+                    SetupBoundary::default()
+                } else {
+                    pending
+                });
+                pending = SetupBoundary::default();
             }
         }
     }
@@ -223,10 +235,14 @@ pub fn reseeded_flags(history: &History) -> Vec<bool> {
 /// builds it from the recorded turns' effect kinds — see
 /// [`crate::provenance_navigator::effect_kinds`]); a receipt past the slice's
 /// end (e.g. a symbolic-mode commit the replay tape skipped) falls back to its
-/// own `action_count`. `reseeded` marks the receipts that follow an
-/// out-of-band genesis install ([`reseeded_flags`]); past-the-end reads as
-/// false. PURE — never mutates, never trusts.
-pub fn walk_rows(receipts: &[TurnReceipt], effects: &[String], reseeded: &[bool]) -> Vec<WalkRow> {
+/// own `action_count`. `setup` distinguishes births from replacements between
+/// receipts ([`setup_boundaries`]); an absent boundary grants no exception.
+/// PURE — never mutates, never trusts.
+pub fn walk_rows(
+    receipts: &[TurnReceipt],
+    effects: &[String],
+    setup: &[SetupBoundary],
+) -> Vec<WalkRow> {
     // Recompute EVERY receipt hash once (blake3 over each receipt's own
     // fields) — the single source every back-edge check below compares against.
     let recomputed: Vec<[u8; 32]> = receipts.iter().map(|r| r.receipt_hash()).collect();
@@ -240,13 +256,16 @@ pub fn walk_rows(receipts: &[TurnReceipt], effects: &[String], reseeded: &[bool]
     let mut out = Vec::with_capacity(receipts.len());
     for (i, r) in receipts.iter().enumerate() {
         // ── the state chain: post[i-1] must hand pre[i] the root, gaplessly —
-        //    except across a genesis-install boundary, where the root lawfully
-        //    moved without a turn (named, never compared into a false BROKEN).
+        //    Setup movements are named separately; a trusted replacement is
+        //    not a verified receipt link, nor is it mislabeled as a new birth.
+        let boundary = setup.get(i).copied().unwrap_or_default();
         let state_link = if i == 0 {
             LinkVerdict::Origin
         } else if r.pre_state_hash == deferred || receipts[i - 1].post_state_hash == deferred {
             LinkVerdict::Deferred
-        } else if reseeded.get(i).copied().unwrap_or(false) {
+        } else if boundary.updates {
+            LinkVerdict::SetupUpdated
+        } else if boundary.births {
             LinkVerdict::Reseeded
         } else if r.pre_state_hash == receipts[i - 1].post_state_hash {
             LinkVerdict::Verified
@@ -303,10 +322,14 @@ pub fn walk_rows(receipts: &[TurnReceipt], effects: &[String], reseeded: &[bool]
 /// nothing to compare — an origin / a named reseed boundary). A deferred
 /// witness, an unanchored back-edge, or any mismatch fails — the assertion is
 /// "verified", never "not known broken". `n` larger than the log checks the
-/// whole log; an empty log verifies vacuously (nothing to break). `reseeded`
-/// is [`reseeded_flags`]' output (empty when no history is in hand — strictest).
-pub fn chain_verifies_to_depth(receipts: &[TurnReceipt], reseeded: &[bool], n: usize) -> bool {
-    let rows = walk_rows(receipts, &[], reseeded);
+/// whole log; an empty log verifies vacuously (nothing to break). `setup`
+/// is [`setup_boundaries`]' output (empty when no history is in hand — strictest).
+pub fn chain_verifies_to_depth(
+    receipts: &[TurnReceipt],
+    setup: &[SetupBoundary],
+    n: usize,
+) -> bool {
+    let rows = walk_rows(receipts, &[], setup);
     let start = rows.len().saturating_sub(n);
     rows[start..]
         .iter()
@@ -602,6 +625,9 @@ fn verdict_word(v: LinkVerdict) -> &'static str {
         LinkVerdict::Deferred => "(deferred witness — unverifiable here)",
         LinkVerdict::Unanchored => "(back-edge precedes this log)",
         LinkVerdict::Reseeded => "(genesis install landed between — root moved without a turn)",
+        LinkVerdict::SetupUpdated => {
+            "(existing cell changed by trusted setup — not verified by receipts)"
+        }
     }
 }
 
@@ -768,8 +794,17 @@ mod tests {
 
         // The recorded History names the boundary: only receipt 1 follows an
         // install (the pre-first-commit installs shape row 0, an origin).
-        let flags = reseeded_flags(w.recorded_turns());
-        assert_eq!(flags, vec![false, true]);
+        let flags = setup_boundaries(w.recorded_turns());
+        assert_eq!(
+            flags,
+            vec![
+                SetupBoundary::default(),
+                SetupBoundary {
+                    births: true,
+                    updates: false
+                }
+            ]
+        );
 
         // WITHOUT the flags the boundary would read BROKEN (the strictest,
         // history-blind read — a false alarm on a lawful world)…
@@ -781,6 +816,36 @@ mod tests {
         assert_eq!(rows[1].state_link, LinkVerdict::Reseeded);
         assert_eq!(rows[1].agent_link, LinkVerdict::Verified);
         assert!(chain_verifies_to_depth(w.receipts(), &flags, 8));
+    }
+
+    #[test]
+    fn a_setup_replacement_is_not_a_birth_or_a_verified_receipt_link() {
+        let mut w = World::new();
+        let a = w.genesis_cell(0x11, 1_000);
+        let b = w.genesis_cell(0x22, 0);
+        let untouched = w.genesis_cell(0x33, 0);
+        let first = w.turn(a, vec![transfer(a, b, 10)]);
+        assert!(w.commit_turn(first).is_committed());
+        assert!(w.genesis_grant_cap(&untouched, b).is_some());
+        let second = w.turn(a, vec![transfer(a, b, 20)]);
+        assert!(w.commit_turn(second).is_committed());
+        let setup = setup_boundaries(w.recorded_turns());
+        assert_eq!(
+            setup[1],
+            SetupBoundary {
+                births: false,
+                updates: true
+            }
+        );
+        let rows = walk_rows(w.receipts(), &[], &setup);
+        assert_eq!(rows[1].state_link, LinkVerdict::SetupUpdated);
+        assert_eq!(rows[1].agent_link, LinkVerdict::Verified);
+        assert!(!rows[1].state_link.is_sound());
+        assert!(!chain_verifies_to_depth(w.receipts(), &setup, 8));
+        assert!(w
+            .recorded_turns()
+            .replay_to(w.recorded_turns().len())
+            .is_ok());
     }
 
     #[test]

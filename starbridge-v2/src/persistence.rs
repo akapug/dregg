@@ -1,48 +1,26 @@
-//! Native World persistence — M4 of the reflexive migration.
+//! Native ordered persistence for the retained World runtime.
 //!
-//! This is the durable-image WELD: it makes a [`crate::world::World`] a durable,
-//! rewindable image (close it, reopen it, land exactly where you were) by wiring
-//! the ALREADY-BUILT node durability spine — `dregg_persist`'s redb commit log +
-//! the checkpoint⊕overlay boot-recovery — onto the single commit seam the World
-//! already has (`commit_turn`). It builds NO parallel persistence: every durable
-//! call here is a `dregg_persist::PersistentStore` method, and the recovery
-//! semantics are byte-identical to the node's (`node/src/state.rs`), so the World
-//! INHERITS `CrashRecovery.lean::recover_eq_replay` rather than re-proving it.
+//! Accepted turns use the existing node commit log. Trusted genesis births and
+//! setup updates are interleaved with those turns in a versioned World journal;
+//! each journal entry and its head cross the same redb transaction as the data
+//! they publish. Recording trusted setup does not establish kernel authority or
+//! conservation for that setup operation.
 //!
-//! # What is durable
+//! Recovery checks every journal pre/post root and then World re-executes the
+//! exact interleaving, checking actual turn receipts and complete checkpoint
+//! bytes. World checkpoints name an ordered step, because a turn height alone
+//! cannot distinguish setup changes. The full history remains available.
 //!
-//! * The **commit log** — one [`dregg_persist::CommitRecord`] per committed turn,
-//!   written in ONE redb ACID transaction at `commit_turn` time, carrying the
-//!   O(change) `touched_cells` post-state + the canonical post-state root tooth.
-//! * The **input turns** — the postcard `Turn` alongside each commit, so the
-//!   in-RAM [`crate::replay::History`] can be rebuilt verbatim and `replay_to(k)`
-//!   works from ANY k after a reopen (the *rewindable* image, A.4).
-//! * The **genesis installs** — the out-of-band genesis path (`install_genesis`,
-//!   `set_cell_program`, …) bypasses the executor and emits NO `CommitRecord`, so
-//!   each genesis cell is mirrored into a durable genesis table here (SEAM §2):
-//!   without this an opened image would miss every genesis cell never later
-//!   touched by a turn.
-//!
-//! # Recovery (the EXACT node recovery — inherits CrashRecovery.lean)
-//!
-//! [`recover`] runs the identical `node/src/state.rs:676-767` flow:
-//!   1. load the latest full ledger checkpoint (or empty),
-//!   2. apply the durable commit-log overlay since the checkpoint, last-writer-
-//!      wins via [`upsert_cell`] (= `state.rs::upsert_cell`, remove-then-insert),
-//!   3. FAIL-CLOSED convergence check: the reconstructed [`canonical_ledger_root`]
-//!      MUST equal the root the last committed turn durably recorded, else
-//!      [`OpenError::Divergent`] (refuse to open — a divergent image is a
-//!      soundness event, exactly as `state.rs:732-754`).
-//!
-//! Because the overlay semantics are byte-identical (last-writer-wins
-//! `upsert_cell` over a checkpoint), the recovered ledger equals the genesis
-//! replay (`CrashRecovery.recover_eq_replay`): `World::open` lands on the state
-//! `History::replay_to(head)` would.
+//! Nonempty legacy images without event ordering are preserved and refused for
+//! explicit migration. Only an unpublished commit-log suffix may be removed,
+//! after complete prefix validation and transactional cursor/publication guards.
+//! These are executable checks; no Lean refinement theorem for this new physical
+//! World journal is claimed by sharing the node's store primitives.
 
 use std::path::Path;
 
 use dregg_cell::{Cell, Ledger};
-use dregg_persist::{CellOverlayOp, CommitRecord, LedgerCheckpoint, PersistentStore, StoreError};
+use dregg_persist::{CommitRecord, LedgerCheckpoint, PersistentStore, StoreError};
 use dregg_turn::turn::{Turn, TurnReceipt};
 
 // NOTE: the recovered committed turns are carried as plain input `Turn`s; the
@@ -83,33 +61,12 @@ const LEAF_CACHE_AUDIT_EVERY: u64 = 128;
 /// this sibling table carries the replayable input so `History` rebuilds and the
 /// image is *rewindable*, not merely *resumable*.)
 ///
-/// ⚠ FLAG DAY (`sbv2_turn:` → `sbv2_turn_v2:`): the payload changed from a bare
-/// postcard `Turn` to a [`DurableTurn`] (`{ turn, timestamp }`) because the
-/// canonical ledger root is a FUNCTION OF THE WALL CLOCK — see [`DurableTurn`].
-/// The prefix is bumped rather than reused so an image written under the old
-/// shape REFUSES to load (`load_committed_turns` errs "durable input turn N
-/// missing (corrupt store)") instead of being replayed under a wrong clock and
-/// reported as a store-integrity divergence. Any pre-existing per-user session
-/// image must be re-genesised (delete it; login provisions a fresh one).
+/// The versioned input includes the original wall clock. Legacy inputs without
+/// it cannot supply exact receipt replay; preserve those images for migration.
 const TURN_KEY_PREFIX: &str = "sbv2_turn_v2:";
-/// The METADATA_BYTES config-key prefix for a durably-persisted genesis cell,
-/// keyed by its CELL ID (hex). (SEAM §2: out-of-band genesis installs + in-place
-/// genesis-path mutations — `set_cell_program`/`genesis_grant_cap`/
-/// `genesis_open_permissions` — emit no `CommitRecord`; this table reconstructs
-/// them on open. Keying by id makes a re-record LAST-WRITER-WINS, so an in-place
-/// genesis mutation durably overwrites the prior genesis snapshot of that cell.
-///
-/// ⚠ KNOWN LIMITATION (reproduced + HORIZONLOG'd, 2026-06-20): this is sound ONLY
-/// for a genesis-path mutation on a cell that NO committed turn has touched. A
-/// mutation AFTER a turn touched the cell would record the post-mutation cell as
-/// timeless "genesis", so recovery would re-execute that turn against the poisoned
-/// base, diverge, and the fail-closed integrity check would REFUSE the image. To
-/// prevent that data-loss-on-reopen, `World::set_cell_program` consults the FAIL-FAST
-/// guard `genesis_mutation_would_break_reopen` and REFUSES such a mutation on a
-/// durable image (an honest refusal). The sound full fix (which would let it succeed)
-/// splits pre-chain vs post-chain genesis-path mutations in the durable log — HORIZONLOG.
-/// Tests: `a_mid_session_set_cell_program_on_a_touched_cell_is_refused` (the guard) +
-/// `a_genesis_setup_set_cell_program_survives_reopen` (the safe boundary).)
+/// Compatibility index of the latest trusted setup image for each cell.
+/// This index is not the recovery chronology: the ordered journal retains every
+/// original birth/update at its actual position relative to accepted turns.
 const GENESIS_KEY_PREFIX: &str = "sbv2_genesis:";
 /// The config key holding the ordered list of durable genesis cell ids (postcard
 /// `Vec<[u8;32]>`) — install order, so recovery reinstalls deterministically.
@@ -252,6 +209,8 @@ pub struct WorldPersist {
     fail_checkpoint: std::sync::atomic::AtomicBool,
     #[cfg(test)]
     fail_session_write: std::sync::atomic::AtomicBool,
+    #[cfg(test)]
+    fail_genesis_response: std::sync::atomic::AtomicBool,
 }
 
 /// The incremental canonical-root state: the SORTED leaf set
@@ -409,6 +368,8 @@ impl WorldPersist {
             fail_checkpoint: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
             fail_session_write: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            fail_genesis_response: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -628,6 +589,15 @@ impl WorldPersist {
             .map(|(key, bytes)| (key.as_str(), bytes.as_slice()))
             .collect();
         self.store.set_config_batch(&entries)?;
+        #[cfg(test)]
+        if self
+            .fail_genesis_response
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(StoreError::Database(
+                "genesis response failure after commit injected".to_string(),
+            ));
+        }
         self.history_head = head;
         self.invalidate_leaf_cache();
         Ok(())
@@ -636,6 +606,12 @@ impl WorldPersist {
     #[cfg(test)]
     pub(crate) fn fail_config_io_for_test(&self) {
         self.store.set_fail_config_io(true);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_genesis_response_for_test(&self) {
+        self.fail_genesis_response
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     #[cfg(test)]
@@ -682,16 +658,38 @@ impl WorldPersist {
         }
     }
 
-    /// RECOVER a divergent/torn image to its last root-consistent commit ordinal,
-    /// truncating the divergent tail (the [`PersistentStore::recover_to_last_
-    /// consistent`] passthrough). Returns the number of divergent records dropped
-    /// (0 ⇒ the image was already consistent). After this returns `Ok`, a fresh
-    /// [`Self::recover`] converges at the recovered point — so a torn image opens
-    /// at its last-good state instead of being refused (the owner is never
-    /// stranded). Errs only when NO prefix is salvageable (the caller then offers
-    /// "start fresh").
-    pub fn recover_to_last_consistent(&self) -> Result<u64, StoreError> {
-        self.store.recover_to_last_consistent()
+    /// Remove only an extra node-log suffix not published in the World journal.
+    /// Called after World re-executes the complete published prefix, including
+    /// receipt hashes and exact checkpoint bytes. All published history remains.
+    pub(crate) fn discard_unpublished_tail(&mut self) -> Result<u64, StoreError> {
+        let actual = self.store.commit_cursor()?;
+        if actual == self.history_head.turns {
+            return Ok(0);
+        }
+        if actual < self.history_head.turns {
+            return Err(history_integrity(
+                "cannot recover missing published World turns",
+            ));
+        }
+        let retained_receipt = if self.history_head.turns == 0 {
+            None
+        } else {
+            Some(
+                self.store
+                    .commit_record_at(self.history_head.turns - 1)?
+                    .ok_or_else(|| history_integrity("retained World receipt is missing"))?
+                    .receipt_hash,
+            )
+        };
+        let discarded = self.store.truncate_unpublished_tail(
+            actual,
+            self.history_head.turns,
+            retained_receipt,
+            WORLD_HISTORY_HEAD_KEY,
+            &encode(&self.history_head)?,
+        )?;
+        self.cursor = self.history_head.turns;
+        Ok(discarded)
     }
 
     /// The dual-write at `commit_turn` (A.2) — O(change): build the
@@ -803,23 +801,10 @@ impl WorldPersist {
         Ok(())
     }
 
-    /// Periodic / on-close durable full-ledger checkpoint (C.1): serialize the
-    /// whole ledger to redb keyed by `height`, so recovery's overlay
-    /// (`cell_overlay_since(height)`) is short. Returns storage errors to the
-    /// World, which requires reopen before further writes. The commit log is
-    /// retained, so recovery can still reconstruct an image without the new
-    /// checkpoint.
-    ///
-    /// IMPORTANT — NO COMPACTION (the rewindable-image tradeoff, NAMED): the
-    /// node's `checkpoint_ledger` CO-DRIVES `compact_below`, which DELETES the
-    /// commit-log records a checkpoint subsumes. For the single-image World those
-    /// records carry the input turns the rewindable `History` replays (A.4), so
-    /// compacting them would make `replay_to(k)` for a compacted `k` impossible.
-    /// We therefore write a NON-compacting checkpoint (`store_ledger_checkpoint_
-    /// snapshot`): the checkpoint still bounds the recovery OVERLAY, while the
-    /// commit log (the rewind tape) is retained. Bounding the commit log itself is
-    /// the *separate* later move (SEAM §2's collapse) that switches History to a
-    /// checkpoint-anchored tape; until then a rewindable image keeps its full tape.
+    /// Store a complete checkpoint at the exact ordered World step. Turn
+    /// heights remain unchanged for node records; they cannot identify a World
+    /// checkpoint after a setup write. No history is compacted. Reopen validates
+    /// the snapshot against actual execution at this boundary before trusting it.
     pub fn checkpoint(&self, ledger: &Ledger, height: u64) -> Result<(), StoreError> {
         #[cfg(test)]
         if self
@@ -851,6 +836,13 @@ impl WorldPersist {
     /// backwards over a turn. The independent executor replay in World::open
     /// then checks the actual turn receipts and the complete checkpoint image.
     pub fn recover(&self) -> Result<RecoveredImage, OpenError> {
+        self.recover_published(false)
+    }
+
+    pub(crate) fn recover_published(
+        &self,
+        allow_unpublished_tail: bool,
+    ) -> Result<RecoveredImage, OpenError> {
         let checkpoint: Option<WorldCheckpoint> = self
             .store
             .get_config(WORLD_CHECKPOINT_KEY)?
@@ -979,7 +971,7 @@ impl WorldPersist {
             );
         }
         let cursor = self.store.commit_cursor()?;
-        if cursor > turns {
+        if cursor > turns && !allow_unpublished_tail {
             // A direct torn node-log tail has no World journal publication.
             // Expose the divergence to the explicit recovery path.
             let expected = self
@@ -991,17 +983,18 @@ impl WorldPersist {
                 expected,
             });
         }
-        if cursor != turns {
+        if cursor < turns {
             return Err(history_integrity("World journal names missing committed turns").into());
         }
         Ok(RecoveredImage {
             ledger,
             steps,
             checkpoint,
-            cursor,
+            cursor: turns,
         })
     }
 
+    #[cfg(test)]
     fn load_genesis_cells(&self) -> Result<Vec<Cell>, OpenError> {
         let order = self.genesis_order()?;
         let mut out = Vec::with_capacity(order.len());
@@ -1015,35 +1008,6 @@ impl WorldPersist {
             let cell: Cell = postcard::from_bytes(&bytes)
                 .map_err(|e| StoreError::Serialization(e.to_string()))?;
             out.push(cell);
-        }
-        Ok(out)
-    }
-
-    fn load_committed_turns(&self, cursor: u64) -> Result<Vec<DurableTurn>, OpenError> {
-        let mut out = Vec::with_capacity(cursor as usize);
-        for ordinal in 0..cursor {
-            // The commit record must exist for every ordinal below the cursor (a
-            // compacted ordinal — record removed under a covering checkpoint — has
-            // no input turn to replay; the single-image World does not compact
-            // below its own checkpoints in M4, so a gap here is a real integrity
-            // event; the named checkpoint-only history variant of A.4 would
-            // instead start History from the checkpoint genesis).
-            if self.store.commit_record_at(ordinal)?.is_none() {
-                return Err(OpenError::Store(StoreError::Integrity(format!(
-                    "commit record at ordinal {ordinal} missing (compacted?) — History rebuild \
-                     needs every input turn"
-                ))));
-            }
-            let bytes = self.store.get_config(&turn_key(ordinal))?.ok_or_else(|| {
-                OpenError::Store(StoreError::Integrity(format!(
-                    "durable input turn {ordinal} missing (corrupt store, or an image written \
-                     under the retired `sbv2_turn:` shape that carried no wall-clock — re-genesis \
-                     it; see TURN_KEY_PREFIX)"
-                )))
-            })?;
-            let durable: DurableTurn = postcard::from_bytes(&bytes)
-                .map_err(|e| StoreError::Serialization(e.to_string()))?;
-            out.push(durable);
         }
         Ok(out)
     }
@@ -1124,6 +1088,144 @@ mod tests {
     }
 
     const TS: i64 = 1_700_000_000;
+
+    fn append_unpublished_tail(store: &PersistentStore) {
+        let cursor = store.commit_cursor().unwrap();
+        let last = store.commit_record_at(cursor - 1).unwrap().unwrap();
+        store
+            .commit_finalized_turn(
+                cursor,
+                &CommitRecord {
+                    ordinal: cursor,
+                    height: last.height + 1,
+                    block_id: [0; 32],
+                    block_executed_up_to: last.height + 1,
+                    turn_hash: [0xA7; 32],
+                    creator: last.creator,
+                    receipt_hash: [0xB7; 32],
+                    ledger_root: [0xC7; 32],
+                    touched_cells: vec![],
+                    removed: vec![],
+                },
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn ordered_recovery_preserves_intermediate_setup_and_only_removes_unpublished_tail() {
+        let path = scratch_path();
+        let (a, b, _, _) = make_durable_image(&path);
+        let mut world = World::open_with_timestamp(&path, ComputronCosts::zero(), TS).unwrap();
+        let late = world.try_genesis_cell(0x55, 0).unwrap();
+        assert!(world.genesis_grant_cap(&late, b).is_some());
+        let turn = world.turn(a, vec![transfer(a, b, 1)]);
+        assert!(world.commit_turn(turn).is_committed());
+        let roots: Vec<_> = (0..=world.recorded_turns().len())
+            .map(|step| world.recorded_turns().root_at(step).unwrap())
+            .collect();
+        let root = world.state_root();
+        drop(world);
+        let store = PersistentStore::open(&path).unwrap();
+        let head_bytes = store.get_config(WORLD_HISTORY_HEAD_KEY).unwrap().unwrap();
+        let head: WorldHistoryHead = postcard::from_bytes(&head_bytes).unwrap();
+        let recorded: Vec<_> = (0..head.next_step)
+            .map(|step| store.get_config(&history_step_key(step)).unwrap().unwrap())
+            .collect();
+        append_unpublished_tail(&store);
+        drop(store);
+
+        let (reopened, discarded) =
+            World::open_recovering_with_timestamp(&path, ComputronCosts::zero(), TS).unwrap();
+        assert_eq!(discarded, 1);
+        assert_eq!(reopened.state_root(), root);
+        assert!(reopened
+            .ledger()
+            .get(&late)
+            .unwrap()
+            .capabilities
+            .holds_unfrozen_ref_to(&b));
+        for (step, expected) in roots.iter().enumerate() {
+            assert_eq!(reopened.recorded_turns().root_at(step), Some(*expected));
+            assert_eq!(
+                reopened.replay_to_step(step).unwrap().ledger().root(),
+                *expected
+            );
+        }
+        drop(reopened);
+        let store = PersistentStore::open(&path).unwrap();
+        assert_eq!(
+            store.get_config(WORLD_HISTORY_HEAD_KEY).unwrap(),
+            Some(head_bytes)
+        );
+        for (index, bytes) in recorded.iter().enumerate() {
+            assert_eq!(
+                store
+                    .get_config(&history_step_key(index as u64))
+                    .unwrap()
+                    .as_ref(),
+                Some(bytes)
+            );
+        }
+        assert_eq!(store.commit_cursor().unwrap(), 4);
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn corrupt_published_turn_clock_refuses_recovery_without_truncating_any_evidence() {
+        let path = scratch_path();
+        make_durable_image(&path);
+        let store = PersistentStore::open(&path).unwrap();
+        let bytes = store.get_config(&turn_key(0)).unwrap().unwrap();
+        let mut durable: DurableTurn = postcard::from_bytes(&bytes).unwrap();
+        // Turn hash and overlay roots remain unchanged. Only re-executing the
+        // published turn and checking its receipt detects this forged clock.
+        durable.timestamp += 1;
+        store
+            .set_config(&turn_key(0), &encode(&durable).unwrap())
+            .unwrap();
+        append_unpublished_tail(&store);
+        let cursor = store.commit_cursor().unwrap();
+        let head = store.get_config(WORLD_HISTORY_HEAD_KEY).unwrap();
+        drop(store);
+
+        assert!(
+            World::open_recovering_with_timestamp(&path, ComputronCosts::zero(), TS + 10).is_err()
+        );
+        let store = PersistentStore::open(&path).unwrap();
+        assert_eq!(store.commit_cursor().unwrap(), cursor);
+        assert_eq!(store.get_config(WORLD_HISTORY_HEAD_KEY).unwrap(), head);
+        assert!(store.commit_record_at(cursor - 1).unwrap().is_some());
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn legacy_genesis_without_ordered_history_is_preserved_for_explicit_migration() {
+        let path = scratch_path();
+        let store = PersistentStore::open(&path).unwrap();
+        let cell = crate::world::make_open_cell(1, 100);
+        let bytes = encode(&cell).unwrap();
+        store
+            .set_config(GENESIS_ORDER_KEY, &encode(&vec![cell.id().0]).unwrap())
+            .unwrap();
+        store
+            .set_config(&genesis_key(&cell.id().0), &bytes)
+            .unwrap();
+        drop(store);
+        assert!(matches!(
+            World::open_with_timestamp(&path, ComputronCosts::zero(), TS),
+            Err(OpenError::UnsupportedHistory { .. })
+        ));
+        let store = PersistentStore::open(&path).unwrap();
+        assert_eq!(store.get_config(WORLD_HISTORY_HEAD_KEY).unwrap(), None);
+        assert_eq!(
+            store.get_config(&genesis_key(&cell.id().0)).unwrap(),
+            Some(bytes)
+        );
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
 
     /// Build a durable image: genesis (treasury + user) + three committed
     /// transfers. Returns the path and the (treasury, user) ids.
@@ -1940,7 +2042,7 @@ mod tests {
     /// a cell that a COMMITTED TURN already touched would make the durable image
     /// NON-REOPENABLE (the post-mutation cell, recorded as timeless "genesis", poisons
     /// recovery's re-execution of that turn). The guard
-    /// (`World::genesis_mutation_would_break_reopen`) REFUSES it — an honest refusal
+    /// (`World::genesis_setup_mutation_is_refused`) REFUSES it — an honest refusal
     /// rather than silent data-loss-on-reopen; the image stays clean. (The sound full
     /// fix — ordered pre/post-chain genesis events in the durable log — would instead
     /// make it SUCCEED + survive; HORIZONLOG.)
@@ -2135,21 +2237,25 @@ mod tests {
         let path = scratch_path();
         let (treasury, _user, _root, _cells) = make_durable_image(&path);
 
-        // Open the store directly and overwrite the checkpoint with a TAMPERED
-        // ledger (a hand-edited treasury balance). The commit log still records
-        // the TRUE root, so recovery's convergence check must catch the mismatch.
+        // Corrupt the actual World checkpoint, whose identity includes the
+        // ordered step cursor. Node checkpoint overwrite rules stay unchanged.
         {
             let store = PersistentStore::open(&path).unwrap();
-            let (cp_height, ledger) = store
-                .load_latest_ledger_checkpoint()
+            let bytes = store
+                .get_config(WORLD_CHECKPOINT_KEY)
                 .unwrap()
-                .expect("a checkpoint was flushed");
-            let mut tampered = ledger;
-            // Forge the treasury balance in the checkpoint.
-            if let Some(c) = tampered.get_mut(&treasury) {
-                c.state.set_balance(424_242);
-            }
-            store.checkpoint_ledger(&tampered, cp_height).unwrap();
+                .expect("checkpoint written");
+            let mut checkpoint: WorldCheckpoint = postcard::from_bytes(&bytes).unwrap();
+            let cell = checkpoint
+                .snapshot
+                .cells
+                .iter_mut()
+                .find(|cell| cell.id() == treasury)
+                .unwrap();
+            cell.state.set_balance(424_242);
+            store
+                .set_config(WORLD_CHECKPOINT_KEY, &encode(&checkpoint).unwrap())
+                .unwrap();
         }
 
         let result = World::open_with_timestamp(&path, ComputronCosts::zero(), TS);
@@ -2159,9 +2265,17 @@ mod tests {
             Err(e) => format!("Err({e})"),
         };
         assert!(
-            matches!(result, Err(OpenError::Divergent { .. })),
+            matches!(result, Err(OpenError::Store(StoreError::Integrity(ref reason))) if reason.contains("checkpoint")),
             "a corrupt checkpoint must REFUSE to open (fail-closed), got {outcome}"
         );
+        assert!(World::open_recovering_with_timestamp(&path, ComputronCosts::zero(), TS).is_err());
+        let store = PersistentStore::open(&path).unwrap();
+        assert_eq!(
+            store.commit_cursor().unwrap(),
+            3,
+            "published evidence is not truncated"
+        );
+        drop(store);
         let _ = std::fs::remove_file(&path);
     }
 }

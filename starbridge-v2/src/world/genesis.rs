@@ -2,7 +2,7 @@
 //!
 //! Extracted from `world/mod.rs` so the reactivity track owns a file rather than
 //! a line-range. A CHILD module, so it keeps private access to
-//! `World`'s fields and helpers (`commit_genesis_update`, `genesis_mutation_would_break_reopen`,
+//! `World`'s fields and helpers (`commit_genesis_update`, `genesis_setup_mutation_is_refused`,
 //! `ensure_record_ledger`). Updates stage a complete cell and persist it before
 //! publishing to either live or replay state. Storage errors require reopen.
 //!
@@ -25,7 +25,7 @@
 //!
 //! ⚠ `set_cell_heap` is the SHIPPING desktop document editor's persist path
 //! (`deos_desktop/mod.rs::commit_doc_to_umem_heap`) — and on a DURABLE image it refuses
-//! from save #2 onward, because `genesis_mutation_would_break_reopen` sees the doc cell was
+//! from save #2 onward, because the trusted-setup policy sees the doc cell was
 //! touched by save #1's own `SetField` turn. The caller then short-circuits on `&&`, so the
 //! revision turn does not run either: no heap write, no receipt, no event, and the JSON
 //! sidecar becomes the only copy of the prose. Closing that needs an ordered
@@ -57,14 +57,10 @@ impl World {
     /// genesis update or unavailable durable store returns `false`; consult
     /// [`Self::mutation_guard`] for a storage failure requiring reopen.
     pub fn set_cell_program(&mut self, cell: &CellId, program: dregg_cell::CellProgram) -> bool {
-        // FAIL-FAST guard (HORIZONLOG persist bug): a genesis-path mutation on a cell
-        // a committed turn already touched would make the DURABLE image non-reopenable
-        // (the genesis-mirror-after-turn bug — the post-mutation cell, recorded as
-        // timeless "genesis", poisons recovery's re-execution of that turn). REFUSE
-        // it here rather than silently corrupt the image on reopen. Genesis-SETUP
-        // mutations (before the cell's first turn) and ephemeral worlds pass through.
-        // (The sound full fix — ordered pre/post-chain genesis events — is HORIZONLOG'd.)
-        if self.genesis_mutation_would_break_reopen(cell) {
+        // Trusted setup is not an accepted runtime program-install effect.
+        // Preserve the pre-first-turn setup boundary even though ordered storage
+        // can now replay exact update positions without rewriting earlier history.
+        if self.genesis_setup_mutation_is_refused(cell) {
             return false;
         }
         let Some(mut updated) = self.engine.ledger().get(cell).cloned() else {
@@ -101,10 +97,8 @@ impl World {
     /// not the cap — is the load-bearing admission gate (faithful to the Lean §10:
     /// even an authorized-to-present cell cannot overpaint/spoof/steal-focus).
     pub fn genesis_grant_cap(&mut self, holder: &CellId, target: CellId) -> Option<u32> {
-        // FAIL-FAST guard (HORIZONLOG persist bug): refuse a genesis-path c-list
-        // mutation that would make the durable image non-reopenable (the holder was
-        // already touched by a committed turn). Same class as `set_cell_program`.
-        if self.genesis_mutation_would_break_reopen(holder) {
+        // A live holder receives grants through an accepted turn, not raw setup.
+        if self.genesis_setup_mutation_is_refused(holder) {
             return None;
         }
         let mut updated = self.engine.ledger().get(holder)?.clone();
@@ -147,10 +141,8 @@ impl World {
     /// cell, NOT a bypass of the executor (a later spend FROM the cell still runs
     /// through the real executor; this only sets what that executor gates against).
     pub fn genesis_open_permissions(&mut self, cell: &CellId) -> bool {
-        // FAIL-FAST guard (HORIZONLOG persist bug): refuse a genesis-path permissions
-        // mutation that would make the durable image non-reopenable (the cell was
-        // already touched by a committed turn). Same class as `set_cell_program`.
-        if self.genesis_mutation_would_break_reopen(cell) {
+        // A live cell changes permissions through an accepted turn, not raw setup.
+        if self.genesis_setup_mutation_is_refused(cell) {
             return false;
         }
         let Some(mut updated) = self.engine.ledger().get(cell).cloned() else {
@@ -184,17 +176,16 @@ impl World {
     /// are ordinary heap writes the substrate already commits. Mirrored into the
     /// replay-recorder's ledger so the recorded roots stay in lock-step.
     ///
-    /// FAIL-FAST on a DURABLE image whose cell a committed turn already touched
-    /// (the genesis-mirror-after-turn bug): returns `false` rather than poison
-    /// reopen. The desktop's demo world is ephemeral, so this passes; a durable
-    /// runtime heap write awaits an ordered heap effect (HORIZONLOG seam). Returns
+    /// A DURABLE image refuses raw setup once a turn has touched the cell.
+    /// An ordered storage event alone does not provide kernel authority for a
+    /// runtime heap update; that update still needs an accepted heap effect. Returns
     /// `true` if the cell existed and its boundary was resealed.
     pub fn set_cell_heap(
         &mut self,
         cell: &CellId,
         heap_map: std::collections::BTreeMap<(u32, u32), dregg_cell::FieldElement>,
     ) -> bool {
-        if self.genesis_mutation_would_break_reopen(cell) {
+        if self.genesis_setup_mutation_is_refused(cell) {
             return false;
         }
         // The write's SHAPE, read off the incoming map before it is moved into the

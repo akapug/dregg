@@ -31,7 +31,7 @@
 
 use deos_js::portable::AppletManifest;
 use deos_js::{Applet, JsRuntime, WorldSink};
-use dregg_cell::{AuthRequired, CellId};
+use dregg_cell::{CellId, Requirement};
 
 use crate::acp::{PermissionOutcome, ToolCallRequest};
 use crate::acp_client::{JsRunRecord, RunJsHook};
@@ -117,6 +117,8 @@ where
     /// chosen script against the live World. Returns the ACP verdict deos sends
     /// back (admitted iff the gateway admitted the tool-call) and a record of what
     /// the brain's JS did (the script + the receipts it landed on the live ledger).
+    /// A script failure stays in `JsRunRecord::js_error` alongside every prior
+    /// committed receipt; the permission verdict describes gateway admission.
     pub fn run_call(
         &mut self,
         call: &ToolCallRequest,
@@ -150,8 +152,9 @@ where
                 (outcome.tool_outcome, record)
             }
             Err(e) => {
-                // The runtime couldn't even start the script (a boot/compile fault).
-                // Surface it as a reject naming the engine fault — no turn, no glass.
+                // The runtime could not recover the attached target. Script
+                // errors use the outcome above, retaining any committed receipts;
+                // this engine fault does not establish that no turn committed.
                 record.js_error = Some(e.to_string());
                 (
                     PermissionOutcome::Reject {
@@ -201,7 +204,7 @@ where
 /// patch reaches the card).
 pub struct LiveAuthoringHands<'gw, F>
 where
-    F: FnMut() -> (Applet, AppletManifest, AuthRequired),
+    F: FnMut() -> (Applet, AppletManifest, Requirement),
 {
     tool: RunJsAuthoringTool,
     gateway: HermesGateway<'gw>,
@@ -211,12 +214,13 @@ where
 
 impl<'gw, F> LiveAuthoringHands<'gw, F>
 where
-    F: FnMut() -> (Applet, AppletManifest, AuthRequired) + 'gw,
+    F: FnMut() -> (Applet, AppletManifest, Requirement) + 'gw,
 {
     /// Build the authoring hands over an agent `tool`, its accountability `gateway`,
     /// and a `card_factory` producing the `(card, manifest, edit_authority)` the
-    /// brain authors. Boots the process-global SpiderMonkey engine — call once per
-    /// process.
+    /// brain authors. `edit_authority` is the card's required demand, independent
+    /// of the held capability supplied when the tool was constructed. Boots the
+    /// process-global SpiderMonkey engine — call once per process.
     pub fn new(
         tool: RunJsAuthoringTool,
         gateway: HermesGateway<'gw>,
