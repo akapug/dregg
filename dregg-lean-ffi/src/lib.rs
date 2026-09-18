@@ -243,6 +243,8 @@ pub enum LeanRuntimeMode {
 pub struct LeanInitializationStatus {
     pub runtime_mode: Option<LeanRuntimeMode>,
     pub delegated_admission_ready: bool,
+    /// The generated FFIDirect/FFI import closure is ready, without implying full readiness.
+    pub executor_ready: bool,
     pub default_full: Option<Result<(), String>>,
     pub single_threaded_full: Option<Result<(), String>>,
     /// A module can set its generated guard before failing. Such failure forbids all retries.
@@ -1807,6 +1809,7 @@ mod ffi {
         fn dregg_ffi_init_modules() -> i32;
         fn dregg_ffi_init_st_modules() -> i32;
         fn dregg_ffi_init_deleg_admit_module() -> i32;
+        fn dregg_ffi_init_executor_module() -> i32;
         fn dregg_ffi_finish_initialization();
         fn dregg_ffi_last_failed_module() -> *const c_char;
         fn lean_initialize_thread();
@@ -1974,6 +1977,8 @@ mod ffi {
         fn attach_thread(&mut self);
         fn deleg_present(&self) -> bool;
         fn init_deleg(&mut self) -> Result<(), String>;
+        fn executor_present(&self) -> bool;
+        fn init_executor(&mut self) -> Result<(), String>;
         fn init_full(&mut self, mode: LeanRuntimeMode) -> Result<(), String>;
         fn finish(&mut self);
     }
@@ -1984,6 +1989,7 @@ mod ffi {
                 status: LeanInitializationStatus {
                     runtime_mode: None,
                     delegated_admission_ready: false,
+                    executor_ready: false,
                     default_full: None,
                     single_threaded_full: None,
                     failure: None,
@@ -2048,6 +2054,22 @@ mod ffi {
             Ok(())
         }
 
+        fn ensure_executor(&mut self, backend: &mut impl InitBackend) -> Result<(), String> {
+            if !backend.executor_present() {
+                return Err(
+                    "Lean FFIDirect export/builder/initializer family is not linked".into(),
+                );
+            }
+            // The ST family's historical module list does not include FFIDirect.
+            // Do not change its contract or add modules after its end marker.
+            self.ensure_runtime(LeanRuntimeMode::Default, backend)?;
+            if !self.status.executor_ready {
+                self.retain_failure(backend.init_executor())?;
+                self.status.executor_ready = true;
+            }
+            Ok(())
+        }
+
         fn ensure_full(
             &mut self,
             mode: LeanRuntimeMode,
@@ -2070,6 +2092,9 @@ mod ffi {
                     self.ensure_deleg(backend)?;
                 }
                 self.retain_failure(backend.init_full(mode))?;
+                if mode == LeanRuntimeMode::Default {
+                    self.status.executor_ready = backend.executor_present();
+                }
                 backend.finish();
                 Ok(())
             })();
@@ -2180,6 +2205,12 @@ mod ffi {
         fn init_deleg(&mut self) -> Result<(), String> {
             Self::module_result(unsafe { dregg_ffi_init_deleg_admit_module() }, "DelegAdmit")
         }
+        fn executor_present(&self) -> bool {
+            cfg!(dregg_direct_present)
+        }
+        fn init_executor(&mut self) -> Result<(), String> {
+            Self::module_result(unsafe { dregg_ffi_init_executor_module() }, "FFIDirect")
+        }
         fn init_full(&mut self, mode: LeanRuntimeMode) -> Result<(), String> {
             let rc = unsafe {
                 match mode {
@@ -2225,6 +2256,25 @@ mod ffi {
         lifecycle()?.ensure_deleg(&mut NativeInit)
     }
 
+    pub fn executor_init_once() -> Result<(), String> {
+        lifecycle()?.ensure_executor(&mut NativeInit)
+    }
+
+    pub fn with_executor<T>(body: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+        let mut state = lifecycle()?;
+        state.ensure_executor(&mut NativeInit)?;
+        if matches!(state.status.default_full, Some(Ok(()))) {
+            // All module globals are frozen. Preserve normal parallel execution.
+            drop(state);
+            return body();
+        }
+        // Keep partial-initialization execution serialized with module registration.
+        // Callers must drain all Lean objects before returning owned Rust values.
+        let result = body();
+        drop(state);
+        result
+    }
+
     #[cfg(test)]
     mod initialization_failure_tests {
         use super::*;
@@ -2259,12 +2309,39 @@ mod ffi {
             fn init_deleg(&mut self) -> Result<(), String> {
                 self.step("deleg")
             }
+            fn executor_present(&self) -> bool {
+                true
+            }
+            fn init_executor(&mut self) -> Result<(), String> {
+                self.step("executor")
+            }
             fn init_full(&mut self, _: LeanRuntimeMode) -> Result<(), String> {
                 self.step("full")
             }
             fn finish(&mut self) {
                 self.calls.push("end");
             }
+        }
+
+        #[test]
+        fn init_lifecycle_failed_executor_refuses_every_family() {
+            let mut state = InitLifecycle::new();
+            let mut backend = Backend {
+                fail: Some("executor"),
+                ..Default::default()
+            };
+            let error = state.ensure_executor(&mut backend).unwrap_err();
+            backend.fail = None;
+            let calls = backend.calls.clone();
+            assert_eq!(state.ensure_executor(&mut backend), Err(error.clone()));
+            assert_eq!(state.ensure_deleg(&mut backend), Err(error.clone()));
+            assert_eq!(
+                state.ensure_full(LeanRuntimeMode::Default, &mut backend),
+                Err(error)
+            );
+            assert_eq!(backend.calls, calls);
+            assert!(!state.status.executor_ready);
+            assert_eq!(state.status.default_full, None);
         }
 
         #[test]
@@ -3296,6 +3373,10 @@ mod ffi {
     }
 
     pub fn deleg_admit_init_once() -> Result<(), String> {
+        Err("libdregg_lean.a was not present at build time".into())
+    }
+
+    pub fn executor_init_once() -> Result<(), String> {
         Err("libdregg_lean.a was not present at build time".into())
     }
 

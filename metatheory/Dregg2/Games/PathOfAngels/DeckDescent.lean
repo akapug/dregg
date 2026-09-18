@@ -1410,20 +1410,17 @@ Everything below is over `stepB` and `replayB` — the same functions the emitte
 tabulates and the judge runs.  There is no second model of the descent anywhere
 in this repository.
 
-⚑ **THE MEASUREMENTS NO LONGER EVALUATE IN THIS MODULE (2026-08-08).** This module is in
-the `Dregg2.FFI` closure — the crypto archive's build — and a `native_decide` here made
-every game-fixture regression a hard failure of every Rust proving target (the
-compilation-unit coupling the stale-fixture outage measured). Each measured design
-property — here and in the parametric-table and rendering sections below — stays as an
-evaluation-free `check_* : Bool` definition (a `def` body elaborates without running).
-The EVALUATION — each `check_* = true`, pinned by `native_decide` + `#assert_compiled` —
-lives in `DeckDescentFixtures.lean`, rooted in the `PathOfAngelsGuards` library: a plain
-`lake build` still runs every pin, and a stale fixture reds the guard library instead of
-the archive.
+The `native_decide` proofs of the measured design properties live in
+`DeckDescentFixtures.lean`, rooted in `PathOfAngelsGuards`, so a plain `lake build`
+still checks them. Moving those proofs on 2026-08-08 separated their elaboration
+from the FFI archive's build, but did not defer the closed `check_* : Bool`
+computations retained here: native module initialization eagerly evaluates them.
 
-Named residue: NONE. No construction in this module consumes a `native_decide` proof as
-data, so every pin moved.  (`by decide` theorems — the line lengths, the id-alphabet
-falsifier, the action tags — are kernel-checked and stay.) -/
+The exhaustive blind-script search and its check moved with their exact bodies
+into `DeckDescentFixtures.lean` on 2026-09-18. The other closed measurements below
+remain runtime initialization work. Their functions and general/kernel-checked
+theorems are unchanged. No construction here consumes a `native_decide` proof as
+data. -/
 
 def playsOutB (b : Board) (acts : List Action) : Bool :=
   match replayB b initialState acts with
@@ -1501,45 +1498,10 @@ def check_the_answer_selects_the_branch : Bool :=
     if (boardAt i).west = Passage.sound then playsOutB (boardAt i) scoutedWestLine
     else playsOutB (boardAt i) scoutedEastLine)
 
-/-! ### The falsifier: the best script there is
-
-The playtest's experiment, made a kernel computation.  A blind line is a fixed
-list of actions, replayed against every board at once; a board is lost the moment
-the script's next action is refused there or the run is doomed; `bestBlind` is
-the largest number of draws ANY script of the budget's length banks.  The search
-is exhaustive over the whole nine-action alphabet to depth `AIR`. -/
-
-def blindBanked (ss : List (Option State)) : Nat :=
-  (ss.filter (fun s => match s with | some t => t.banked | none => false)).length
-
-def blindAlive (ss : List (Option State)) : Nat :=
-  (ss.filter (fun s => match s with | some t => !t.banked | none => false)).length
-
-def blindStep (ss : List (Option State)) (a : Action) : List (Option State) :=
-  (boardTable.zip ss).map (fun p =>
-    match p.2 with
-    | none => none
-    | some s => if s.banked then some s else stepB p.1 s a)
-
-def bestBlindFrom : Nat → List (Option State) → Nat
-  | 0, ss => blindBanked ss
-  | fuel + 1, ss =>
-      if blindAlive ss = 0 then blindBanked ss
-      else allActions.foldl
-        (fun best a => Nat.max best (bestBlindFrom fuel (blindStep ss a)))
-        (blindBanked ss)
-
-/-- The best score any blind script achieves, over the whole family. -/
-def bestBlind : Nat := bestBlindFrom AIR (boardTable.map (fun _ => some initialState))
-
-/-- ⚑ **NO BLIND LINE BANKS EVERY BOARD** — and this is the best one's score, not
-a claim that one does not exist.  Exhaustive over every script of nine actions:
-the best banks FOUR of the six draws.  The same search on the shipped rules
-answered EIGHT of eight, with seven distinct nine-action scripts achieving it.
-This is the property the whole repair exists to make true.
-(Pinned `= true` in `DeckDescentFixtures`.) -/
-def check_no_blind_line_banks_every_board : Bool :=
-  decide (bestBlind = 4) && decide (bestBlind < boardTable.length)
+/-! The exhaustive blind-script search and its unchanged compiled assertion live in
+`DeckDescentFixtures.lean`. Keeping the closed `bestBlind` value here would run the
+nine-action search during native module initialization, even though only assurance
+uses its result. -/
 
 /-! ### The look, priced
 

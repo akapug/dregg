@@ -1,30 +1,68 @@
 /-
-# Deck Descent — the measured-design EVALUATION, out of the crypto archive's build
+# Deck Descent — measured design assurance and the exhaustive blind-script search
 
-`DeckDescent.lean` sits in the `Dregg2.FFI` closure (the crypto archive's build root), and
-until 2026-08-08 its measured design properties ran twenty-two `native_decide` evaluations at
-elaboration — the family census, the named lines, and the full parametric closure — so any game-fixture regression was a hard failure of every
-Rust proving target in the workspace (the compilation-unit coupling the stale-fixture outage
-measured). The properties' STATEMENTS remain in `DeckDescent.lean` as evaluation-free
-`check_* : Bool` definitions over `stepB`/`replayB`/`rowFor` — the same functions the emitter
-tabulates and the judge runs; THIS module is where they are RUN. It is rooted in the
-`PathOfAngelsGuards` library and reachable from `Dregg2.FFI` by NOTHING, so:
+The compiled proofs in this module check the actual `stepB`/`replayB`/`rowFor`
+functions used by the emitter and judge. `PathOfAngelsGuards` roots this module,
+so a plain `lake build` evaluates every existing pin; the runtime FFI import
+closure does not import it.
 
-  * a plain `lake build` still evaluates every pin — no loss of checking;
-  * `lake build Dregg2.FFI` (what `dregg-lean-ffi/build.rs` and the seed scripts run) never
-    does — a red pin here can no longer take the archive down.
+The 2026-08-08 split moved `native_decide` evaluations out of runtime elaboration,
+but the closed Bool definitions retained in `DeckDescent.lean` still evaluate in
+native module initialization. On 2026-09-18 the six declarations implementing the
+exhaustive blind-script search and its check moved here with unchanged bodies.
+The search remains exhaustive and its result is checked by the same theorem and
+`#assert_compiled` assertion. Other closed measurements still live in the runtime
+module; this move makes no claim to have removed their startup cost.
 
-Each theorem keeps the name the in-module `#assert_compiled` census used, so the
-fully-qualified names are unchanged.
-
-Named residue in the parent: NONE — no construction in `DeckDescent.lean` consumes a
-`native_decide` proof as data, so every pin moved.
+All existing theorem names, statements and compiled assertions are preserved.
 -/
 import Dregg2.Games.PathOfAngels.DeckDescent
 
 namespace Dregg2.Games.PathOfAngels.DeckDescent
 
+open Dregg2.Games.PathOfAngels
+
 set_option autoImplicit false
+
+/-! ### The falsifier: the best script there is
+
+The playtest's experiment, made a kernel computation.  A blind line is a fixed
+list of actions, replayed against every board at once; a board is lost the moment
+the script's next action is refused there or the run is doomed; `bestBlind` is
+the largest number of draws ANY script of the budget's length banks.  The search
+is exhaustive over the whole nine-action alphabet to depth `AIR`. -/
+
+def blindBanked (ss : List (Option State)) : Nat :=
+  (ss.filter (fun s => match s with | some t => t.banked | none => false)).length
+
+def blindAlive (ss : List (Option State)) : Nat :=
+  (ss.filter (fun s => match s with | some t => !t.banked | none => false)).length
+
+def blindStep (ss : List (Option State)) (a : Action) : List (Option State) :=
+  (boardTable.zip ss).map (fun p =>
+    match p.2 with
+    | none => none
+    | some s => if s.banked then some s else stepB p.1 s a)
+
+def bestBlindFrom : Nat → List (Option State) → Nat
+  | 0, ss => blindBanked ss
+  | fuel + 1, ss =>
+      if blindAlive ss = 0 then blindBanked ss
+      else allActions.foldl
+        (fun best a => Nat.max best (bestBlindFrom fuel (blindStep ss a)))
+        (blindBanked ss)
+
+/-- The best score any blind script achieves, over the whole family. -/
+def bestBlind : Nat := bestBlindFrom AIR (boardTable.map (fun _ => some initialState))
+
+/-- ⚑ **NO BLIND LINE BANKS EVERY BOARD** — and this is the best one's score, not
+a claim that one does not exist.  Exhaustive over every script of nine actions:
+the best banks FOUR of the six draws.  The same search on the shipped rules
+answered EIGHT of eight, with seven distinct nine-action scripts achieving it.
+This is the property the whole repair exists to make true.
+(Pinned `= true` in `DeckDescentFixtures`.) -/
+def check_no_blind_line_banks_every_board : Bool :=
+  decide (bestBlind = 4) && decide (bestBlind < boardTable.length)
 
 theorem every_board_can_be_banked :
     check_every_board_can_be_banked = true := by native_decide

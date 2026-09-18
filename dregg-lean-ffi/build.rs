@@ -3400,13 +3400,15 @@ fn main() {
     // stale archive degrade to the JSON path — which carries the head at full width with no Lean
     // change — instead of silently narrowing the verified ChainHead leg back to 64 bits.
     let direct_present = archive_exports(&build_archive, "dregg_exec_full_forest_auth_direct")
-        && archive_exports(&build_archive, "dregg_d_mk_wturn_w");
+        && archive_exports(&build_archive, "dregg_d_mk_wturn_w")
+        && archive_exports(&build_archive, "initialize_Dregg2_Dregg2_Exec_FFIDirect");
     if direct_present {
         println!("cargo:rustc-cfg=dregg_direct_present");
     } else {
         println!(
             "cargo:warning=dregg-lean-ffi: libdregg_lean.a lacks `dregg_exec_full_forest_auth_direct` \
-             or the WIDE-head builder `dregg_d_mk_wturn_w` — the no-copy direct boundary is compiled \
+             or the WIDE-head builder `dregg_d_mk_wturn_w` or its FFIDirect initializer — \
+             the no-copy direct boundary is compiled \
              out (the JSON marshalling path is used). Rebuild the archive (it splices \
              Dregg2.Exec.FFIDirect) to enable the lean_object* path."
         );

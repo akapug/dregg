@@ -90,6 +90,69 @@ fn check_real_verdicts() {
     );
 }
 
+fn direct_corpus() -> Vec<dregg_lean_ffi::ShadowState> {
+    use dregg_lean_ffi::marshal::conformance_input_corpus;
+    use dregg_lean_ffi::{direct_available, shadow_exec_direct, WireTurnHdr};
+    assert!(direct_available(), "real FFIDirect family is required");
+    let corpus = conformance_input_corpus();
+    assert!(corpus.len() >= 45, "the complete standing corpus must run");
+    corpus
+        .iter()
+        .map(|(name, host, state, turn)| {
+            let header = WireTurnHdr {
+                agent: turn.agent,
+                nonce: turn.nonce,
+                fee: turn.fee,
+                valid_until: turn.valid_until,
+                block_height: turn.block_height,
+                prev_hash: turn.prev_hash.0,
+            };
+            shadow_exec_direct(host, state, &turn.root, &header)
+                .unwrap_or_else(|error| panic!("direct corpus {name}: {error}"))
+        })
+        .collect()
+}
+
+fn compare_direct_to_json(direct: &[dregg_lean_ffi::ShadowState]) {
+    use dregg_lean_ffi::marshal::{conformance_input_corpus, marshal_turn_hosted};
+    use dregg_lean_ffi::{decode_shadow_state, shadow_exec_full_forest_auth};
+    let corpus = conformance_input_corpus();
+    assert_eq!(direct.len(), corpus.len());
+    for ((name, host, state, turn), result) in corpus.iter().zip(direct) {
+        let wire = marshal_turn_hosted(host, state, turn).unwrap();
+        let json = shadow_exec_full_forest_auth(&wire).unwrap();
+        assert_eq!(
+            *result,
+            decode_shadow_state(&json).unwrap(),
+            "corpus {name}"
+        );
+    }
+}
+
+#[test]
+fn direct_executor_initializes_only_its_real_lean_modules() {
+    isolated(
+        "direct_executor_initializes_only_its_real_lean_modules",
+        || {
+            let before = direct_corpus();
+            let status = lean_initialization_status();
+            assert_eq!(status.runtime_mode, Some(LeanRuntimeMode::Default));
+            assert!(status.executor_ready);
+            assert!(!status.delegated_admission_ready);
+            assert_eq!(status.default_full, None);
+            assert_eq!(status.single_threaded_full, None);
+            assert_eq!(status.failure, None);
+            let threads: Vec<_> = (0..4).map(|_| std::thread::spawn(direct_corpus)).collect();
+            for thread in threads {
+                assert_eq!(thread.join().unwrap(), before);
+            }
+            check_real_verdicts();
+            assert_eq!(lean_runtime_init_status(), None);
+            assert!(lean_initialization_status().delegated_admission_ready);
+        },
+    );
+}
+
 #[test]
 fn delegated_admission_initializes_only_its_real_lean_module() {
     isolated(
@@ -105,6 +168,7 @@ fn delegated_admission_initializes_only_its_real_lean_module() {
             let status = lean_initialization_status();
             assert_eq!(status.runtime_mode, Some(LeanRuntimeMode::Default));
             assert!(status.delegated_admission_ready);
+            assert!(!status.executor_ready);
             assert_eq!(status.default_full, None);
             assert_eq!(status.single_threaded_full, None);
             assert_eq!(status.failure, None);
@@ -143,6 +207,7 @@ fn lean_init_lifecycle_heavy_narrow_then_concurrent_full() {
         "lean_init_lifecycle_heavy_narrow_then_concurrent_full",
         || {
             admitted();
+            let direct_before_full = direct_corpus();
             assert_eq!(lean_runtime_init_status(), None);
             let start = Arc::new(Barrier::new(5));
             let native = {
@@ -158,6 +223,7 @@ fn lean_init_lifecycle_heavy_narrow_then_concurrent_full() {
                     std::thread::spawn(move || {
                         start.wait();
                         check_real_verdicts();
+                        direct_corpus();
                     })
                 })
                 .collect();
@@ -182,6 +248,7 @@ fn lean_init_lifecycle_heavy_narrow_then_concurrent_full() {
                 "a later foreign host thread attaches safely"
             );
             admitted();
+            compare_direct_to_json(&direct_before_full);
             assert_eq!(lean_initialization_status().failure, None);
         },
     );
@@ -196,6 +263,7 @@ fn lean_init_lifecycle_heavy_foreign_full_first_then_narrow() {
             // It must neither attach its allocator twice nor finalize the original runtime.
             assert_eq!(foreign_thread(false), 0);
             check_real_verdicts();
+            compare_direct_to_json(&direct_corpus());
             assert!(lean_initialization_status().delegated_admission_ready);
             assert_eq!(lean_runtime_init_status(), Some(Ok(())));
             assert_eq!(foreign_thread(false), 0);
@@ -225,6 +293,7 @@ fn lean_init_lifecycle_heavy_st_owner_and_mode_exclusion() {
                 "foreign host cannot switch runtime mode"
             );
             assert!(!dregg_lean_ffi::lean_available());
+            assert!(!dregg_lean_ffi::direct_available());
             assert_eq!(
                 lean_initialization_status(),
                 status,

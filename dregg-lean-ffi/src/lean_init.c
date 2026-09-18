@@ -1205,6 +1205,24 @@ int dregg_ffi_init_deleg_admit_module(void) {
 #endif
 }
 
+/* The generated FFIDirect initializer initializes FFI and its exact import
+ * closure. Pure executor calls hold the lifecycle lock until full initialization
+ * closes registration; this function must never mark full readiness itself. */
+int dregg_ffi_init_executor_module(void) {
+#ifdef DREGG_DIRECT
+    lean_object *res = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Exec_FFIDirect);
+    if (!lean_io_result_is_ok(res)) {
+        lean_io_result_show_error(res);
+        lean_dec_ref(res);
+        return 1;
+    }
+    lean_dec_ref(res);
+    return 0;
+#else
+    return 1;
+#endif
+}
+
 /* Preserve the complete default module list; runtime start and end-of-init are
  * separate so an earlier narrow admission does not restart or prematurely end it. */
 int dregg_ffi_init_modules(void) {

@@ -37,10 +37,11 @@ use crate::ShadowState;
 use crate::{ShadowVerdict, TurnStatus};
 
 /// Whether the no-copy direct boundary is available in this build (the archive exported
-/// `dregg_exec_full_forest_auth_direct` AND the Lean runtime initialised). The caller uses this to
-/// decide between the direct path and the JSON oracle.
+/// `dregg_exec_full_forest_auth_direct`, its wide builder and module initializer).
+/// Initializes the exact FFIDirect import closure, without initializing unrelated
+/// export families or claiming that full runtime initialization has completed.
 pub fn direct_available() -> bool {
-    cfg!(dregg_direct_present) && crate::lean_available()
+    cfg!(dregg_direct_present) && crate::ffi::executor_init_once().is_ok()
 }
 
 /// Env-gated sub-phase profile accumulator (seconds). `DREGG_FFI_PROFILE=1` makes `run_direct`
@@ -1224,10 +1225,7 @@ pub fn shadow_exec_direct(
     turn_root: &WForest,
     turn: &WireTurnHdr,
 ) -> Result<ShadowState, String> {
-    crate::lean_available()
-        .then_some(())
-        .ok_or_else(|| "lean runtime not initialised".to_string())?;
-    imp::run_direct(host, state, turn_root, turn)
+    crate::ffi::with_executor(|| imp::run_direct(host, state, turn_root, turn))
 }
 
 #[cfg(not(dregg_direct_present))]
@@ -1249,10 +1247,7 @@ pub fn shadow_exec_direct(
 /// archive lacks the export or the runtime is uninitialised.
 #[cfg(dregg_direct_present)]
 pub fn identity_floor_median(state: &WireState, iters: u32) -> Result<f64, String> {
-    crate::lean_available()
-        .then_some(())
-        .ok_or_else(|| "lean runtime not initialised".to_string())?;
-    Ok(imp::identity_floor_median(state, iters))
+    crate::ffi::with_executor(|| Ok(imp::identity_floor_median(state, iters)))
 }
 
 #[cfg(not(dregg_direct_present))]
@@ -1270,10 +1265,7 @@ pub fn shadow_exec_direct_profiled(
     turn_root: &WForest,
     turn: &WireTurnHdr,
 ) -> Result<ShadowState, String> {
-    crate::lean_available()
-        .then_some(())
-        .ok_or_else(|| "lean runtime not initialised".to_string())?;
-    imp::run_direct_profiled(host, state, turn_root, turn)
+    crate::ffi::with_executor(|| imp::run_direct_profiled(host, state, turn_root, turn))
 }
 
 #[cfg(not(dregg_direct_present))]
