@@ -1,5 +1,52 @@
 # HORIZONLOG — the named-follow-up burn-down
 
+## SEPTEMBER 18 — programmable nexus sprint; current coordination lives in assortia
+
+Ember has authorized a broad autonomous sprint toward the September 26 release,
+with regular commits/pushes and work across breadstuffs, minidregg and the wider
+suite. The intended experience is a programmable DREGG resource world for friends
+and agents, with participant-operated hosting and meaningful Solana participation.
+The precise public economic operation and deployment are still being selected.
+
+**Current ownership, next actions and scoped evidence:**
+[dregg-assortia current board](https://github.com/emberian/dregg-assortia/blob/main/CURRENT.md),
+[retained intent](https://github.com/emberian/dregg-assortia/blob/main/intent.md), and
+[September 18 checkpoint](https://github.com/emberian/dregg-assortia/blob/main/sprints/2026-09-18/checkpoint-0130.md).
+The local hub is `../dregg-assortia`. Its graph owns work records; dated captures
+retain earlier failures and source identities. The August records below remain
+historical evidence, not a current task assignment.
+
+Breadstuffs `73136dd30` repairs complete-cell replacement carrying stale incoming
+leaf caches. World, replay and reversible history now use `Ledger::replace_cell`,
+which preserves immutable identity and auxiliary state while invalidating the
+replacement's cache. Hbox ran **24 targeted cell/turn/World tests, all passing**,
+including every recorded history boundary, publication/refusal rollback, batches,
+and tampered receipt-clock/root evidence. This supersedes the two intermediate-root
+failures retained in assortia's preceding checkpoint. It is not yet completion of
+kernel-authorized document saves. Ordered persistent factory deployment is the next
+runtime-history repair; current registry preloading into past forks is being removed.
+
+Lazy native registration in `3b9497753` makes the four SDK candidate/publication
+tests run in 0.026–0.047 seconds each. The actual `js-agent` Hermes World bridge
+passes but still takes 191.097 seconds at first verified admission. Narrow/full
+Lean initialization and lifecycle coordination are active work; no fallback verifier
+is being substituted. Native full-byte PQ first-use remains separately exercised.
+
+Minidregg `278ed6a` checkpoints committed signing keys, exact native capability use,
+immutable policy-source cells, a shared runtime profile, page execution reflection
+and durable declared-resource invocation. The actual invocation probe verifies,
+publishes, reopens and replays using stored authority and real native signatures;
+hostile signer/request/scope/root cases refuse unchanged. Its initial authority is
+an explicit bootstrap fixture. Accepted birth, durable policy replacement and
+authorized parent-to-recipient delegation are still joining the same receiving path.
+These component results make no new whole-system STARK security claim.
+
+Assortia also prepares substantial contributor ownership for Wisper, an experienced
+platform engineer. Cloud resource hosting and Android embedding are candidates;
+neither has been assigned. Graph tooling is internal agent work. Devnet provider
+intent remains **real stake locked, penalties recorded only**; custody/asset/exit
+configuration remains unresolved and no live asset operation has been executed.
+
 ## ⛑⛑⛑⛑ AUGUST 12 — PATH OF ANGELS CROSSED THE WHOLE SIGNAL JOURNEY: browser play, height-1 settlement, restart replay, and an honest counter-12 solo release
 
 **SUBSTRATE: product controls, Lean-authored game policy, Rust/node persistence, one-validator
