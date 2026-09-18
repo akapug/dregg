@@ -57,7 +57,7 @@ identity about four `Nat`s. The semantic direction stays impossible, by that the
    points.
 -/
 import Dregg2.Games.PathOfAngels.CanonicalCodec
-import Dregg2.Games.PathOfAngels.NightWatchCampaignWire
+import Dregg2.Games.PathOfAngels.NightWatchCampaignWireFixtures
 
 /-! ## Derivation
 

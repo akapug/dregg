@@ -1,5 +1,35 @@
 # HORIZONLOG — the named-follow-up burn-down
 
+## SEPTEMBER 18 — user-requested wind-down; native shared-resource journey passes
+
+Ember asked for no new work and a wind-down. All Mini compiler seats/queues are
+released/cancelled; the sole already-running hbox capture finished and its lease
+is released. Resume from [the wind-down handoff](../dregg-assortia/sprints/2026-09-18/wind-down.md)
+and graph-owned board. No new work was opened during wind-down.
+
+Mini **3832661** checkpoints actual native paid birth → two rule replacements
+preserving grants → Alice-to-Bob delegation → Bob invocation → SQLite reopen and
+historical retries. The independent installer also exercises deliberate management
+lockout: resources govern their own management, with no implicit owner bypass.
+Exact native source is archived; a later signed-codec factor is uncompiled.
+**b86c800** preserves unfinished host/observation/replay/genesis/Book enforcement.
+HostCodec and Genesis are RED; no linked host, CLI journey or full-root gate ran.
+The stronger Registry law is source-only; earlier native passes do not cover it.
+
+Bread **9ce713877** passes eleven focused native/factory tests in 1.289s. Actual
+executor-family initialization is 41.285ms. The unchanged js-agent Hermes bridge
+now passes in 0.073s; this is the existing World bridge, not an external Hermes
+service. Final hbox capture: **pbuild PASS, five tests, 802.039s** — Hermes,
+full-byte PQ (191.471s), full-first native-thread lifecycle (204.100s),
+narrow→concurrent-full (203.382s), and ST owner/mode exclusion (203.013s).
+
+NetworkJudge still takes ~54s despite checked fixture separation; linked members
+are current. This checkpoint additionally preserves the NightWatch fixture move
+as **uncompiled source**, not measured speedup. Full-width credential ABI and
+UTF-8/NUL repairs are staged but unapplied in assortia. The old differential
+corpus checks refusal parity, not accepted-action fidelity. Wider current-source
+history regression and whole-system STARK closure remain unfinished.
+
 ## SEPTEMBER 18 — paid resource birth through issued-owner invocation; account handoff
 
 The actual Mini native signed fixture now creates a resource, conserves its Book
