@@ -188,14 +188,6 @@ pub struct World {
     /// This is what lets the SWARM BUDGET METER (N1) observe non-zero metered spend
     /// on committed turns without every turn being rejected for under-fee.
     turn_fee: u64,
-    /// The factory descriptors deployed into this world's executor registry (via
-    /// [`World::deploy_factory`]). Retained here — the descriptor is `Clone` and
-    /// inspectable — so [`World::fork`] can replay them onto a throwaway world's
-    /// executor: a `CreateCellFromFactory` simulated in a fork validates against
-    /// the SAME registered factories the live world holds. (The engine's executor
-    /// owns the live registry but exposes no enumeration; this is the world's own
-    /// record of what it deployed, kept in lock-step with every `deploy_factory`.)
-    deployed_factories: Vec<dregg_cell::FactoryDescriptor>,
     /// Memoized image root (`state_root`), valid while the witness tooth
     /// `(height, receipt_head_or_zero)` is unchanged. Stored as
     /// `(height, receipt_head_or_zero, root)`. A `std::cell::Cell` (not a
@@ -331,7 +323,6 @@ impl World {
             height: 0,
             timestamp,
             turn_fee: 0,
-            deployed_factories: Vec::new(),
             state_root_memo: StdCell::new(None),
             canonical_root_memo: StdCell::new(Some((0, [0; 32], empty_root))),
             history_has_recorded_origin: true,
@@ -422,6 +413,17 @@ impl World {
                         OpenError::Store(dregg_persist::StoreError::Integrity(reason))
                     })?;
                     world.emit_dynamics(WorldEvent::CellMutated { cell: id });
+                    post_root
+                }
+                RecoveredStep::FactoryDeployment {
+                    deployment,
+                    post_root,
+                } => {
+                    world
+                        .install_recorded_factory(*deployment)
+                        .map_err(|reason| {
+                            OpenError::Store(dregg_persist::StoreError::Integrity(reason))
+                        })?;
                     post_root
                 }
                 RecoveredStep::Turn {
@@ -771,10 +773,6 @@ impl World {
         self.engine.executor().costs.clone()
     }
 
-    pub(crate) fn replay_factories(&self) -> &[dregg_cell::FactoryDescriptor] {
-        &self.deployed_factories
-    }
-
     /// Reconstruct a historical view with the same costs, turn clocks and
     /// installed factories, checking every recorded root and turn receipt.
     /// The returned World is a detached view, never a durable writer.
@@ -798,11 +796,11 @@ impl World {
             .min(self.timestamp);
         let mut rebuilt =
             Self::with_costs_and_timestamp(self.engine.executor().costs.clone(), start);
-        for descriptor in &self.deployed_factories {
-            rebuilt.try_deploy_factory(descriptor.clone())?;
-        }
         for (index, recorded) in steps.iter().enumerate() {
             match recorded {
+                RecordedStep::FactoryDeployment { deployment } => {
+                    rebuilt.install_recorded_factory(*deployment.clone())?;
+                }
                 RecordedStep::Genesis { cell } => {
                     rebuilt.try_genesis_install(*cell.clone())?;
                 }
@@ -1015,7 +1013,7 @@ impl World {
     /// Returns a fresh [`World`] whose engine carries a DEEP CLONE of this world's
     /// ledger (`dregg_cell::Ledger` is `Clone`), the SAME [`EngineConfig`] (cost
     /// model, federation id, block height, pinned timestamp), the SAME deployed
-    /// factory registry (replayed from [`Self::deployed_factories`]), and the SAME
+    /// factory registry (including consumed creation budgets), and the SAME
     /// per-agent receipt-chain heads (so a chained turn threads identically). The
     /// fork's verified executor is the REAL one — running a turn through the fork's
     /// [`World::commit_turn`] applies the IDENTICAL conservation / ocap / program
@@ -1050,11 +1048,10 @@ impl World {
         if let Some(seed) = self.engine.executor().executor_signing_key {
             engine.executor_mut().set_executor_signing_key(seed);
         }
-        // Replay the deployed factories onto the fork's executor so a
-        // CreateCellFromFactory simulates against the SAME registered factories.
-        for descriptor in &self.deployed_factories {
-            let _ = engine.executor_mut().deploy_factory(descriptor.clone());
-        }
+        // A current-state fork inherits the actual registry, including consumed
+        // creation budgets and epoch. Redeploying descriptors alone resets them.
+        let factory_registry = self.engine.executor().factory_registry.borrow().clone();
+        *engine.executor().factory_registry.borrow_mut() = factory_registry.clone();
         // The fork's replay-tape executor (kept in lock-step with the live one so
         // `commit_turn`'s `record_commit` re-derives the SAME post-root as the
         // authoritative engine — the fork stays internally consistent even though
@@ -1068,9 +1065,7 @@ impl World {
         record_exec.set_timestamp(self.timestamp);
         record_exec.set_block_height(self.engine.executor().block_height);
         record_exec.set_local_federation_id(self.engine.executor().local_federation_id);
-        for descriptor in &self.deployed_factories {
-            let _ = record_exec.deploy_factory(descriptor.clone());
-        }
+        *record_exec.factory_registry.borrow_mut() = factory_registry;
         // Seed EVERY current cell's receipt-chain head onto BOTH the fork's
         // authoritative executor AND its replay-tape executor, so a chained turn
         // from any agent threads its `previous_receipt_hash` exactly as it would
@@ -1105,7 +1100,6 @@ impl World {
             height: self.height,
             timestamp: self.timestamp,
             turn_fee: self.turn_fee,
-            deployed_factories: self.deployed_factories.clone(),
             state_root_memo: StdCell::new(None),
             canonical_root_memo: StdCell::new(None),
             history_has_recorded_origin: false,
@@ -1294,7 +1288,8 @@ impl World {
                     }
                     crate::replay::RecordedStep::Genesis { .. }
                     | crate::replay::RecordedStep::GenesisBatch { .. }
-                    | crate::replay::RecordedStep::GenesisUpdate { .. } => false,
+                    | crate::replay::RecordedStep::GenesisUpdate { .. }
+                    | crate::replay::RecordedStep::FactoryDeployment { .. } => false,
                 }))
     }
 
@@ -4901,6 +4896,300 @@ mod tests {
         assert_eq!(w.ledger().get(&a).unwrap().state.balance(), 150);
         assert_eq!(w.ledger().get(&b).unwrap().state.balance(), 0);
         assert_eq!(w.height(), 0);
+    }
+
+    fn chronology_factory(key: u8, budget: u64) -> dregg_cell::FactoryDescriptor {
+        dregg_cell::FactoryDescriptor {
+            factory_vk: [key; 32],
+            child_program_vk: None,
+            child_vk_strategy: None,
+            allowed_cap_templates: vec![],
+            field_constraints: vec![],
+            state_constraints: vec![],
+            default_mode: dregg_cell::CellMode::Hosted,
+            creation_budget: Some(budget),
+        }
+    }
+
+    fn chronology_birth(vk: [u8; 32], owner: u8) -> Effect {
+        let owner_pubkey = [owner; 32];
+        create_cell_from_factory(
+            vk,
+            owner_pubkey,
+            [0; 32],
+            dregg_cell::factory::FactoryCreationParams {
+                mode: dregg_cell::CellMode::Hosted,
+                program_vk: None,
+                initial_fields: vec![(3, 99)],
+                initial_caps: vec![],
+                owner_pubkey,
+            },
+        )
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn factory_chronology_durable_constructor_mutation_reopen_and_historical_forks() {
+        let path = scratch_redb("factory-chronology");
+        let mut world =
+            World::open_with_timestamp(&path, ComputronCosts::zero(), 1_700_000_000).unwrap();
+        let agent = world.genesis_cell(1, 100);
+        let before_deployment = world.history.len();
+        let factory_a = chronology_factory(0xF1, 1);
+        let vk_a = world.try_deploy_factory(factory_a.clone()).unwrap();
+        let after_deployment = world.history.len();
+        assert_eq!(after_deployment, before_deployment + 1);
+        assert_eq!(
+            world.history.root_at(before_deployment),
+            world.history.root_at(after_deployment)
+        );
+        let birth = world.turn(agent, vec![chronology_birth(vk_a, 0xB1)]);
+        let outcome = world.commit_turn(birth);
+        assert!(
+            outcome.is_committed(),
+            "actual factory constructor: {outcome:?}"
+        );
+        let child = CellId::derive_raw(&[0xB1; 32], &[0; 32]);
+        // Receive is allowed by the born cell's real default permissions; this
+        // accepted transfer mutates the child without a trusted setup rewrite.
+        let update = world.turn(agent, vec![transfer(agent, child, 9)]);
+        let outcome = world.commit_turn(update);
+        assert!(
+            outcome.is_committed(),
+            "accepted child mutation: {outcome:?}"
+        );
+        world.try_checkpoint_now().unwrap();
+        let checkpoint_step = world.history.len();
+        let vk_b = world
+            .try_deploy_factory(chronology_factory(0xF2, 2))
+            .unwrap();
+        let birth = world.turn(agent, vec![chronology_birth(vk_b, 0xB2)]);
+        assert!(world.commit_turn(birth).is_committed());
+        // Even an unused deployment after the last receipt must survive reopen.
+        let unused = chronology_factory(0xF3, 3);
+        world.try_deploy_factory(unused.clone()).unwrap();
+        let roots: Vec<_> = (0..=world.history.len())
+            .map(|i| world.history.root_at(i).unwrap())
+            .collect();
+        let registry = world.engine.executor().factory_registry.borrow().snapshot();
+        let receipts: Vec<_> = world.receipts().iter().map(|r| r.receipt_hash()).collect();
+        let prefixes: Vec<_> = (0..=world.history.len())
+            .map(|i| {
+                world
+                    .replay_to_step(i)
+                    .unwrap()
+                    .engine
+                    .executor()
+                    .factory_registry
+                    .borrow()
+                    .snapshot()
+            })
+            .collect();
+        assert!(prefixes[before_deployment].descriptors.is_empty());
+        assert_eq!(world.ledger().get(&child).unwrap().state.balance(), 9);
+        assert_eq!(
+            world.ledger().get(&child).unwrap().state.fields[3],
+            dregg_cell::field_from_u64(99)
+        );
+        // A head fork keeps the already-consumed one-child budget.
+        let mut head_fork = world.fork();
+        assert_eq!(
+            head_fork
+                .engine
+                .executor()
+                .factory_registry
+                .borrow()
+                .snapshot(),
+            registry
+        );
+        let exhausted = head_fork.turn(agent, vec![chronology_birth(vk_a, 0xB3)]);
+        assert!(!head_fork.commit_turn(exhausted).is_committed());
+        drop(head_fork);
+        drop(world); // Crash/reopen with a checkpoint before the later deployments.
+
+        let reopened =
+            World::open_with_timestamp(&path, ComputronCosts::zero(), 1_700_000_100).unwrap();
+        assert_eq!(
+            reopened
+                .engine
+                .executor()
+                .factory_registry
+                .borrow()
+                .snapshot(),
+            registry
+        );
+        assert_eq!(
+            reopened
+                .receipts()
+                .iter()
+                .map(|r| r.receipt_hash())
+                .collect::<Vec<_>>(),
+            receipts
+        );
+        assert_eq!(reopened.ledger().get(&child).unwrap().state.balance(), 9);
+        let mirror = crate::time_travel::reversible_mirror(&reopened).unwrap();
+        assert_eq!(mirror.len() + 1, roots.len());
+        assert!(!mirror
+            .fork_at(after_deployment)
+            .window_reversible(before_deployment));
+        assert!(mirror
+            .fork_at(after_deployment)
+            .undo_to(before_deployment)
+            .is_err());
+        for i in 0..roots.len() {
+            let mut past = reopened.replay_to_step(i).unwrap();
+            assert_eq!(
+                past.engine.ledger_mut().root(),
+                roots[i],
+                "World prefix {i}"
+            );
+            assert_eq!(
+                past.engine.executor().factory_registry.borrow().snapshot(),
+                prefixes[i],
+                "registry prefix {i}"
+            );
+            assert_eq!(
+                reopened.history.replay_to(i).unwrap().root(),
+                roots[i],
+                "History prefix {i}"
+            );
+            assert_eq!(
+                mirror.replay_to(i).unwrap().root(),
+                roots[i],
+                "reversible prefix {i}"
+            );
+        }
+        assert_eq!(
+            reopened
+                .history
+                .replay_to_via_checkpoint(reopened.history.len(), checkpoint_step)
+                .unwrap()
+                .root(),
+            *roots.last().unwrap()
+        );
+        for (step, allowed) in [(before_deployment, false), (after_deployment, true)] {
+            let mut past = reopened.replay_to_step(step).unwrap();
+            let candidate = past.turn(agent, vec![chronology_birth(vk_a, 0xB4)]);
+            let history_fork = reopened.history.fork_at(step, candidate.clone()).unwrap();
+            assert_eq!(
+                matches!(
+                    history_fork.outcome,
+                    crate::replay::ForkOutcome::Committed { .. }
+                ),
+                allowed
+            );
+            assert_eq!(past.commit_turn(candidate).is_committed(), allowed);
+            let branch = crate::time_travel::TimeBranch::fork_and_drive(
+                &reopened,
+                step,
+                agent,
+                vec![chronology_birth(vk_a, 0xB5)],
+            );
+            assert_eq!(
+                branch.is_ok(),
+                allowed,
+                "temporal branch factory availability at {step}: {branch:?}"
+            );
+        }
+        drop(reopened);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn factory_chronology_redeploy_identity_is_idempotent_and_conflicts_refuse() {
+        let path = scratch_redb("factory-redeploy");
+        let mut world =
+            World::open_with_timestamp(&path, ComputronCosts::zero(), 1_700_000_000).unwrap();
+        let descriptor = chronology_factory(0xF4, 2);
+        let vk = world.try_deploy_factory(descriptor.clone()).unwrap();
+        let steps = world.history.len();
+        assert_eq!(world.try_deploy_factory(descriptor.clone()), Ok(vk));
+        let mut conflict = descriptor.clone();
+        conflict.creation_budget = Some(99);
+        assert!(world.try_deploy_factory(conflict).is_err());
+        assert_eq!(world.history.len(), steps);
+        assert_eq!(world.durability_status(), DurabilityStatus::Ready);
+        assert_eq!(
+            world.engine.executor().factory_registry.borrow().get(&vk),
+            Some(&descriptor)
+        );
+        drop(world);
+        let reopened =
+            World::open_with_timestamp(&path, ComputronCosts::zero(), 1_700_000_000).unwrap();
+        assert_eq!(reopened.history.len(), steps);
+        assert_eq!(
+            reopened
+                .engine
+                .executor()
+                .factory_registry
+                .borrow()
+                .get(&vk),
+            Some(&descriptor)
+        );
+        drop(reopened);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn factory_chronology_storage_failures_latch_without_publishing_ram() {
+        for lost_response in [false, true] {
+            let path = scratch_redb("factory-storage-failure");
+            let mut world =
+                World::open_with_timestamp(&path, ComputronCosts::zero(), 1_700_000_000).unwrap();
+            world.genesis_cell(1, 100);
+            let before_steps = world.history.len();
+            let before_root = world.state_root();
+            let descriptor = chronology_factory(0xF5, 1);
+            if lost_response {
+                world
+                    .persist
+                    .as_ref()
+                    .unwrap()
+                    .fail_genesis_response_for_test();
+            } else {
+                world.persist.as_ref().unwrap().fail_config_io_for_test();
+            }
+            assert!(world.try_deploy_factory(descriptor.clone()).is_err());
+            assert_eq!(world.durability_status(), DurabilityStatus::Unavailable);
+            assert_eq!(world.history.len(), before_steps);
+            assert_eq!(world.state_root(), before_root);
+            assert!(world
+                .engine
+                .executor()
+                .factory_registry
+                .borrow()
+                .get(&descriptor.factory_vk)
+                .is_none());
+            assert!(world
+                .record_exec
+                .factory_registry
+                .borrow()
+                .get(&descriptor.factory_vk)
+                .is_none());
+            assert!(world.try_deploy_factory(descriptor.clone()).is_err());
+            assert!(world.try_checkpoint_now().is_err());
+            drop(world);
+            let reopened =
+                World::open_with_timestamp(&path, ComputronCosts::zero(), 1_700_000_000).unwrap();
+            assert_eq!(
+                reopened.history.len(),
+                before_steps + usize::from(lost_response)
+            );
+            assert_eq!(
+                reopened
+                    .engine
+                    .executor()
+                    .factory_registry
+                    .borrow()
+                    .get(&descriptor.factory_vk)
+                    .is_some(),
+                lost_response
+            );
+            drop(reopened);
+            let _ = std::fs::remove_file(path);
+        }
     }
 
     #[test]

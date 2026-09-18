@@ -230,6 +230,46 @@ pub fn lean_runtime_init_status() -> Option<Result<(), String>> {
     ffi::lean_init_status()
 }
 
+/// The process-wide Lean runtime prefix. A process cannot switch prefixes after startup.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LeanRuntimeMode {
+    Default,
+    /// Static linkage omits libuv; shared linkage retains its documented libuv limitation.
+    SingleThreaded,
+}
+
+/// Read-only initialization evidence. Narrow admission does not imply full executor readiness.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LeanInitializationStatus {
+    pub runtime_mode: Option<LeanRuntimeMode>,
+    pub delegated_admission_ready: bool,
+    pub default_full: Option<Result<(), String>>,
+    pub single_threaded_full: Option<Result<(), String>>,
+    /// A module can set its generated guard before failing. Such failure forbids all retries.
+    pub failure: Option<String>,
+}
+
+/// Inspect module-family readiness without starting Lean or changing its initialization mode.
+pub fn lean_initialization_status() -> LeanInitializationStatus {
+    ffi::initialization_status()
+}
+
+/// Native ABI compatibility entrypoint, shared with the Rust API's lifecycle coordinator.
+/// Repeated calls are safe; an incompatible ST prefix or initialization failure returns 1.
+/// This API owns runtime and host-thread attachment; callers must not separately
+/// initialize/finalize the same Lean runtime or attach those threads a second time.
+#[no_mangle]
+pub extern "C" fn dregg_ffi_init() -> i32 {
+    i32::from(ffi::lean_init_once().is_err())
+}
+
+/// Native ABI compatibility entrypoint for the existing ST module family.
+/// Its selecting host thread owns subsequent ST calls; no second runtime is started.
+#[no_mangle]
+pub extern "C" fn dregg_ffi_init_st() -> i32 {
+    i32::from(ffi::lean_init_st_once().is_err())
+}
+
 /// Whether verified-gate tests must refuse an absent Lean archive/export instead
 /// of reporting a hollow `ok` after self-skipping.
 ///
@@ -1383,9 +1423,10 @@ pub struct DelegGrant {
 /// refuses. That is deliberate — the three Rust re-implementations this replaced are deleted, and a
 /// wasm32 / `no-lean-link` build (which cannot link `libdregg_lean.a` at all) reads false here and
 /// must say so rather than quietly re-deciding the policy in Rust. Distinct from [`lean_available`]:
-/// a stale archive can lack this export.
+/// a stale archive can lack this export. This initializes only the exact Init-only
+/// admission module; full executor initialization remains deferred.
 pub fn deleg_admit_available() -> bool {
-    ffi::deleg_admit_present() && lean_init_once().is_ok()
+    ffi::deleg_admit_present() && ffi::deleg_admit_init_once().is_ok()
 }
 
 /// **Run the DELEGATED TOOL/MCP-ACCESS admission decision `@[export] dregg_deleg_admit`** — the
@@ -1411,7 +1452,6 @@ pub fn deleg_admit_available() -> bool {
 /// a differential test that (there being no formal semantics of Rust) pinned drift and proved nothing
 /// about any input the test did not enumerate. They are deleted; this is the only answer source.
 pub fn deleg_admit(g: DelegGrant, now: i64, tool: i64, old: i64, new: i64) -> Result<bool, String> {
-    ensure_lean_init()?;
     let wire = format!(
         "{} {} {} {now} {tool} {old} {new}",
         g.tool_id, g.rate_limit, g.deadline
@@ -1753,17 +1793,24 @@ pub fn decode_shadow_state(output: &str) -> Result<ShadowState, String> {
 
 #[cfg(lean_lib_present)]
 mod ffi {
-    use std::ffi::CString;
+    use super::{LeanInitializationStatus, LeanRuntimeMode};
+    use std::cell::Cell;
+    use std::ffi::{CStr, CString};
     use std::os::raw::c_char;
-    use std::sync::OnceLock;
+    use std::sync::{Mutex, MutexGuard};
+    use std::thread::ThreadId;
 
     extern "C" {
-        fn dregg_ffi_init() -> i32;
-        /// The SINGLE-THREADED / libuv-thread-free init (the pg-Tier-D-embeddable
-        /// path — see `docs/EMBEDDABLE-LEAN-RUNTIME.md` + `src/lean_init_st.cpp`).
-        /// Runs the libuv-free initializer chain so NO libuv event-loop thread is
-        /// spawned. Same once-per-process contract as `dregg_ffi_init`.
-        fn dregg_ffi_init_st() -> i32;
+        // Private phases: only InitLifecycle may call these while holding INIT.
+        fn dregg_ffi_start_runtime();
+        fn dregg_ffi_start_runtime_st();
+        fn dregg_ffi_init_modules() -> i32;
+        fn dregg_ffi_init_st_modules() -> i32;
+        fn dregg_ffi_init_deleg_admit_module() -> i32;
+        fn dregg_ffi_finish_initialization();
+        fn dregg_ffi_last_failed_module() -> *const c_char;
+        fn lean_initialize_thread();
+        fn lean_finalize_thread();
         fn dregg_exec_full_forest_auth_str(
             in_utf8: *const c_char,
             out: *mut c_char,
@@ -1914,43 +1961,396 @@ mod ffi {
         ) -> usize;
     }
 
-    static INIT: OnceLock<Result<(), String>> = OnceLock::new();
-    static INIT_ST: OnceLock<Result<(), String>> = OnceLock::new();
-
-    pub fn lean_init_status() -> Option<Result<(), String>> {
-        INIT.get().cloned()
+    // Lean 4.30's generated guard is a plain bool set BEFORE its imports run.
+    // Independent OnceLocks can race shared imports or accept a failed initializer
+    // on retry. One owner serializes all families and retains the first failure.
+    struct InitLifecycle {
+        status: LeanInitializationStatus,
+        st_owner: Option<ThreadId>,
     }
 
-    pub fn lean_init_once() -> Result<(), String> {
-        INIT.get_or_init(|| {
-            let rc = unsafe { dregg_ffi_init() };
-            if rc == 0 {
-                Ok(())
-            } else {
-                Err(format!("dregg_ffi_init failed (rc={rc})"))
+    trait InitBackend {
+        fn start_runtime(&mut self, mode: LeanRuntimeMode) -> Result<(), String>;
+        fn attach_thread(&mut self);
+        fn deleg_present(&self) -> bool;
+        fn init_deleg(&mut self) -> Result<(), String>;
+        fn init_full(&mut self, mode: LeanRuntimeMode) -> Result<(), String>;
+        fn finish(&mut self);
+    }
+
+    impl InitLifecycle {
+        const fn new() -> Self {
+            Self {
+                status: LeanInitializationStatus {
+                    runtime_mode: None,
+                    delegated_admission_ready: false,
+                    default_full: None,
+                    single_threaded_full: None,
+                    failure: None,
+                },
+                st_owner: None,
             }
-        })
-        .clone()
+        }
+
+        fn retain_failure(&mut self, result: Result<(), String>) -> Result<(), String> {
+            if let Err(error) = result {
+                let original = self.status.failure.get_or_insert(error).clone();
+                Err(original)
+            } else {
+                Ok(())
+            }
+        }
+
+        fn ensure_runtime(
+            &mut self,
+            mode: LeanRuntimeMode,
+            backend: &mut impl InitBackend,
+        ) -> Result<(), String> {
+            if let Some(error) = &self.status.failure {
+                return Err(error.clone());
+            }
+            if let Some(selected) = self.status.runtime_mode {
+                if selected != mode {
+                    return Err(format!(
+                        "Lean runtime mode is {selected:?}; refusing incompatible {mode:?} initialization"
+                    ));
+                }
+                if selected == LeanRuntimeMode::SingleThreaded
+                    && self.st_owner != Some(std::thread::current().id())
+                {
+                    return Err(
+                        "single-threaded Lean runtime belongs to another host thread".into(),
+                    );
+                }
+            } else {
+                self.status.runtime_mode = Some(mode);
+                if mode == LeanRuntimeMode::SingleThreaded {
+                    self.st_owner = Some(std::thread::current().id());
+                }
+                self.retain_failure(backend.start_runtime(mode))?;
+            }
+            backend.attach_thread();
+            Ok(())
+        }
+
+        fn ensure_deleg(&mut self, backend: &mut impl InitBackend) -> Result<(), String> {
+            if !backend.deleg_present() {
+                return Err("Lean DelegAdmit export/initializer pair is not linked".into());
+            }
+            let mode = self.status.runtime_mode.unwrap_or(LeanRuntimeMode::Default);
+            self.ensure_runtime(mode, backend)?;
+            if !self.status.delegated_admission_ready {
+                self.retain_failure(backend.init_deleg())?;
+                self.status.delegated_admission_ready = true;
+            }
+            // Do not end initialization here. The pure Init-only admission body
+            // is allowed, but a later full closure still needs registration open.
+            Ok(())
+        }
+
+        fn ensure_full(
+            &mut self,
+            mode: LeanRuntimeMode,
+            backend: &mut impl InitBackend,
+        ) -> Result<(), String> {
+            // Even a cached success must check the mode/owner and attach this
+            // native caller thread before it allocates any Lean objects.
+            self.ensure_runtime(mode, backend)?;
+            let previous = match mode {
+                LeanRuntimeMode::Default => &self.status.default_full,
+                LeanRuntimeMode::SingleThreaded => &self.status.single_threaded_full,
+            };
+            if let Some(result) = previous {
+                return result.clone();
+            }
+            let result = (|| {
+                // Full-first callers must also initialize this family before
+                // the one-way end marker; absent optional exports stay absent.
+                if backend.deleg_present() {
+                    self.ensure_deleg(backend)?;
+                }
+                self.retain_failure(backend.init_full(mode))?;
+                backend.finish();
+                Ok(())
+            })();
+            match mode {
+                LeanRuntimeMode::Default => self.status.default_full = Some(result.clone()),
+                LeanRuntimeMode::SingleThreaded => {
+                    self.status.single_threaded_full = Some(result.clone())
+                }
+            }
+            result
+        }
     }
 
-    /// Single-threaded / libuv-thread-free init (the pg-Tier-D-embeddable path).
-    /// Drives `dregg_ffi_init_st`, which never starts the libuv event-loop thread.
-    /// A process must pick ONE init flavor: the Lean module initializers are
-    /// once-per-process, so a caller using the single-threaded path must NOT also
-    /// call [`lean_init_once`] (that would run `lean_initialize_runtime_module` and
-    /// spawn the very thread this path omits, and re-init the modules). These are
-    /// separate `OnceLock`s so a test can drive the ST path in isolation.
-    pub fn lean_init_st_once() -> Result<(), String> {
-        INIT_ST
-            .get_or_init(|| {
-                let rc = unsafe { dregg_ffi_init_st() };
-                if rc == 0 {
-                    Ok(())
-                } else {
-                    Err(format!("dregg_ffi_init_st failed (rc={rc})"))
+    static INIT: Mutex<InitLifecycle> = Mutex::new(InitLifecycle::new());
+
+    fn lock_lifecycle(
+        lock: &Mutex<InitLifecycle>,
+    ) -> Result<MutexGuard<'_, InitLifecycle>, String> {
+        lock.lock().map_err(|poisoned| {
+            poisoned
+                .into_inner()
+                .status
+                .failure
+                .clone()
+                .unwrap_or_else(|| {
+                    "Lean initialization lifecycle unwound; process restart required".into()
+                })
+        })
+    }
+
+    fn lifecycle() -> Result<MutexGuard<'static, InitLifecycle>, String> {
+        lock_lifecycle(&INIT)
+    }
+
+    // A runtime-starting thread already owns its allocator heap. Attaching it
+    // again is invalid with LEAN_SMALL_ALLOCATOR; finalizing it here would also
+    // claim ownership of the process's original runtime thread lifecycle.
+    #[derive(Clone, Copy)]
+    enum ThreadAttachment {
+        None,
+        RuntimeOwner,
+        Attached,
+    }
+
+    struct HostThread(Cell<ThreadAttachment>);
+    impl Drop for HostThread {
+        fn drop(&mut self) {
+            if matches!(self.0.get(), ThreadAttachment::Attached) {
+                unsafe { lean_finalize_thread() };
+            }
+        }
+    }
+    thread_local! {
+        static HOST_THREAD: HostThread = const { HostThread(Cell::new(ThreadAttachment::None)) };
+    }
+
+    struct NativeInit;
+    impl NativeInit {
+        fn module_result(rc: i32, family: &str) -> Result<(), String> {
+            if rc == 0 {
+                return Ok(());
+            }
+            let failed = unsafe { dregg_ffi_last_failed_module() };
+            let name = if failed.is_null() {
+                family.to_owned()
+            } else {
+                unsafe { CStr::from_ptr(failed) }
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            Err(format!(
+                "Lean initializer {name} failed (rc={rc}); process restart required"
+            ))
+        }
+    }
+    impl InitBackend for NativeInit {
+        fn start_runtime(&mut self, mode: LeanRuntimeMode) -> Result<(), String> {
+            let profile = std::env::var("DREGG_LEAN_INIT_PROFILE").as_deref() == Ok("1");
+            let started = profile.then(std::time::Instant::now);
+            unsafe {
+                match mode {
+                    LeanRuntimeMode::Default => dregg_ffi_start_runtime(),
+                    LeanRuntimeMode::SingleThreaded => dregg_ffi_start_runtime_st(),
                 }
+            }
+            HOST_THREAD.with(|thread| thread.0.set(ThreadAttachment::RuntimeOwner));
+            if let Some(started) = started {
+                use std::io::Write;
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "[dregg lean init] runtime={mode:?} elapsed_ms={:.3}",
+                    started.elapsed().as_secs_f64() * 1000.0
+                );
+            }
+            Ok(())
+        }
+        fn attach_thread(&mut self) {
+            HOST_THREAD.with(|thread| {
+                if matches!(thread.0.get(), ThreadAttachment::None) {
+                    unsafe { lean_initialize_thread() };
+                    thread.0.set(ThreadAttachment::Attached);
+                }
+            });
+        }
+        fn deleg_present(&self) -> bool {
+            deleg_admit_present()
+        }
+        fn init_deleg(&mut self) -> Result<(), String> {
+            Self::module_result(unsafe { dregg_ffi_init_deleg_admit_module() }, "DelegAdmit")
+        }
+        fn init_full(&mut self, mode: LeanRuntimeMode) -> Result<(), String> {
+            let rc = unsafe {
+                match mode {
+                    LeanRuntimeMode::Default => dregg_ffi_init_modules(),
+                    LeanRuntimeMode::SingleThreaded => dregg_ffi_init_st_modules(),
+                }
+            };
+            Self::module_result(rc, "full module family")
+        }
+        fn finish(&mut self) {
+            unsafe { dregg_ffi_finish_initialization() };
+        }
+    }
+
+    fn status_of(lock: &Mutex<InitLifecycle>) -> LeanInitializationStatus {
+        match lock.lock() {
+            Ok(state) => state.status.clone(),
+            Err(poisoned) => {
+                let mut status = poisoned.into_inner().status.clone();
+                status.failure.get_or_insert_with(|| {
+                    "Lean initialization lifecycle unwound; process restart required".into()
+                });
+                status
+            }
+        }
+    }
+    pub fn initialization_status() -> LeanInitializationStatus {
+        status_of(&INIT)
+    }
+    pub fn lean_init_status() -> Option<Result<(), String>> {
+        match lifecycle() {
+            Ok(state) => state.status.default_full.clone(),
+            Err(error) => Some(Err(error)),
+        }
+    }
+    pub fn lean_init_once() -> Result<(), String> {
+        lifecycle()?.ensure_full(LeanRuntimeMode::Default, &mut NativeInit)
+    }
+    pub fn lean_init_st_once() -> Result<(), String> {
+        lifecycle()?.ensure_full(LeanRuntimeMode::SingleThreaded, &mut NativeInit)
+    }
+    pub fn deleg_admit_init_once() -> Result<(), String> {
+        lifecycle()?.ensure_deleg(&mut NativeInit)
+    }
+
+    #[cfg(test)]
+    mod initialization_failure_tests {
+        use super::*;
+
+        #[derive(Default)]
+        struct Backend {
+            calls: Vec<&'static str>,
+            fail: Option<&'static str>,
+            unwind: bool,
+        }
+        impl Backend {
+            fn step(&mut self, name: &'static str) -> Result<(), String> {
+                self.calls.push(name);
+                if name == "deleg" && self.unwind {
+                    panic!("test-owned initializer unwind");
+                }
+                if self.fail == Some(name) {
+                    Err(format!("{name} failed after guard set"))
+                } else {
+                    Ok(())
+                }
+            }
+        }
+        impl InitBackend for Backend {
+            fn start_runtime(&mut self, _: LeanRuntimeMode) -> Result<(), String> {
+                self.step("runtime")
+            }
+            fn attach_thread(&mut self) {}
+            fn deleg_present(&self) -> bool {
+                true
+            }
+            fn init_deleg(&mut self) -> Result<(), String> {
+                self.step("deleg")
+            }
+            fn init_full(&mut self, _: LeanRuntimeMode) -> Result<(), String> {
+                self.step("full")
+            }
+            fn finish(&mut self) {
+                self.calls.push("end");
+            }
+        }
+
+        #[test]
+        fn init_lifecycle_failed_module_never_retries_a_set_generated_guard() {
+            for fail in ["deleg", "full"] {
+                let mut state = InitLifecycle::new();
+                let mut backend = Backend {
+                    fail: Some(fail),
+                    ..Default::default()
+                };
+                let error = state
+                    .ensure_full(LeanRuntimeMode::Default, &mut backend)
+                    .unwrap_err();
+                let completed_calls = backend.calls.clone();
+                backend.fail = None;
+                assert_eq!(state.ensure_deleg(&mut backend), Err(error.clone()));
+                assert_eq!(
+                    state.ensure_full(LeanRuntimeMode::Default, &mut backend),
+                    Err(error.clone())
+                );
+                assert_eq!(
+                    state.ensure_full(LeanRuntimeMode::SingleThreaded, &mut backend),
+                    Err(error)
+                );
+                assert_eq!(
+                    backend.calls, completed_calls,
+                    "failure is sticky across every family"
+                );
+                assert!(
+                    !backend.calls.contains(&"end"),
+                    "failed init cannot mark initialization complete"
+                );
+            }
+        }
+
+        #[test]
+        fn init_lifecycle_unwind_refuses_without_reentering_partial_modules() {
+            let state = Mutex::new(InitLifecycle::new());
+            let mut backend = Backend {
+                unwind: true,
+                ..Default::default()
+            };
+            let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                lock_lifecycle(&state)
+                    .unwrap()
+                    .ensure_deleg(&mut backend)
+                    .unwrap();
+            }));
+            assert!(panic.is_err());
+            for _ in 0..2 {
+                assert!(lock_lifecycle(&state)
+                    .err()
+                    .unwrap()
+                    .contains("process restart required"));
+            }
+            let status = status_of(&state);
+            assert_eq!(status.runtime_mode, Some(LeanRuntimeMode::Default));
+            assert!(!status.delegated_admission_ready);
+            assert!(status.failure.unwrap().contains("process restart required"));
+            assert_eq!(backend.calls, ["runtime", "deleg"]);
+        }
+
+        #[test]
+        fn init_lifecycle_mode_refusal_preserves_the_selected_runtime() {
+            let mut state = InitLifecycle::new();
+            let mut backend = Backend::default();
+            state
+                .ensure_full(LeanRuntimeMode::SingleThreaded, &mut backend)
+                .unwrap();
+            let status = state.status.clone();
+            assert!(state
+                .ensure_full(LeanRuntimeMode::Default, &mut backend)
+                .is_err());
+            let (mut state, mut backend) = std::thread::spawn(move || {
+                assert!(state
+                    .ensure_deleg(&mut backend)
+                    .unwrap_err()
+                    .contains("another host thread"));
+                (state, backend)
             })
-            .clone()
+            .join()
+            .unwrap();
+            state.ensure_deleg(&mut backend).unwrap();
+            assert_eq!(state.status, status);
+            assert_eq!(backend.calls, ["runtime", "deleg", "full", "end"]);
+        }
     }
 
     fn lean_string_bridge(
@@ -2588,6 +2988,10 @@ mod ffi {
     /// `Dregg2.Apps.ToolAccessDelegation.tool_invocation_commit_iff_admit` is stated over.
     #[cfg(dregg_deleg_admit_present)]
     pub fn lean_deleg_admit(wire: &str) -> Result<String, String> {
+        // Keep the real call inside the lock: a later full initializer may
+        // register shared globals while Lean's initialization phase is open.
+        let mut state = lifecycle()?;
+        state.ensure_deleg(&mut NativeInit)?;
         lean_string_bridge(wire, dregg_deleg_admit_str, "dregg_deleg_admit_str")
     }
 
@@ -2887,6 +3291,14 @@ mod ffi {
 
 #[cfg(not(lean_lib_present))]
 mod ffi {
+    pub fn initialization_status() -> super::LeanInitializationStatus {
+        super::LeanInitializationStatus::default()
+    }
+
+    pub fn deleg_admit_init_once() -> Result<(), String> {
+        Err("libdregg_lean.a was not present at build time".into())
+    }
+
     pub fn lean_init_status() -> Option<Result<(), String>> {
         None
     }
@@ -3122,9 +3534,10 @@ fn ensure_lean_init() -> Result<(), String> {
 /// runtime executes entirely on the caller's thread — the property a single-threaded
 /// host (a postgres backend) requires. Returns `true` on a successful init.
 ///
-/// A process must commit to ONE init flavor: do not mix this with [`lean_available`]
-/// / [`shadow_exec_full_forest_auth`] (the default multi-thread path) in the same
-/// process — the Lean module initializers run once per process.
+/// A process must commit to ONE init flavor. The shared coordinator refuses a
+/// default-mode request after this succeeds, and refuses ST calls from another
+/// host thread. Shared linkage still starts libuv; its ST property is only the
+/// single runtime instance, as documented in `src/lean_init_st.cpp`.
 pub fn init_single_threaded() -> bool {
     lean_init_st_once().is_ok()
 }

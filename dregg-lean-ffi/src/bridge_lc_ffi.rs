@@ -3117,11 +3117,15 @@ mod tests {
 
         // The real block's decoded counts: idx_prev 2 · proof_prev 2 · vectors 2 · public 40 ·
         // w_comm 15 · s_evals 6 (PERMUTS-1) · coefficients 15 · t_comm 7 · chunk_size 1 ·
-        // idx IPA rounds 15 (k = log2 2^15) · proof lr.len() 15.
-        const OK: [usize; 11] = [2, 2, 2, 40, 15, 6, 15, 7, 1, 15, 15];
-        let call = |v: [usize; 11]| {
+        // idx IPA rounds 15 (k = log2 2^15) · proof lr.len() 15 · bulletproof challenges 16 ·
+        // step branch domain_log2 16 · prev_evals pairs 43 · maximum prev_evals vector length 1.
+        // These last four counts are the real_block_wrap_shape_accepts constants NCHAL,
+        // BRANCH_DOMAIN_LOG2, PREV_EVAL_PAIRS and PREV_EVAL_MAXLEN, not padding.
+        const OK: [usize; 15] = [2, 2, 2, 40, 15, 6, 15, 7, 1, 15, 15, 16, 16, 43, 1];
+        let call = |v: [usize; 15]| {
             verified_mina_wrap_shape_ok(
-                v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10],
+                v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11], v[12],
+                v[13], v[14],
             )
         };
         assert_eq!(
@@ -3162,10 +3166,12 @@ mod tests {
             );
         }
 
-        let accept_raw =
-            shadow_mina_wrap_shape_ok(&mina_wrap_shape_wire(2, 2, 2, 40, 15, 6, 15, 7, 1, 15, 15));
-        let reject_raw =
-            shadow_mina_wrap_shape_ok(&mina_wrap_shape_wire(2, 2, 2, 40, 15, 6, 15, 7, 1, 15, 14));
+        let accept_raw = shadow_mina_wrap_shape_ok(&mina_wrap_shape_wire(
+            2, 2, 2, 40, 15, 6, 15, 7, 1, 15, 15, 16, 16, 43, 1,
+        ));
+        let reject_raw = shadow_mina_wrap_shape_ok(&mina_wrap_shape_wire(
+            2, 2, 2, 40, 15, 6, 15, 7, 1, 15, 14, 16, 16, 43, 1,
+        ));
         assert_eq!(accept_raw.as_deref(), Ok("1"));
         assert_eq!(reject_raw.as_deref(), Ok("0"));
         assert_eq!(shadow_mina_wrap_shape_ok("garbage").as_deref(), Ok("ERR"));

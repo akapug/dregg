@@ -2984,6 +2984,8 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/lean_init.c");
     println!("cargo:rerun-if-changed=src/lean_init_st.cpp");
+    println!("cargo:rerun-if-changed=src/lean_init_internal.h");
+    println!("cargo:rerun-if-changed=tests/native_init_thread.cpp");
     // OPT-IN runtime trim. rerun-if-env-changed so toggling it re-runs build.rs (and re-derives the
     // trimmed archive / restores the full link).
     println!("cargo:rerun-if-env-changed=DREGG_LEAN_FFI_RUNTIME_TRIM");
@@ -3719,8 +3721,8 @@ fn main() {
     // verdict — SCOPE (`tool = toolId`) ∧ DEADLINE (`now ≤ deadline`) ∧ STEP (`new = old + 1`) ∧ SANE
     // (`0 ≤ old`) ∧ RATE (`new ≤ rateLimit`) — that `Dregg2.Apps.ToolAccessDelegation`'s
     // `tool_invocation_commit_iff_admit` and its over-rate / past-deadline / out-of-scope teeth are
-    // proven over. Init-only module (no Mathlib), self-contained like R3/holding/interchain/FRI, so
-    // NO module initializer is referenced.
+    // proven over. Its exact generated initializer imports only Init. Probe the
+    // initializer/export PAIR: a callable verdict must never bypass required module setup.
     //
     // ⚑ THERE IS NO FALLBACK ARM. Three Rust re-implementations of these same five conjuncts shipped
     // beside the Lean for months — `sdk/src/tool_gateway.rs::deleg_admit`,
@@ -3729,11 +3731,22 @@ fn main() {
     // mirror" of `delegAdmit`, each independently maintained, each provable of nothing (there is no
     // formal semantics of Rust, so their differential tests pinned drift and not correctness). All
     // three are DELETED. Absent ⇒ the gateways refuse every invocation rather than re-grow a twin.
-    let deleg_admit_present = archive_exports(&build_archive, "dregg_deleg_admit");
+    let deleg_admit_export = archive_exports(&build_archive, "dregg_deleg_admit");
+    let deleg_admit_initializer =
+        archive_exports(&build_archive, "initialize_Dregg2_Dregg2_Apps_DelegAdmit");
+    let deleg_admit_present = deleg_admit_export && deleg_admit_initializer;
+    if !deleg_admit_present && require_lean_native {
+        panic!(
+            "dregg-lean-ffi: DelegAdmit requires both dregg_deleg_admit and \
+                initialize_Dregg2_Dregg2_Apps_DelegAdmit; linked archive has \
+                export={deleg_admit_export}, initializer={deleg_admit_initializer}. \
+                No admission verdict is available from this archive."
+        );
+    }
     if deleg_admit_present {
         println!("cargo:rustc-cfg=dregg_deleg_admit_present");
     } else {
-        absent_export_warn("dregg_deleg_admit");
+        absent_export_warn("dregg_deleg_admit + initialize_Dregg2_Dregg2_Apps_DelegAdmit");
     }
 
     // TRUSTLINE DRAW/REPAY/SETTLE (`Dregg2.Apps.TrustlineCore.trustlineStepFFI`): the spend-authority
@@ -4311,10 +4324,15 @@ fn main() {
     // The SINGLE-THREADED / libuv-thread-free init (docs/EMBEDDABLE-LEAN-RUNTIME.md).
     // A C++ TU (it calls the namespaced `lean::initialize_*` runtime initializers
     // directly, skipping `initialize_libuv` so the libuv event-loop thread is never
-    // spawned — the pg-Tier-D-embeddable path). Compiled into the SAME shim archive so
-    // its `dregg_ffi_init_st` symbol propagates with the C bridges; purely additive (the
-    // default `dregg_ffi_init` path is unchanged). `.cpp` ⇒ cc drives the C++ compiler.
+    // spawned — the pg-Tier-D-embeddable path). Its private runtime/module helpers
+    // share the lifecycle in lib.rs with the default path; public ABI init calls
+    // cannot bypass that coordinator. `.cpp` ⇒ cc drives the C++ compiler.
     shim.file("src/lean_init_st.cpp");
+    // A foreign C++ host thread exercises the PUBLIC init ABI and its Rust TLS
+    // attachment. Test harness only; absent from normal library builds.
+    if std::env::var_os("CARGO_FEATURE_LEAN_LIB").is_some() {
+        shim.file("tests/native_init_thread.cpp");
+    }
     // The runtime-trim boundary no-op initializers (only present under DREGG_LEAN_FFI_RUNTIME_TRIM=1):
     // resolves the runtime-dead module inits the trimmed archive's kept chain still references, so the
     // elaborator/Mathlib init-pull is severed at the closure boundary. Compiled into the SAME
@@ -4491,8 +4509,8 @@ fn main() {
         shim.define("DREGG_POA_BAZAAR_RUNTIME", None);
     }
     // DELEGATED TOOL-ACCESS ADMISSION: `DREGG_DELEG_ADMIT` gates BOTH the extern decl and the `_str`
-    // bridge in `lean_init.c` (no module initializer — `Dregg2.Apps.DelegAdmit` is Init-only and its
-    // generated C is self-contained, same as the FRI ledger's).
+    // bridge AND exact generated initializer in `lean_init.c`. Its Init-only
+    // closure is initialized by the shared lifecycle before the first verdict.
     if deleg_admit_present {
         shim.define("DREGG_DELEG_ADMIT", None);
     }

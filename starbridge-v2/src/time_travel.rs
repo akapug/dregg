@@ -160,7 +160,8 @@ impl TimeCockpitModel {
                     }
                     crate::replay::RecordedStep::Genesis { .. }
                     | crate::replay::RecordedStep::GenesisBatch { .. }
-                    | crate::replay::RecordedStep::GenesisUpdate { .. } => {
+                    | crate::replay::RecordedStep::GenesisUpdate { .. }
+                    | crate::replay::RecordedStep::FactoryDeployment { .. } => {
                         (step.label(), false, None)
                     }
                 }
@@ -341,12 +342,18 @@ fn reversible_mirror_steps(
         .min()
         .unwrap_or(world.timestamp())
         .min(world.timestamp());
-    let mut rh = ReversibleHistory::with_costs(floor, world.replay_costs())
-        .with_factories(world.replay_factories().to_vec());
+    let mut rh = ReversibleHistory::with_costs(floor, world.replay_costs());
     let mut ledger = Ledger::new();
     let mut ex = rh.fresh_executor();
     for (index, step) in steps.iter().enumerate() {
         match step {
+            RecordedStep::FactoryDeployment { deployment } => {
+                rh.record_factory_deployment(&mut ex, &mut ledger, *deployment.clone())
+                    .map_err(|error| BranchError::ReplayRefused {
+                        step: index,
+                        reason: error.to_string(),
+                    })?;
+            }
             RecordedStep::Genesis { cell } => {
                 if ledger.contains(&cell.id()) {
                     return Err(BranchError::ReplayRefused {
@@ -540,6 +547,14 @@ impl TimeBranch {
         let mut working = Ledger::new();
         for (index, step) in fork.steps().iter().enumerate() {
             match step.as_ref() {
+                ReversibleStep::FactoryDeployment { deployment } => {
+                    deployment
+                        .apply(&mut ex)
+                        .map_err(|reason| BranchError::ReplayRefused {
+                            step: index,
+                            reason,
+                        })?;
+                }
                 ReversibleStep::Genesis { cell } => {
                     working.insert_cell(cell.clone()).map_err(|error| {
                         BranchError::ReplayRefused {

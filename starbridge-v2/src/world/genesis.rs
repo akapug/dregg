@@ -225,8 +225,8 @@ impl World {
 
     /// Deploy a [`FactoryDescriptor`] into the embedded executor's factory
     /// registry (the out-of-band genesis path — a node registers its factories
-    /// the way it seeds genesis cells). Returns the factory's content-addressed
-    /// VK, against which a later [`create_cell_from_factory`] effect is
+    /// the way it seeds genesis cells). Returns the descriptor's registry VK,
+    /// against which a later [`create_cell_from_factory`] effect is
     /// validated by the real executor. The descriptor is also mirrored into the
     /// replay tape's executor so factory-births re-derive on replay.
     pub fn deploy_factory(&mut self, descriptor: dregg_cell::FactoryDescriptor) -> [u8; 32] {
@@ -239,16 +239,49 @@ impl World {
         descriptor: dregg_cell::FactoryDescriptor,
     ) -> Result<[u8; 32], String> {
         self.mutation_guard()?;
-        let vk = self
+        if let Some(installed) = self
             .engine
-            .executor_mut()
-            .deploy_factory(descriptor.clone());
-        // Keep the replay recorder's executor in lock-step so a factory-birth
-        // committed below re-derives identically on replay.
-        let _ = self.record_exec.deploy_factory(descriptor.clone());
-        // Retain the descriptor so a fork can replay it onto its throwaway
-        // executor (the live registry isn't enumerable; this is our own record).
-        self.deployed_factories.push(descriptor);
+            .executor()
+            .factory_registry
+            .borrow()
+            .get(&descriptor.factory_vk)
+        {
+            return if installed == &descriptor {
+                Ok(descriptor.factory_vk)
+            } else {
+                Err("factory registry key is already bound to a different descriptor".into())
+            };
+        }
+        self.install_recorded_factory(dregg_turn::reversible::FactoryDeployment::new(descriptor))
+    }
+
+    /// Common ordered publication path for live setup and exact replay. A
+    /// duplicate history event is invalid even if its descriptor is identical.
+    pub(crate) fn install_recorded_factory(
+        &mut self,
+        deployment: dregg_turn::reversible::FactoryDeployment,
+    ) -> Result<[u8; 32], String> {
+        self.mutation_guard()?;
+        deployment.validate_new(self.engine.executor())?;
+        deployment.validate_new(&self.record_exec)?;
+        if self.engine.ledger().has_restore_point() || self.record_ledger.has_restore_point() {
+            return Err("factory setup cannot cross an unresolved ledger restore point".into());
+        }
+        // Publication precedes both in-memory registries. A lost storage
+        // response leaves RAM unchanged and latches this World until reopen.
+        if let Some(persist) = &mut self.persist {
+            if let Err(error) = persist.record_factory_deployment(&deployment, self.engine.ledger())
+            {
+                return Err(self.latch_durability_failure(error));
+            }
+        }
+        self.ensure_record_ledger();
+        let vk = deployment
+            .apply(self.engine.executor_mut())
+            .expect("factory registry was checked before publication");
+        self.history
+            .record_factory_deployment(&mut self.record_exec, &mut self.record_ledger, deployment)
+            .expect("recorder registry was checked before publication");
         Ok(vk)
     }
 }

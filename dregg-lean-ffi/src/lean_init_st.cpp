@@ -1,7 +1,8 @@
 /* lean_init_st.cpp — the SINGLE-THREADED, IO-thread-free Lean runtime init.
  *
  * THE EMBEDDABLE-LEAN-RUNTIME path (.docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md). The default
- * `dregg_ffi_init` (lean_init.c) calls `lean_initialize_runtime_module()`, which
+ * `dregg_ffi_init` enters lib.rs's shared coordinator, whose default prefix calls
+ * `lean_initialize_runtime_module()`, which
  * runs the full init chain INCLUDING `initialize_libuv()`. On a multi-thread Lean
  * build that call spawns the **libuv event-loop thread** (libuv.cpp:
  * `lthread([]{ event_loop_run_loop(&global_ev); })`) — measured as a +1 OS thread
@@ -30,11 +31,16 @@
  * `lean_task_spawn_core`: `if (!g_task_manager) return lean_task_pure(apply_1(...))`).
  * The result is a runtime that, in this process, spawns ZERO threads of its own.
  *
- * This file is compiled by build.rs (alongside lean_init.c) ONLY when the linked
- * archive is present; it is purely ADDITIVE — the default `dregg_ffi_init` path is
- * untouched, so no existing consumer (node / dregg-turn shadow tests) changes.
+ * This file is compiled by build.rs (alongside lean_init.c) only when the linked
+ * archive is present. Runtime and module phases are private helpers; the public
+ * default/ST init ABI shares one mode-owning coordinator in lib.rs.
  */
 #include <lean/lean.h>
+#include "lean_init_internal.h"
+#include <time.h>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 
 /* SHARED-vs-STATIC linkage (DREGG_LEAN_SHARED, set by build.rs in
  * `DREGG_LEAN_LINK=shared` mode — the cdylib path, e.g. the pgrx extension):
@@ -76,8 +82,9 @@ void lean_initialize_runtime_module(void);
 }
 #endif
 
-/* The module initializers we must run (mirrors lean_init.c's dregg_ffi_init). The
- * executor FFI module plus the four out-of-closure gate modules; each is `extern "C"`
+/* The existing ST module set. It is deliberately tracked separately from the
+ * default module list; ST success does not assert every default export is ready.
+ * Each generated initializer is `extern "C"`
  * with C linkage (Lean's `@[export]` / `initialize_*` symbols are C-ABI). */
 extern "C" {
 lean_object *initialize_Dregg2_Dregg2_Exec_FFI(uint8_t builtin);
@@ -163,15 +170,14 @@ lean_object *initialize_Dregg2_Dregg2_Games_PathOfAngels_BazaarGameRuntime(uint8
 #endif
 }
 
-/* dregg_ffi_init_st — the single-threaded init for the executor-in-a-constrained-host
+/* The ST runtime prefix for the executor-in-a-constrained-host
  * path. STATIC linkage: libuv-thread-free (the eight initializers, no libuv). SHARED
  * linkage (the cdylib): single-runtime via the exported `lean_initialize_runtime_module`
  * (which starts the libuv thread — see the header note + .docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md §5).
  *
- * Returns 0 on success, 1 if a module initializer reported an IO error. Idempotency is
- * the CALLER's responsibility (the Rust side guards it behind a OnceLock), exactly as
- * for `dregg_ffi_init`. */
-extern "C" int dregg_ffi_init_st(void) {
+ * This is only the runtime prefix. The shared Rust coordinator owns mode
+ * selection, idempotency, thread attachment, and sticky module failures. */
+extern "C" void dregg_ffi_start_runtime_st(void) {
 #ifndef DREGG_LEAN_SHARED
     /* STATIC: the libuv-free prefix of lean_initialize_runtime_module(), in order. */
     lean::initialize_alloc();
@@ -187,8 +193,12 @@ extern "C" int dregg_ffi_init_st(void) {
     /* SHARED: the single exported runtime init (one runtime copy; starts libuv). */
     lean_initialize_runtime_module();
 #endif
+}
 
-    lean_object *res = initialize_Dregg2_Dregg2_Exec_FFI(1);
+/* Keep the existing ST module set; full default availability is not inferred from
+ * ST success. Only the owning host thread may enter this mode. */
+extern "C" int dregg_ffi_init_st_modules(void) {
+    lean_object *res = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Exec_FFI);
     if (!lean_io_result_is_ok(res)) {
         lean_io_result_show_error(res);
         lean_dec_ref(res);
@@ -197,35 +207,35 @@ extern "C" int dregg_ffi_init_st(void) {
     lean_dec_ref(res);
 #ifdef DREGG_FINALIZE_GATE
     {
-        lean_object *gres = initialize_Dregg2_Dregg2_Distributed_FinalityGate(1);
+        lean_object *gres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Distributed_FinalityGate);
         if (!lean_io_result_is_ok(gres)) { lean_io_result_show_error(gres); lean_dec_ref(gres); return 1; }
         lean_dec_ref(gres);
     }
 #endif
 #ifdef DREGG_STRAND_ADMIT
     {
-        lean_object *ares = initialize_Dregg2_Dregg2_Distributed_StrandAdmission(1);
+        lean_object *ares = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Distributed_StrandAdmission);
         if (!lean_io_result_is_ok(ares)) { lean_io_result_show_error(ares); lean_dec_ref(ares); return 1; }
         lean_dec_ref(ares);
     }
 #endif
 #ifdef DREGG_ROUND_ADVANCE
     {
-        lean_object *rres = initialize_Dregg2_Dregg2_Distributed_RoundAdvanceGate(1);
+        lean_object *rres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Distributed_RoundAdvanceGate);
         if (!lean_io_result_is_ok(rres)) { lean_io_result_show_error(rres); lean_dec_ref(rres); return 1; }
         lean_dec_ref(rres);
     }
 #endif
 #ifdef DREGG_ACK_ADMIT
     {
-        lean_object *kres = initialize_Dregg2_Dregg2_Distributed_AckBeforeAdmit(1);
+        lean_object *kres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Distributed_AckBeforeAdmit);
         if (!lean_io_result_is_ok(kres)) { lean_io_result_show_error(kres); lean_dec_ref(kres); return 1; }
         lean_dec_ref(kres);
     }
 #endif
 #ifdef DREGG_DISTRIBUTED_EXPORTS
     {
-        lean_object *dres = initialize_Dregg2_Dregg2_Exec_DistributedExports(1);
+        lean_object *dres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Exec_DistributedExports);
         if (!lean_io_result_is_ok(dres)) { lean_io_result_show_error(dres); lean_dec_ref(dres); return 1; }
         lean_dec_ref(dres);
     }
@@ -233,7 +243,7 @@ extern "C" int dregg_ffi_init_st(void) {
 #ifdef DREGG_POA_SIGNAL_JUDGE
     {
         lean_object *poares =
-            initialize_Dregg2_Dregg2_Games_PathOfAngels_NetworkJudge(1);
+            DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_PathOfAngels_NetworkJudge);
         if (!lean_io_result_is_ok(poares)) {
             lean_io_result_show_error(poares);
             lean_dec_ref(poares);
@@ -245,7 +255,7 @@ extern "C" int dregg_ffi_init_st(void) {
 #ifdef DREGG_POA_RECORDS_PROJECT
     {
         lean_object *poarecres =
-            initialize_Dregg2_Dregg2_Games_PathOfAngels_RecordsRuntime(1);
+            DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_PathOfAngels_RecordsRuntime);
         if (!lean_io_result_is_ok(poarecres)) {
             lean_io_result_show_error(poarecres);
             lean_dec_ref(poarecres);
@@ -257,7 +267,7 @@ extern "C" int dregg_ffi_init_st(void) {
 #ifdef DREGG_POA_SIGNAL_SLOT_DERIVE
     {
         lean_object *slotderiveres =
-            initialize_Dregg2_Dregg2_Games_PathOfAngels_SlotDeriveRuntime(1);
+            DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_PathOfAngels_SlotDeriveRuntime);
         if (!lean_io_result_is_ok(slotderiveres)) {
             lean_io_result_show_error(slotderiveres);
             lean_dec_ref(slotderiveres);
@@ -269,7 +279,7 @@ extern "C" int dregg_ffi_init_st(void) {
 #ifdef DREGG_POA_STATION_DAILY_READ
     {
         lean_object *poastationres =
-            initialize_Dregg2_Dregg2_Games_PathOfAngels_StationDailyRuntime(1);
+            DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_PathOfAngels_StationDailyRuntime);
         if (!lean_io_result_is_ok(poastationres)) {
             lean_io_result_show_error(poastationres);
             lean_dec_ref(poastationres);
@@ -281,7 +291,7 @@ extern "C" int dregg_ffi_init_st(void) {
 #ifdef DREGG_POA_CRATE_OPEN
     {
         lean_object *poacrateres =
-            initialize_Dregg2_Dregg2_Games_PathOfAngels_StationCrateOpenRuntime(1);
+            DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_PathOfAngels_StationCrateOpenRuntime);
         if (!lean_io_result_is_ok(poacrateres)) {
             lean_io_result_show_error(poacrateres);
             lean_dec_ref(poacrateres);
@@ -293,7 +303,7 @@ extern "C" int dregg_ffi_init_st(void) {
 #ifdef DREGG_POA_SIGNAL_FEEDBACK
     {
         lean_object *feedbackres =
-            initialize_Dregg2_Dregg2_Games_PathOfAngels_SignalFeedbackRuntime(1);
+            DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_PathOfAngels_SignalFeedbackRuntime);
         if (!lean_io_result_is_ok(feedbackres)) {
             lean_io_result_show_error(feedbackres);
             lean_dec_ref(feedbackres);
@@ -305,7 +315,7 @@ extern "C" int dregg_ffi_init_st(void) {
 #ifdef DREGG_POA_NETWORK_GENESIS
     {
         lean_object *poagenres =
-            initialize_Dregg2_Dregg2_Games_PathOfAngels_NetworkGenesis(1);
+            DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_PathOfAngels_NetworkGenesis);
         if (!lean_io_result_is_ok(poagenres)) {
             lean_io_result_show_error(poagenres);
             lean_dec_ref(poagenres);
@@ -317,7 +327,7 @@ extern "C" int dregg_ffi_init_st(void) {
 #ifdef DREGG_POA_DARK_BAZAAR_JUDGE
     {
         lean_object *bazaarres =
-            initialize_Dregg2_Dregg2_Games_PathOfAngels_DarkBazaarJudge(1);
+            DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_PathOfAngels_DarkBazaarJudge);
         if (!lean_io_result_is_ok(bazaarres)) {
             lean_io_result_show_error(bazaarres);
             lean_dec_ref(bazaarres);
@@ -329,7 +339,7 @@ extern "C" int dregg_ffi_init_st(void) {
 #ifdef DREGG_POA_GALLEY_DAILY_JUDGE
     {
         lean_object *galleyres =
-            initialize_Dregg2_Dregg2_Games_PathOfAngels_GalleyMaintenanceDailyRuntime(1);
+            DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_PathOfAngels_GalleyMaintenanceDailyRuntime);
         if (!lean_io_result_is_ok(galleyres)) {
             lean_io_result_show_error(galleyres);
             lean_dec_ref(galleyres);
@@ -341,7 +351,7 @@ extern "C" int dregg_ffi_init_st(void) {
 #ifdef DREGG_POA_NIGHT_WATCH_CAMPAIGN_JUDGE
     {
         lean_object *nightwatchres =
-            initialize_Dregg2_Dregg2_Games_PathOfAngels_NightWatchCampaignWire(1);
+            DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_PathOfAngels_NightWatchCampaignWire);
         if (!lean_io_result_is_ok(nightwatchres)) {
             lean_io_result_show_error(nightwatchres);
             lean_dec_ref(nightwatchres);
@@ -353,7 +363,7 @@ extern "C" int dregg_ffi_init_st(void) {
 #if defined(DREGG_POA_CREW_FIELD_STEP) || defined(DREGG_POA_CREW_FIELD_SEAT_PREIMAGE)
     {
         lean_object *crewfieldres =
-            initialize_Dregg2_Dregg2_Games_PathOfAngels_CrewFieldMissionAdmission(1);
+            DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_PathOfAngels_CrewFieldMissionAdmission);
         if (!lean_io_result_is_ok(crewfieldres)) {
             lean_io_result_show_error(crewfieldres);
             lean_dec_ref(crewfieldres);
@@ -366,7 +376,7 @@ extern "C" int dregg_ffi_init_st(void) {
     defined(DREGG_POA_EVENT_BATCH_RUNTIME_INITIAL_HEADS_DIGEST)
     {
         lean_object *batchres =
-            initialize_Dregg2_Dregg2_Games_PathOfAngels_EventBatchRuntime(1);
+            DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_PathOfAngels_EventBatchRuntime);
         if (!lean_io_result_is_ok(batchres)) {
             lean_io_result_show_error(batchres);
             lean_dec_ref(batchres);
@@ -378,7 +388,7 @@ extern "C" int dregg_ffi_init_st(void) {
 #if defined(DREGG_POA_WORLD_ACTIVATION_JUDGE) || defined(DREGG_POA_WORLD_ACTIVATION_AUTHORIZES)
     {
         lean_object *worldactivationres =
-            initialize_Dregg2_Dregg2_Games_PathOfAngels_WorldActivation(1);
+            DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_PathOfAngels_WorldActivation);
         if (!lean_io_result_is_ok(worldactivationres)) {
             lean_io_result_show_error(worldactivationres);
             lean_dec_ref(worldactivationres);
@@ -390,7 +400,7 @@ extern "C" int dregg_ffi_init_st(void) {
 #ifdef DREGG_POA_ACTIVATED_CONTENT_AUTHORIZE
     {
         lean_object *activatedcontentres =
-            initialize_Dregg2_Dregg2_Games_PathOfAngels_ActivatedContentRuntime(1);
+            DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_PathOfAngels_ActivatedContentRuntime);
         if (!lean_io_result_is_ok(activatedcontentres)) {
             lean_io_result_show_error(activatedcontentres);
             lean_dec_ref(activatedcontentres);
@@ -402,7 +412,7 @@ extern "C" int dregg_ffi_init_st(void) {
 #ifdef DREGG_POA_BAZAAR_RUNTIME
     {
         lean_object *bazaarpersistres =
-            initialize_Dregg2_Dregg2_Games_PathOfAngels_BazaarGameRuntime(1);
+            DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_PathOfAngels_BazaarGameRuntime);
         if (!lean_io_result_is_ok(bazaarpersistres)) {
             lean_io_result_show_error(bazaarpersistres);
             lean_dec_ref(bazaarpersistres);
@@ -411,6 +421,46 @@ extern "C" int dregg_ffi_init_st(void) {
         lean_dec_ref(bazaarpersistres);
     }
 #endif
-    lean_io_mark_end_initialization();
     return 0;
+}
+
+/* Called only while the shared lifecycle lock is held. Generated module guards
+ * are plain booleans and become true before dependencies finish; errors are
+ * retained by Rust and are never retried. The name is a static string literal.
+ * Timings are inclusive of the module's still-uninitialized import closure. */
+static const char *dregg_failed_module = nullptr;
+
+extern "C" const char *dregg_ffi_last_failed_module(void) {
+    return dregg_failed_module;
+}
+
+extern "C" lean_object *dregg_ffi_run_module_init(
+    const char *name, dregg_module_initializer init) {
+    const char *profile_env = std::getenv("DREGG_LEAN_INIT_PROFILE");
+    const bool profile = profile_env != nullptr && std::strcmp(profile_env, "1") == 0;
+    struct timespec begin = {};
+    const bool have_begin = profile && clock_gettime(CLOCK_MONOTONIC, &begin) == 0;
+    if (profile) {
+        std::fprintf(stderr, "[dregg lean init] module=%s begin\n", name);
+        std::fflush(stderr);
+    }
+    lean_object *result = init(1);
+    const bool ok = lean_io_result_is_ok(result);
+    if (!ok && dregg_failed_module == nullptr) dregg_failed_module = name;
+    if (profile) {
+        struct timespec end = {};
+        const bool have_end = clock_gettime(CLOCK_MONOTONIC, &end) == 0;
+        if (have_begin && have_end) {
+            const double milliseconds =
+                (static_cast<double>(end.tv_sec) - static_cast<double>(begin.tv_sec)) * 1000.0 +
+                (static_cast<double>(end.tv_nsec) - static_cast<double>(begin.tv_nsec)) / 1000000.0;
+            std::fprintf(stderr, "[dregg lean init] module=%s elapsed_ms=%.3f result=%s\n",
+                         name, milliseconds, ok ? "ok" : "error");
+        } else {
+            std::fprintf(stderr, "[dregg lean init] module=%s elapsed_ms=unavailable result=%s\n",
+                         name, ok ? "ok" : "error");
+        }
+        std::fflush(stderr);
+    }
+    return result;
 }

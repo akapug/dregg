@@ -4,11 +4,13 @@
  * `lean_io_result_is_ok`, `lean_dec_ref`) are `static inline` in <lean/lean.h>
  * and therefore have NO linkable symbol — they can only be used from C that
  * includes the header. So we wrap the whole ritual here and expose a single
- * plain exported function for Rust to call.
+ * helpers for the shared lifecycle in lib.rs. The public dregg_ffi_init ABI
+ * enters that coordinator; no caller may start the runtime prefix twice.
  */
 #include <stdint.h>
 #include <string.h>
 #include <lean/lean.h>
+#include "lean_init_internal.h"
 
 extern void lean_initialize_runtime_module(void);
 extern lean_object *initialize_Dregg2_Dregg2_Exec_FFI(uint8_t builtin);
@@ -890,12 +892,12 @@ extern lean_object *dregg_fri_ledger(lean_object *input);
  * teeth. The SDK tool gateway, the starbridge tool-access-delegation app and the dreggnet offerings
  * session all marshal to THIS instead of re-deciding the policy in Rust; their three hand-maintained
  * mirrors are deleted, so an absent export means those gateways REFUSE, not that a twin answers.
- * GATED on DREGG_DELEG_ADMIT (build.rs probes + defines it). Like R3's / holding's / interchain's /
- * FRI's export it needs NO module initializer: `Dregg2.Apps.DelegAdmit` imports nothing beyond core
- * Init, so its generated C hoists its string literals into STATIC CONST `lean_string_object`s and is
- * self-contained on the always-initialized Init runtime. */
+ * DREGG_DELEG_ADMIT requires BOTH the export and its generated module initializer.
+ * DelegAdmit imports only Init: initialize that exact closure before the first
+ * call, without loading the unrelated executor/proof modules. */
 #ifdef DREGG_DELEG_ADMIT
 extern lean_object *dregg_deleg_admit(lean_object *input);
+extern lean_object *initialize_Dregg2_Dregg2_Apps_DelegAdmit(uint8_t builtin);
 #endif
 
 /* The @[export]ed Lean `String -> String` TRUSTLINE DRAW/REPAY/SETTLE decision
@@ -1178,9 +1180,35 @@ lean_object *dregg_rt_box(size_t n) { return lean_box(n); }
 const char *dregg_rt_string_cstr(lean_object *s) { return lean_string_cstr(s); }
 
 /* Returns 0 on success, 1 if module initialization reported an IO error. */
-int dregg_ffi_init(void) {
+/* Called only by the shared coordinator. Runtime startup already initialized
+ * the current thread's allocator; it must not also call lean_initialize_thread. */
+void dregg_ffi_start_runtime(void) {
     lean_initialize_runtime_module();
-    lean_object *res = initialize_Dregg2_Dregg2_Exec_FFI(1);
+}
+
+void dregg_ffi_finish_initialization(void) {
+    lean_io_mark_end_initialization();
+}
+
+int dregg_ffi_init_deleg_admit_module(void) {
+#ifdef DREGG_DELEG_ADMIT
+    lean_object *res = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Apps_DelegAdmit);
+    if (!lean_io_result_is_ok(res)) {
+        lean_io_result_show_error(res);
+        lean_dec_ref(res);
+        return 1;
+    }
+    lean_dec_ref(res);
+    return 0;
+#else
+    return 2; /* No linked initializer/export pair: no admission verdict. */
+#endif
+}
+
+/* Preserve the complete default module list; runtime start and end-of-init are
+ * separate so an earlier narrow admission does not restart or prematurely end it. */
+int dregg_ffi_init_modules(void) {
+    lean_object *res = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Exec_FFI);
     if (!lean_io_result_is_ok(res)) {
         lean_io_result_show_error(res);
         lean_dec_ref(res);
@@ -1191,7 +1219,7 @@ int dregg_ffi_init(void) {
     /* The finality-gate module is OUTSIDE the FFI closure, so its initializer is not run above.
      * Initialize it explicitly so `dregg_blocklace_finalize` is callable. Its own dependency
      * closure (Blocklace/ConsensusExec) is re-entrant-safe under Lean's init guards. */
-    lean_object *gres = initialize_Dregg2_Dregg2_Distributed_FinalityGate(1);
+    lean_object *gres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Distributed_FinalityGate);
     if (!lean_io_result_is_ok(gres)) {
         lean_io_result_show_error(gres);
         lean_dec_ref(gres);
@@ -1203,7 +1231,7 @@ int dregg_ffi_init(void) {
     /* The strand-admission module is also OUTSIDE the FFI closure; initialize it explicitly so
      * `dregg_strand_admit` is callable. Its dependency closure (BlocklaceFinality/StrandIntegrity)
      * is re-entrant-safe under Lean's init guards (shared with the finality gate above). */
-    lean_object *ares = initialize_Dregg2_Dregg2_Distributed_StrandAdmission(1);
+    lean_object *ares = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Distributed_StrandAdmission);
     if (!lean_io_result_is_ok(ares)) {
         lean_io_result_show_error(ares);
         lean_dec_ref(ares);
@@ -1215,7 +1243,7 @@ int dregg_ffi_init(void) {
     /* The ES round-advance module is also OUTSIDE the FFI closure; initialize it explicitly so
      * `dregg_round_advance` is callable. Its dependency closure (BlocklaceFinality/FinalityGate)
      * is re-entrant-safe under Lean's init guards (shared with the gates above). */
-    lean_object *ragres = initialize_Dregg2_Dregg2_Distributed_RoundAdvanceGate(1);
+    lean_object *ragres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Distributed_RoundAdvanceGate);
     if (!lean_io_result_is_ok(ragres)) {
         lean_io_result_show_error(ragres);
         lean_dec_ref(ragres);
@@ -1228,7 +1256,7 @@ int dregg_ffi_init(void) {
      * explicitly so `dregg_ack_admit` is callable. Its dependency closure
      * (BlocklaceFinality/FinalityGate) is re-entrant-safe under Lean's init guards (shared with
      * the gates above). */
-    lean_object *ackres = initialize_Dregg2_Dregg2_Distributed_AckBeforeAdmit(1);
+    lean_object *ackres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Distributed_AckBeforeAdmit);
     if (!lean_io_result_is_ok(ackres)) {
         lean_io_result_show_error(ackres);
         lean_dec_ref(ackres);
@@ -1241,7 +1269,7 @@ int dregg_ffi_init(void) {
      * explicitly so the six `dregg_captp_*` / `dregg_coord_*` exports are callable. Its dependency
      * closure (CapTPConcrete/CapTPGCConcrete/CapTPPipeline/Coord.*) is re-entrant-safe under Lean's
      * init guards. */
-    lean_object *dres = initialize_Dregg2_Dregg2_Exec_DistributedExports(1);
+    lean_object *dres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Exec_DistributedExports);
     if (!lean_io_result_is_ok(dres)) {
         lean_io_result_show_error(dres);
         lean_dec_ref(dres);
@@ -1253,7 +1281,7 @@ int dregg_ffi_init(void) {
     /* The flow-refinement module is also OUTSIDE the FFI closure; initialize it explicitly so
      * `dregg_decide_refines` is callable. Its dependency closure (Deos.FlowAlgebra) is
      * re-entrant-safe under Lean's init guards. */
-    lean_object *rres = initialize_Dregg2_Dregg2_Deos_FlowRefine(1);
+    lean_object *rres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Deos_FlowRefine);
     if (!lean_io_result_is_ok(rres)) {
         lean_io_result_show_error(rres);
         lean_dec_ref(rres);
@@ -1266,7 +1294,7 @@ int dregg_ffi_init(void) {
      * explicitly so the `dregg_d_*` builders/readers + `dregg_exec_full_forest_auth_direct` are
      * callable. Its dependency closure (Dregg2.Exec.FFI and below) is re-entrant-safe under Lean's
      * init guards (already initialized by `initialize_Dregg2_Dregg2_Exec_FFI` above). */
-    lean_object *fdres = initialize_Dregg2_Dregg2_Exec_FFIDirect(1);
+    lean_object *fdres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Exec_FFIDirect);
     if (!lean_io_result_is_ok(fdres)) {
         lean_io_result_show_error(fdres);
         lean_dec_ref(fdres);
@@ -1278,7 +1306,7 @@ int dregg_ffi_init(void) {
     /* The verified-storage content-root module is OUTSIDE the FFI closure; initialize it explicitly
      * so `dregg_storage_content_root` is callable. Its dependency closure (Storage.BucketCommitment /
      * Lightclient.MMR) is re-entrant-safe under Lean's init guards. */
-    lean_object *sres = initialize_Dregg2_Dregg2_Storage_Deployed(1);
+    lean_object *sres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Storage_Deployed);
     if (!lean_io_result_is_ok(sres)) {
         lean_io_result_show_error(sres);
         lean_dec_ref(sres);
@@ -1287,7 +1315,7 @@ int dregg_ffi_init(void) {
     lean_dec_ref(sres);
 #endif
 #ifdef DREGG_CONSTRAINT_ADMITS
-    lean_object *cares = initialize_Dregg2_Dregg2_Exec_DeployedConstraint(1);
+    lean_object *cares = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Exec_DeployedConstraint);
     if (!lean_io_result_is_ok(cares)) {
         lean_io_result_show_error(cares);
         lean_dec_ref(cares);
@@ -1296,7 +1324,7 @@ int dregg_ffi_init(void) {
     lean_dec_ref(cares);
 #endif
 #ifdef DREGG_MINA_STATE_HASH_WORD_OK
-    lean_object *mshres = initialize_Dregg2_Dregg2_Bridge_MinaStateHashWordGate(1);
+    lean_object *mshres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Bridge_MinaStateHashWordGate);
     if (!lean_io_result_is_ok(mshres)) {
         lean_io_result_show_error(mshres);
         lean_dec_ref(mshres);
@@ -1305,7 +1333,7 @@ int dregg_ffi_init(void) {
     lean_dec_ref(mshres);
 #endif
 #ifdef DREGG_MINA_WRAP_CHALLENGES
-    lean_object *mwcres = initialize_Dregg2_Dregg2_Bridge_MinaWrapChallenges(1);
+    lean_object *mwcres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Bridge_MinaWrapChallenges);
     if (!lean_io_result_is_ok(mwcres)) {
         lean_io_result_show_error(mwcres);
         lean_dec_ref(mwcres);
@@ -1314,7 +1342,7 @@ int dregg_ffi_init(void) {
     lean_dec_ref(mwcres);
 #endif
 #ifdef DREGG_MINA_WRAP_FT_EVAL0
-    lean_object *mwfres = initialize_Dregg2_Dregg2_Bridge_MinaWrapFtEval0(1);
+    lean_object *mwfres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Bridge_MinaWrapFtEval0);
     if (!lean_io_result_is_ok(mwfres)) {
         lean_io_result_show_error(mwfres);
         lean_dec_ref(mwfres);
@@ -1323,7 +1351,7 @@ int dregg_ffi_init(void) {
     lean_dec_ref(mwfres);
 #endif
 #ifdef DREGG_MINA_ACCOUNT_STATE_OK
-    lean_object *maores = initialize_Dregg2_Dregg2_Bridge_MinaAccountOpening(1);
+    lean_object *maores = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Bridge_MinaAccountOpening);
     if (!lean_io_result_is_ok(maores)) {
         lean_io_result_show_error(maores);
         lean_dec_ref(maores);
@@ -1332,7 +1360,7 @@ int dregg_ffi_init(void) {
     lean_dec_ref(maores);
 #endif
 #ifdef DREGG_MINA_DEFERRAL_OK
-    lean_object *mdores = initialize_Dregg2_Dregg2_Circuit_Emit_PastaIpaDeferral(1);
+    lean_object *mdores = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Circuit_Emit_PastaIpaDeferral);
     if (!lean_io_result_is_ok(mdores)) {
         lean_io_result_show_error(mdores);
         lean_dec_ref(mdores);
@@ -1344,7 +1372,7 @@ int dregg_ffi_init(void) {
     /* ONE initializer for BOTH fork-choice exports — they share a module, and it is what brings the
      * pinned `mainnet` selection constants into existence. Re-entrant-safe under Lean's init
      * guards, so the `||` gate is correct even when only one export is present. */
-    lean_object *mfcres = initialize_Dregg2_Dregg2_Bridge_MinaForkChoiceGate(1);
+    lean_object *mfcres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Bridge_MinaForkChoiceGate);
     if (!lean_io_result_is_ok(mfcres)) {
         lean_io_result_show_error(mfcres);
         lean_dec_ref(mfcres);
@@ -1357,7 +1385,7 @@ int dregg_ffi_init(void) {
      * one call brings BOTH the pinned `mainnet` selection constants and the density window's module
      * data into existence. Re-entrant-safe under Lean's init guards, so it is correct alongside the
      * fork-choice initializer above whether or not that gate is also present. */
-    lean_object *mckres = initialize_Dregg2_Dregg2_Bridge_MinaCheckpoint(1);
+    lean_object *mckres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Bridge_MinaCheckpoint);
     if (!lean_io_result_is_ok(mckres)) {
         lean_io_result_show_error(mckres);
         lean_dec_ref(mckres);
@@ -1366,7 +1394,7 @@ int dregg_ffi_init(void) {
     lean_dec_ref(mckres);
 #endif
 #ifdef DREGG_CROSS_CELL_CONSERVES
-    lean_object *cccres = initialize_Dregg2_Dregg2_Circuit_CrossCellConserveDecision(1);
+    lean_object *cccres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Circuit_CrossCellConserveDecision);
     if (!lean_io_result_is_ok(cccres)) {
         lean_io_result_show_error(cccres);
         lean_dec_ref(cccres);
@@ -1380,7 +1408,7 @@ int dregg_ffi_init(void) {
      * callable. Its dependency closure (Crypto.Fips204Spec / Crypto.DreggPqRefinement /
      * Crypto.HybridCombiner / — for the real verify — Crypto.MlDsaVerifyReal and its Keccak/Ring/Codec
      * bricks) is re-entrant-safe under Lean's init guards. */
-    lean_object *fvres = initialize_Dregg2_Dregg2_Crypto_Fips204Verify(1);
+    lean_object *fvres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Crypto_Fips204Verify);
     if (!lean_io_result_is_ok(fvres)) {
         lean_io_result_show_error(fvres);
         lean_dec_ref(fvres);
@@ -1393,7 +1421,7 @@ int dregg_ffi_init(void) {
      * so `dregg_fips203_encaps` / `dregg_fips203_decaps` are callable. Its dependency closure
      * (Crypto.MlKemIndCca / Crypto.DreggKemRefinement / Crypto.HybridCombiner) is re-entrant-safe under
      * Lean's init guards (shared with the ML-DSA verify-core module above). */
-    lean_object *kres = initialize_Dregg2_Dregg2_Crypto_Fips203Kem(1);
+    lean_object *kres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Crypto_Fips203Kem);
     if (!lean_io_result_is_ok(kres)) {
         lean_io_result_show_error(kres);
         lean_dec_ref(kres);
@@ -1406,7 +1434,7 @@ int dregg_ffi_init(void) {
      * the FFI closure and is its OWN module (distinct from `Fips203Kem`), so initialize it explicitly so
      * `dregg_mlkem_decaps_real` is callable. Its dependency closure (Crypto.Keccak / MlKemRing / MlKemSample
      * / MlKemCodec) is re-entrant-safe under Lean's init guards. */
-    lean_object *kdres = initialize_Dregg2_Dregg2_Crypto_MlKemDecaps(1);
+    lean_object *kdres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Crypto_MlKemDecaps);
     if (!lean_io_result_is_ok(kdres)) {
         lean_io_result_show_error(kdres);
         lean_dec_ref(kdres);
@@ -1419,7 +1447,7 @@ int dregg_ffi_init(void) {
      * the FFI closure and is its OWN module (imports `MlKemDecaps`), so initialize it explicitly so
      * `dregg_mlkem_encaps_real` is callable. Its dependency closure (Crypto.Keccak / MlKemRing / MlKemSample /
      * MlKemCodec / MlKemDecaps) is re-entrant-safe under Lean's init guards (shared with the decaps module). */
-    lean_object *keres = initialize_Dregg2_Dregg2_Crypto_MlKemEncaps(1);
+    lean_object *keres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Crypto_MlKemEncaps);
     if (!lean_io_result_is_ok(keres)) {
         lean_io_result_show_error(keres);
         lean_dec_ref(keres);
@@ -1433,7 +1461,7 @@ int dregg_ffi_init(void) {
      * `dregg_mlkem_keygen_real` is callable. Its dependency closure (Crypto.Keccak / MlKemRing / MlKemSample /
      * MlKemCodec / MlKemDecaps) is re-entrant-safe under Lean's init guards (shared with the encaps/decaps
      * modules). */
-    lean_object *kgres = initialize_Dregg2_Dregg2_Crypto_MlKemKeygen(1);
+    lean_object *kgres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Crypto_MlKemKeygen);
     if (!lean_io_result_is_ok(kgres)) {
         lean_io_result_show_error(kgres);
         lean_dec_ref(kgres);
@@ -1447,7 +1475,7 @@ int dregg_ffi_init(void) {
      * (`Dregg2.Crypto.MlDsaKeygen`) is OUTSIDE the FFI closure and is its OWN module, so initialize it
      * explicitly so `dregg_mldsa_keygen_real` is callable. Its dependency closure (Crypto.Keccak / MlDsaRing /
      * MlDsaExpandA / MlDsaCodec / MlKemDecaps) is re-entrant-safe under Lean's init guards. */
-    lean_object *dkgres = initialize_Dregg2_Dregg2_Crypto_MlDsaKeygen(1);
+    lean_object *dkgres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Crypto_MlDsaKeygen);
     if (!lean_io_result_is_ok(dkgres)) {
         lean_io_result_show_error(dkgres);
         lean_dec_ref(dkgres);
@@ -1461,7 +1489,7 @@ int dregg_ffi_init(void) {
      * `Fips204Verify`), so initialize it explicitly so `dregg_fips204_sign_real` is callable. Its dependency
      * closure (Crypto.Keccak / MlDsaRing / MlDsaSampleInBall / MlDsaExpandA / MlDsaCodec / MlDsaVerifyReal)
      * is re-entrant-safe under Lean's init guards (shared with the real verify-core module above). */
-    lean_object *sdres = initialize_Dregg2_Dregg2_Crypto_MlDsaSignReal(1);
+    lean_object *sdres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Crypto_MlDsaSignReal);
     if (!lean_io_result_is_ok(sdres)) {
         lean_io_result_show_error(sdres);
         lean_dec_ref(sdres);
@@ -1475,7 +1503,7 @@ int dregg_ffi_init(void) {
      * initialized: its `stock` verb reads the `stockTwoPlayer` module global (see the extern-decl
      * note above). Its dependency closure (Games.AutomataflRules / Games.Automatafl / Tactics /
      * Mathlib.Data.List.Dedup) is re-entrant-safe under Lean's init guards. */
-    lean_object *afres = initialize_Dregg2_Dregg2_Games_AutomataflFFI(1);
+    lean_object *afres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_AutomataflFFI);
     if (!lean_io_result_is_ok(afres)) {
         lean_io_result_show_error(afres);
         lean_dec_ref(afres);
@@ -1490,7 +1518,7 @@ int dregg_ffi_init(void) {
      * witness state reads `blankState` (see the extern-decl note above). Its dependency closure
      * (Games.MultiwayTug / Boundary / Tactics / Mathlib multiset+bigops) is re-entrant-safe under
      * Lean's init guards. */
-    lean_object *mtres = initialize_Dregg2_Dregg2_Games_MultiwayTugFFI(1);
+    lean_object *mtres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_MultiwayTugFFI);
     if (!lean_io_result_is_ok(mtres)) {
         lean_io_result_show_error(mtres);
         lean_dec_ref(mtres);
@@ -1502,7 +1530,7 @@ int dregg_ffi_init(void) {
     /* Initialize the complete PoA evaluator closure, including the Emit globals its exact active
      * configuration reads. This remains an evaluator only; initialization confers no authority. */
     lean_object *poares =
-        initialize_Dregg2_Dregg2_Games_PathOfAngels_NetworkJudge(1);
+        DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_PathOfAngels_NetworkJudge);
     if (!lean_io_result_is_ok(poares)) {
         lean_io_result_show_error(poares);
         lean_dec_ref(poares);
@@ -1514,7 +1542,7 @@ int dregg_ffi_init(void) {
     /* The Records read model closes over the same evaluator globals; initialize it explicitly and
      * keep both runtime init paths in exact parity. Initialization confers no read authority. */
     lean_object *poarecres =
-        initialize_Dregg2_Dregg2_Games_PathOfAngels_RecordsRuntime(1);
+        DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_PathOfAngels_RecordsRuntime);
     if (!lean_io_result_is_ok(poarecres)) {
         lean_io_result_show_error(poarecres);
         lean_dec_ref(poarecres);
@@ -1527,7 +1555,7 @@ int dregg_ffi_init(void) {
      * keep both runtime init paths in exact parity. Initialization confers no read authority, and
      * confers no write path at all — there is none to confer. */
     lean_object *poastationres =
-        initialize_Dregg2_Dregg2_Games_PathOfAngels_StationDailyRuntime(1);
+        DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_PathOfAngels_StationDailyRuntime);
     if (!lean_io_result_is_ok(poastationres)) {
         lean_io_result_show_error(poastationres);
         lean_dec_ref(poastationres);
@@ -1541,7 +1569,7 @@ int dregg_ffi_init(void) {
      * this one is the daily ritual's only write path, so a cold-start fault here is every crew
      * member's open silently refusing rather than failing loudly. */
     lean_object *poacrateres =
-        initialize_Dregg2_Dregg2_Games_PathOfAngels_StationCrateOpenRuntime(1);
+        DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_PathOfAngels_StationCrateOpenRuntime);
     if (!lean_io_result_is_ok(poacrateres)) {
         lean_io_result_show_error(poacrateres);
         lean_dec_ref(poacrateres);
@@ -1553,7 +1581,7 @@ int dregg_ffi_init(void) {
     /* This module imports NetworkGenesisWire/Emit and therefore has initialized constants; keep
      * both runtime init paths in exact parity. Initialization does not verify the external tuple. */
     lean_object *poagenres =
-        initialize_Dregg2_Dregg2_Games_PathOfAngels_NetworkGenesis(1);
+        DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_PathOfAngels_NetworkGenesis);
     if (!lean_io_result_is_ok(poagenres)) {
         lean_io_result_show_error(poagenres);
         lean_dec_ref(poagenres);
@@ -1567,7 +1595,7 @@ int dregg_ffi_init(void) {
      * scored-run preparation path, so a cold-start fault here is a silent refusal of every
      * scored run rather than a loud one. */
     lean_object *slotderiveres =
-        initialize_Dregg2_Dregg2_Games_PathOfAngels_SlotDeriveRuntime(1);
+        DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_PathOfAngels_SlotDeriveRuntime);
     if (!lean_io_result_is_ok(slotderiveres)) {
         lean_io_result_show_error(slotderiveres);
         lean_dec_ref(slotderiveres);
@@ -1580,7 +1608,7 @@ int dregg_ffi_init(void) {
      * uninitialized closure would answer the first judged guess with a fault, which the
      * session route cannot tell from a semantic refusal. */
     lean_object *signalfeedbackres =
-        initialize_Dregg2_Dregg2_Games_PathOfAngels_SignalFeedbackRuntime(1);
+        DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_PathOfAngels_SignalFeedbackRuntime);
     if (!lean_io_result_is_ok(signalfeedbackres)) {
         lean_io_result_show_error(signalfeedbackres);
         lean_dec_ref(signalfeedbackres);
@@ -1590,7 +1618,7 @@ int dregg_ffi_init(void) {
 #endif
 #ifdef DREGG_POA_DARK_BAZAAR_JUDGE
     lean_object *bazaarres =
-        initialize_Dregg2_Dregg2_Games_PathOfAngels_DarkBazaarJudge(1);
+        DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_PathOfAngels_DarkBazaarJudge);
     if (!lean_io_result_is_ok(bazaarres)) {
         lean_io_result_show_error(bazaarres);
         lean_dec_ref(bazaarres);
@@ -1600,7 +1628,7 @@ int dregg_ffi_init(void) {
 #endif
 #ifdef DREGG_POA_GALLEY_DAILY_JUDGE
     lean_object *galleyres =
-        initialize_Dregg2_Dregg2_Games_PathOfAngels_GalleyMaintenanceDailyRuntime(1);
+        DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_PathOfAngels_GalleyMaintenanceDailyRuntime);
     if (!lean_io_result_is_ok(galleyres)) {
         lean_io_result_show_error(galleyres);
         lean_dec_ref(galleyres);
@@ -1610,7 +1638,7 @@ int dregg_ffi_init(void) {
 #endif
 #ifdef DREGG_POA_NIGHT_WATCH_CAMPAIGN_JUDGE
     lean_object *nightwatchres =
-        initialize_Dregg2_Dregg2_Games_PathOfAngels_NightWatchCampaignWire(1);
+        DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_PathOfAngels_NightWatchCampaignWire);
     if (!lean_io_result_is_ok(nightwatchres)) {
         lean_io_result_show_error(nightwatchres);
         lean_dec_ref(nightwatchres);
@@ -1620,7 +1648,7 @@ int dregg_ffi_init(void) {
 #endif
 #if defined(DREGG_POA_CREW_FIELD_STEP) || defined(DREGG_POA_CREW_FIELD_SEAT_PREIMAGE)
     lean_object *crewfieldres =
-        initialize_Dregg2_Dregg2_Games_PathOfAngels_CrewFieldMissionAdmission(1);
+        DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_PathOfAngels_CrewFieldMissionAdmission);
     if (!lean_io_result_is_ok(crewfieldres)) {
         lean_io_result_show_error(crewfieldres);
         lean_dec_ref(crewfieldres);
@@ -1631,7 +1659,7 @@ int dregg_ffi_init(void) {
 #if defined(DREGG_POA_EVENT_BATCH_RUNTIME_PLAN) || \
     defined(DREGG_POA_EVENT_BATCH_RUNTIME_INITIAL_HEADS_DIGEST)
     lean_object *batchres =
-        initialize_Dregg2_Dregg2_Games_PathOfAngels_EventBatchRuntime(1);
+        DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_PathOfAngels_EventBatchRuntime);
     if (!lean_io_result_is_ok(batchres)) {
         lean_io_result_show_error(batchres);
         lean_dec_ref(batchres);
@@ -1641,7 +1669,7 @@ int dregg_ffi_init(void) {
 #endif
 #if defined(DREGG_POA_WORLD_ACTIVATION_JUDGE) || defined(DREGG_POA_WORLD_ACTIVATION_AUTHORIZES)
     lean_object *worldactivationres =
-        initialize_Dregg2_Dregg2_Games_PathOfAngels_WorldActivation(1);
+        DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_PathOfAngels_WorldActivation);
     if (!lean_io_result_is_ok(worldactivationres)) {
         lean_io_result_show_error(worldactivationres);
         lean_dec_ref(worldactivationres);
@@ -1651,7 +1679,7 @@ int dregg_ffi_init(void) {
 #endif
 #ifdef DREGG_POA_ACTIVATED_CONTENT_AUTHORIZE
     lean_object *activatedcontentres =
-        initialize_Dregg2_Dregg2_Games_PathOfAngels_ActivatedContentRuntime(1);
+        DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_PathOfAngels_ActivatedContentRuntime);
     if (!lean_io_result_is_ok(activatedcontentres)) {
         lean_io_result_show_error(activatedcontentres);
         lean_dec_ref(activatedcontentres);
@@ -1661,7 +1689,7 @@ int dregg_ffi_init(void) {
 #endif
 #ifdef DREGG_POA_BAZAAR_RUNTIME
     lean_object *bazaarpersistres =
-        initialize_Dregg2_Dregg2_Games_PathOfAngels_BazaarGameRuntime(1);
+        DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Games_PathOfAngels_BazaarGameRuntime);
     if (!lean_io_result_is_ok(bazaarpersistres)) {
         lean_io_result_show_error(bazaarpersistres);
         lean_dec_ref(bazaarpersistres);
@@ -1673,7 +1701,6 @@ int dregg_ffi_init(void) {
      * generated C is self-contained (static-const string literals + a lazy once-cell), and calling
      * `initialize_Dregg2_Dregg2_Grain_R3Verify` would drag its Mathlib-tactic import closure's
      * undefined initializer symbols into the link. See the extern-decl note above. */
-    lean_io_mark_end_initialization();
     return 0;
 }
 

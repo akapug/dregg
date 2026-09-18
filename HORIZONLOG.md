@@ -1,5 +1,36 @@
 # HORIZONLOG — the named-follow-up burn-down
 
+## SEPTEMBER 18 — paid resource birth through issued-owner invocation; account handoff
+
+The actual Mini native signed fixture now creates a resource, conserves its Book
+fee, installs initial policy and distinct owner/control grants, reopens SQLite,
+invokes with the newly issued owner grant, and reopens again. Exact retries return
+the original receipt without another charge, including historical replay after the
+original credentials expire. Wrong signer, copied creator coordinates, changed
+payload and noncanonical ingress refuse without mutation. **8056f9b** is pushed.
+This is native fixture evidence, not production hosting, delegation, an on-chain
+payment or whole-system STARK closure.
+
+Mini **a21633c** checkpoints the physical policy installer (focused Lean pass;
+native probe uncompiled/unrun). Ember selected **keep existing grants and check
+new rules**, so separate source revision from grant revocation generation in the
+next coordinated request/authority/consumer migration. Current installation still
+has the old conflated epoch behavior. Checked explicit-delegation and codec drafts
+remain unapplied and are retained with exact source hashes and proof gaps.
+
+Ember selected **cloud/resource-host lifecycle** as the area to offer Wisper. The
+first runtime/export contract remains to be agreed; no contributor assignment or
+contact has been made by the agents. Assortia now holds the substantial feature
+brief, current graph-owned work and portable relationship/source tools.
+
+With the current account approaching its weekly limit, the swarm is converging
+checkpoints. **Resume from [the account handoff](../dregg-assortia/sprints/2026-09-18/account-handoff.md)**
+(or its [GitHub copy](https://github.com/emberian/dregg-assortia/blob/main/sprints/2026-09-18/account-handoff.md)),
+then the current board. It preserves accepted decisions, verified results, exact
+failed/unrun checks, frozen scratch patches and the next integrated user journey.
+The new Bread factory-history and FFI lifecycle changes must not inherit the
+preceding 24-test pass; their current link/runtime status is explicit there.
+
 ## SEPTEMBER 18 — programmable nexus sprint; current coordination lives in assortia
 
 Ember has authorized a broad autonomous sprint toward the September 26 release,

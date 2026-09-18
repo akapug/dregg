@@ -594,6 +594,54 @@ impl Turn {
 // ReversibleHistory — undo_to, the backward dual of replay_to
 // ===========================================================================
 
+/// Exact evidence for a trusted factory deployment at one history boundary.
+/// The supplied registry key is part of `descriptor`; `descriptor_hash` binds
+/// its complete definition using the existing factory commitment. Deployment
+/// remains setup authority, not a kernel-authorized runtime effect.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct FactoryDeployment {
+    pub descriptor: dregg_cell::FactoryDescriptor,
+    pub descriptor_hash: [u8; 32],
+}
+
+impl FactoryDeployment {
+    pub fn new(descriptor: dregg_cell::FactoryDescriptor) -> Self {
+        let descriptor_hash = descriptor.hash();
+        Self {
+            descriptor,
+            descriptor_hash,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.descriptor.hash() != self.descriptor_hash {
+            return Err("factory descriptor differs from its recorded commitment".into());
+        }
+        Ok(())
+    }
+
+    /// A published deployment creates a new registry entry. Identical live
+    /// redeployments are no-ops before publication, never duplicate history.
+    pub fn validate_new(&self, executor: &TurnExecutor) -> Result<(), String> {
+        self.validate()?;
+        if executor
+            .factory_registry
+            .borrow()
+            .get(&self.descriptor.factory_vk)
+            .is_some()
+        {
+            return Err("recorded factory deployment repeats an existing registry key".into());
+        }
+        Ok(())
+    }
+
+    /// Reuse the actual executor's deployment path; no replay evaluator exists.
+    pub fn apply(&self, executor: &mut TurnExecutor) -> Result<[u8; 32], String> {
+        self.validate_new(executor)?;
+        Ok(executor.deploy_factory(self.descriptor.clone()))
+    }
+}
+
 /// One recorded step of reversible history — genesis installs, trusted setup
 /// updates and committed turns, in order. Replaying `0..=k` reconstructs the world at step k; undoing
 /// `k+1..head` reverses back to it. Mirrors starbridge's `replay::RecordedStep`
@@ -610,6 +658,9 @@ pub enum ReversibleStep {
     /// Both images are retained so replay checks the preimage and historical
     /// undo restores it. This is not an authorized runtime effect.
     GenesisUpdate { before: Cell, cell: Cell },
+    /// Factory authority first becomes available here. This setup boundary
+    /// cannot be crossed by a cell-only inverse turn.
+    FactoryDeployment { deployment: Box<FactoryDeployment> },
     /// A turn committed against the embedded executor. Carries the input turn
     /// (so replay RE-EXECUTES it), the receipt, and the canonical post-state
     /// root tooth.
@@ -625,7 +676,10 @@ pub enum ReversibleStep {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReversibleError {
     /// Asked to navigate to a step beyond the recorded history.
-    OutOfRange { step: usize, len: usize },
+    OutOfRange {
+        step: usize,
+        len: usize,
+    },
     /// The reconstructed root did NOT match the recorded tooth — fail-closed
     /// anti-substitution (the backward companion to replay's RootMismatch).
     RootMismatch {
@@ -634,11 +688,24 @@ pub enum ReversibleError {
         want: [u8; 32],
     },
     /// A recorded turn that committed when first run did NOT commit on replay.
-    NondeterministicReplay { step: usize, got: String },
+    NondeterministicReplay {
+        step: usize,
+        got: String,
+    },
     /// A trusted setup replacement was missing its cell or exact preimage.
-    InvalidSetupUpdate { step: usize, reason: String },
+    InvalidSetupUpdate {
+        step: usize,
+        reason: String,
+    },
     /// An atomic birth batch was invalid or collided with an unresolved write.
-    InvalidGenesisBatch { step: usize, reason: String },
+    InvalidGenesisBatch {
+        step: usize,
+        reason: String,
+    },
+    InvalidFactoryDeployment {
+        step: usize,
+        reason: String,
+    },
     /// `undo_to(k)` hit a committed (irreversible) step in `k+1..head` — you
     /// cannot undo *past* a commit. This is the RCCS islands-of-irreversibility
     /// made an API boundary (`FIRST-CLASS-REVERSIBILITY.md` §3.2).
@@ -648,7 +715,10 @@ pub enum ReversibleError {
     },
     /// An inverse turn, though built, was REJECTED by the executor (e.g. the
     /// reversal lacked authority over a gated cell — the consent membrane held).
-    InverseRejected { step: usize, reason: String },
+    InverseRejected {
+        step: usize,
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for ReversibleError {
@@ -668,6 +738,9 @@ impl std::fmt::Display for ReversibleError {
             }
             ReversibleError::InvalidGenesisBatch { step, reason } => {
                 write!(f, "invalid birth batch at step {step}: {reason}")
+            }
+            ReversibleError::InvalidFactoryDeployment { step, reason } => {
+                write!(f, "invalid factory deployment at step {step}: {reason}")
             }
             ReversibleError::IrreversibleStep { step, reason } => write!(
                 f,
@@ -715,7 +788,6 @@ pub struct ReversibleHistory {
     roots: Vec<[u8; 32]>,
     timestamp: i64,
     costs: ComputronCosts,
-    factories: Vec<dregg_cell::FactoryDescriptor>,
 }
 
 impl ReversibleHistory {
@@ -733,24 +805,13 @@ impl ReversibleHistory {
             roots,
             timestamp,
             costs,
-            factories: Vec::new(),
         }
-    }
-
-    /// Retain the same factory registry used to execute the recorded history.
-    /// Deployment chronology remains the source World's setup responsibility.
-    pub fn with_factories(mut self, factories: Vec<dregg_cell::FactoryDescriptor>) -> Self {
-        self.factories = factories;
-        self
     }
 
     /// The recording executor (pinned costs + timestamp), so a recorded turn
     /// re-derives bit-identically on replay/undo.
     pub fn fresh_executor(&self) -> TurnExecutor {
         let mut e = TurnExecutor::new(self.costs.clone());
-        for descriptor in &self.factories {
-            e.deploy_factory(descriptor.clone());
-        }
         let floor = self
             .steps
             .iter()
@@ -787,6 +848,31 @@ impl ReversibleHistory {
     }
 
     // --- recording (mirrors World's genesis + commit paths) -----------------
+
+    pub fn record_factory_deployment(
+        &mut self,
+        executor: &mut TurnExecutor,
+        ledger: &mut Ledger,
+        deployment: FactoryDeployment,
+    ) -> Result<[u8; 32], ReversibleError> {
+        if ledger.has_restore_point() {
+            return Err(ReversibleError::InvalidFactoryDeployment {
+                step: self.steps.len(),
+                reason: "an unresolved ledger restore point is active".into(),
+            });
+        }
+        let vk = deployment.apply(executor).map_err(|reason| {
+            ReversibleError::InvalidFactoryDeployment {
+                step: self.steps.len(),
+                reason,
+            }
+        })?;
+        self.steps.push(Arc::new(ReversibleStep::FactoryDeployment {
+            deployment: Box::new(deployment),
+        }));
+        self.roots.push(ledger.root());
+        Ok(vk)
+    }
 
     /// Record a genesis install. Installs `cell` into `ledger` directly and
     /// appends the step + new root tooth.
@@ -1080,7 +1166,9 @@ impl ReversibleHistory {
         }
         for idx in k..head {
             match self.steps[idx].as_ref() {
-                ReversibleStep::Genesis { .. } | ReversibleStep::GenesisBatch { .. } => {
+                ReversibleStep::Genesis { .. }
+                | ReversibleStep::GenesisBatch { .. }
+                | ReversibleStep::FactoryDeployment { .. } => {
                     return false;
                 }
                 ReversibleStep::GenesisUpdate { .. } => {
@@ -1205,7 +1293,6 @@ impl ReversibleHistory {
             roots: self.roots[..=k].to_vec(),
             timestamp: self.timestamp,
             costs: self.costs.clone(),
-            factories: self.factories.clone(),
         }
     }
 }
@@ -1309,6 +1396,13 @@ fn apply_step(
     index: usize,
 ) -> Result<(), ReversibleError> {
     match step {
+        ReversibleStep::FactoryDeployment { deployment } => deployment
+            .apply(executor)
+            .map(|_| ())
+            .map_err(|reason| ReversibleError::InvalidFactoryDeployment {
+                step: index,
+                reason,
+            }),
         ReversibleStep::Genesis { cell } => {
             ledger.insert_cell(cell.clone()).map_err(|error| {
                 ReversibleError::NondeterministicReplay {

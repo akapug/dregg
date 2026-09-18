@@ -217,7 +217,9 @@ pub fn setup_boundaries(history: &History) -> Vec<SetupBoundary> {
             RecordedStep::Genesis { .. } | RecordedStep::GenesisBatch { .. } => {
                 pending.births = true
             }
-            RecordedStep::GenesisUpdate { .. } => pending.updates = true,
+            RecordedStep::GenesisUpdate { .. } | RecordedStep::FactoryDeployment { .. } => {
+                pending.updates = true
+            }
             RecordedStep::Committed { .. } => {
                 out.push(if out.is_empty() {
                     SetupBoundary::default()

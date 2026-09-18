@@ -82,6 +82,11 @@ pub enum RecordedStep {
     /// A trusted setup replacement at its actual position in history. This is
     /// neither a new cell nor a kernel-authorized/conserving turn.
     GenesisUpdate { cell: Box<Cell> },
+    /// A factory registered at this exact setup boundary, with its full
+    /// descriptor and commitment. It was unavailable in every earlier prefix.
+    FactoryDeployment {
+        deployment: Box<dregg_turn::reversible::FactoryDeployment>,
+    },
     /// A turn committed against the embedded verified executor. Carries the
     /// input turn (so replay RE-EXECUTES it), the real receipt, and the
     /// canonical ledger root tooth recorded immediately after the commit.
@@ -130,7 +135,8 @@ impl RecordedStep {
         match self {
             RecordedStep::Genesis { .. }
             | RecordedStep::GenesisBatch { .. }
-            | RecordedStep::GenesisUpdate { .. } => None,
+            | RecordedStep::GenesisUpdate { .. }
+            | RecordedStep::FactoryDeployment { .. } => None,
             RecordedStep::Committed { post_root, .. } => Some(*post_root),
         }
     }
@@ -150,6 +156,12 @@ impl RecordedStep {
             }
             RecordedStep::GenesisBatch { cells } => {
                 format!("genesis · {} cells", cells.len())
+            }
+            RecordedStep::FactoryDeployment { deployment } => {
+                format!(
+                    "factory deployment · {}",
+                    short(&deployment.descriptor.factory_vk)
+                )
             }
             RecordedStep::Committed { receipt, .. } => format!(
                 "turn · agent {} · {} actions",
@@ -263,7 +275,8 @@ impl History {
                 RecordedStep::Committed { timestamp, .. } => Some(*timestamp),
                 RecordedStep::Genesis { .. }
                 | RecordedStep::GenesisBatch { .. }
-                | RecordedStep::GenesisUpdate { .. } => None,
+                | RecordedStep::GenesisUpdate { .. }
+                | RecordedStep::FactoryDeployment { .. } => None,
             })
             .min()
             .map_or(self.timestamp, |earliest| earliest.min(self.timestamp))
@@ -303,6 +316,30 @@ impl History {
     }
 
     // --- recording (mirrors World's genesis + commit paths) -----------------
+
+    /// Publish a factory into the recorder at the same boundary as the live
+    /// executor. Ledger roots remain unchanged, but factory authority does not.
+    pub fn record_factory_deployment(
+        &mut self,
+        executor: &mut TurnExecutor,
+        ledger: &mut Ledger,
+        deployment: dregg_turn::reversible::FactoryDeployment,
+    ) -> Result<[u8; 32], ReplayError> {
+        if ledger.has_restore_point() {
+            return Err(ReplayError::InvalidFactoryDeployment {
+                reason: "an unresolved ledger restore point is active".into(),
+            });
+        }
+        let vk = deployment
+            .apply(executor)
+            .map_err(|reason| ReplayError::InvalidFactoryDeployment { reason })?;
+        self.steps.push(RecordedStep::FactoryDeployment {
+            deployment: Box::new(deployment),
+        });
+        self.roots.push(ledger.root());
+        self.boundaries.push(project_ledger(ledger));
+        Ok(vk)
+    }
 
     /// Record a genesis install. Installs `cell` into `ledger` directly (the
     /// genesis path) and appends the step + the new canonical root tooth.
@@ -532,7 +569,8 @@ impl History {
                 }
                 RecordedStep::Genesis { .. }
                 | RecordedStep::GenesisBatch { .. }
-                | RecordedStep::GenesisUpdate { .. } => out.push(None),
+                | RecordedStep::GenesisUpdate { .. }
+                | RecordedStep::FactoryDeployment { .. } => out.push(None),
             }
             if self
                 .apply_recorded_step(&mut executor, &mut ledger, index)
@@ -711,6 +749,10 @@ fn apply_step(
     landing: usize,
 ) -> Result<(), ReplayError> {
     match step {
+        RecordedStep::FactoryDeployment { deployment } => deployment
+            .apply(executor)
+            .map(|_| ())
+            .map_err(|reason| ReplayError::InvalidFactoryDeployment { reason }),
         RecordedStep::Genesis { cell } => {
             validate_genesis_births(ledger, std::slice::from_ref(cell.as_ref()))?;
             ledger
@@ -1012,6 +1054,9 @@ pub enum ReplayError {
         cell: CellId,
         reason: String,
     },
+    InvalidFactoryDeployment {
+        reason: String,
+    },
     /// Asked to replay/diff to a step beyond the recorded history.
     OutOfRange {
         step: usize,
@@ -1039,6 +1084,9 @@ impl std::fmt::Display for ReplayError {
         match self {
             ReplayError::InvalidGenesisBatch { reason } => {
                 write!(f, "invalid genesis publication: {reason}")
+            }
+            ReplayError::InvalidFactoryDeployment { reason } => {
+                write!(f, "invalid factory deployment: {reason}")
             }
             ReplayError::InvalidGenesisUpdate { cell, reason } => write!(f, "invalid genesis update of {}: {reason}", short(cell.as_bytes())),
             ReplayError::OutOfRange { step, len } => {

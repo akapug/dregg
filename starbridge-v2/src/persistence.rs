@@ -82,6 +82,11 @@ const SESSION_KEY: &str = "sbv2_session";
 const WORLD_HISTORY_HEAD_KEY: &str = "sbv2_world_history_v1_head";
 const WORLD_HISTORY_STEP_PREFIX: &str = "sbv2_world_history_v1_step:";
 const WORLD_CHECKPOINT_KEY: &str = "sbv2_world_history_v1_checkpoint";
+// Keep the discovery keys so an older image is detected, never reset. Version 1
+// did not record factory setup at all; even an unused deployment is unknowable
+// from its ledger. It therefore requires explicit migration with external
+// evidence rather than inferring an empty historic factory registry.
+const WORLD_HISTORY_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct WorldHistoryHead {
@@ -93,9 +98,18 @@ struct WorldHistoryHead {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 enum WorldOperation {
-    GenesisBirth { cells: Vec<Cell> },
-    GenesisUpdate { cell: Box<Cell> },
-    Turn { ordinal: u64 },
+    GenesisBirth {
+        cells: Vec<Cell>,
+    },
+    GenesisUpdate {
+        cell: Box<Cell>,
+    },
+    Turn {
+        ordinal: u64,
+    },
+    FactoryDeployment {
+        deployment: Box<dregg_turn::reversible::FactoryDeployment>,
+    },
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -317,6 +331,10 @@ pub enum RecoveredStep {
         receipt_hash: [u8; 32],
         post_root: [u8; 32],
     },
+    FactoryDeployment {
+        deployment: Box<dregg_turn::reversible::FactoryDeployment>,
+        post_root: [u8; 32],
+    },
 }
 
 impl WorldPersist {
@@ -329,9 +347,9 @@ impl WorldPersist {
             Some(bytes) => {
                 let head: WorldHistoryHead = postcard::from_bytes(&bytes)
                     .map_err(|error| StoreError::Serialization(error.to_string()))?;
-                if head.version != 1 {
+                if head.version != WORLD_HISTORY_VERSION {
                     return Err(OpenError::UnsupportedHistory {
-                        reason: format!("World history version {} is unsupported", head.version),
+                        reason: format!("World history version {} lacks supported factory chronology; preserve it for explicit migration", head.version),
                     });
                 }
                 head
@@ -346,7 +364,7 @@ impl WorldPersist {
                         "legacy World image has no ordered birth/update history; preserve it for explicit migration".to_string() });
                 }
                 let head = WorldHistoryHead {
-                    version: 1,
+                    version: WORLD_HISTORY_VERSION,
                     next_step: 0,
                     turns: 0,
                     root: canonical_ledger_root(&Ledger::new()),
@@ -537,7 +555,7 @@ impl WorldPersist {
             .checked_add(1)
             .ok_or_else(|| history_integrity("World history cursor overflow"))?;
         let head = WorldHistoryHead {
-            version: 1,
+            version: WORLD_HISTORY_VERSION,
             next_step,
             turns,
             root: post_root,
@@ -553,6 +571,46 @@ impl WorldPersist {
             (WORLD_HISTORY_HEAD_KEY.to_string(), encode(&head)?),
         ];
         Ok((head, blobs))
+    }
+
+    /// Atomically publish setup authority at its actual history boundary. The
+    /// caller checks registry freshness before this write and installs into RAM
+    /// only after it succeeds. No turn cursor or ledger byte changes here.
+    pub(crate) fn record_factory_deployment(
+        &mut self,
+        deployment: &dregg_turn::reversible::FactoryDeployment,
+        ledger: &Ledger,
+    ) -> Result<(), StoreError> {
+        deployment.validate().map_err(history_integrity)?;
+        let root = canonical_ledger_root(ledger);
+        if root != self.history_head.root {
+            return Err(history_integrity(
+                "factory deployment ledger differs from durable history",
+            ));
+        }
+        let (head, blobs) = self.plan_history_step(
+            WorldOperation::FactoryDeployment {
+                deployment: Box::new(deployment.clone()),
+            },
+            root,
+            self.cursor,
+        )?;
+        let entries: Vec<(&str, &[u8])> = blobs
+            .iter()
+            .map(|(key, bytes)| (key.as_str(), bytes.as_slice()))
+            .collect();
+        self.store.set_config_batch(&entries)?;
+        #[cfg(test)]
+        if self
+            .fail_genesis_response
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(StoreError::Database(
+                "factory deployment response failure after commit injected".into(),
+            ));
+        }
+        self.history_head = head;
+        Ok(())
     }
 
     fn record_genesis_operation(
@@ -860,6 +918,7 @@ impl WorldPersist {
         let mut ledger = Ledger::new();
         let mut steps = Vec::new();
         let mut turns = 0u64;
+        let mut deployed_keys = std::collections::BTreeSet::new();
         let mut root = canonical_ledger_root(&ledger);
         if let Some(cp) = checkpoint.as_ref().filter(|cp| cp.next_step == 0) {
             verify_world_checkpoint(cp, &ledger, 0)?;
@@ -880,6 +939,19 @@ impl WorldPersist {
                 .into());
             }
             let recovered = match step.operation {
+                WorldOperation::FactoryDeployment { deployment } => {
+                    deployment.validate().map_err(history_integrity)?;
+                    if !deployed_keys.insert(deployment.descriptor.factory_vk) {
+                        return Err(history_integrity(format!(
+                            "duplicate factory deployment at step {index}"
+                        ))
+                        .into());
+                    }
+                    RecoveredStep::FactoryDeployment {
+                        deployment,
+                        post_root: step.post_root,
+                    }
+                }
                 WorldOperation::GenesisBirth { cells } => {
                     if cells.is_empty() {
                         return Err(history_integrity("empty genesis birth record").into());
@@ -1088,6 +1160,140 @@ mod tests {
     }
 
     const TS: i64 = 1_700_000_000;
+
+    fn factory_descriptor(key: u8) -> dregg_cell::FactoryDescriptor {
+        dregg_cell::FactoryDescriptor {
+            factory_vk: [key; 32],
+            child_program_vk: None,
+            child_vk_strategy: None,
+            allowed_cap_templates: vec![],
+            field_constraints: vec![],
+            state_constraints: vec![],
+            default_mode: dregg_cell::CellMode::Hosted,
+            creation_budget: Some(2),
+        }
+    }
+
+    #[test]
+    fn factory_chronology_corrupt_or_duplicate_deployment_refuses_without_tail_repair() {
+        for corruption in 0..3 {
+            let path = scratch_path();
+            make_durable_image(&path);
+            let mut world = World::open_with_timestamp(&path, ComputronCosts::zero(), TS).unwrap();
+            let deployment_step = world.recorded_turns().len() as u64;
+            world.try_deploy_factory(factory_descriptor(0xD1)).unwrap();
+            world.try_deploy_factory(factory_descriptor(0xD2)).unwrap();
+            drop(world);
+            let store = PersistentStore::open(&path).unwrap();
+            let first_bytes = store
+                .get_config(&history_step_key(deployment_step))
+                .unwrap()
+                .unwrap();
+            let mut first: WorldHistoryStep = postcard::from_bytes(&first_bytes).unwrap();
+            if corruption == 2 {
+                // A second publication of the same complete descriptor is not
+                // an idempotent live call: the journal itself is malformed.
+                first.index += 1;
+                store
+                    .set_config(&history_step_key(first.index), &encode(&first).unwrap())
+                    .unwrap();
+            } else {
+                let WorldOperation::FactoryDeployment { deployment } = &mut first.operation else {
+                    panic!("factory step was not recorded");
+                };
+                if corruption == 0 {
+                    deployment.descriptor.creation_budget = Some(999);
+                } else {
+                    deployment.descriptor.factory_vk = [0xDD; 32];
+                }
+                store
+                    .set_config(&history_step_key(deployment_step), &encode(&first).unwrap())
+                    .unwrap();
+            }
+            append_unpublished_tail(&store);
+            let cursor = store.commit_cursor().unwrap();
+            let head_bytes = store.get_config(WORLD_HISTORY_HEAD_KEY).unwrap().unwrap();
+            let head: WorldHistoryHead = postcard::from_bytes(&head_bytes).unwrap();
+            let published: Vec<_> = (0..head.next_step)
+                .map(|i| store.get_config(&history_step_key(i)).unwrap().unwrap())
+                .collect();
+            let tail = encode(&store.commit_record_at(cursor - 1).unwrap().unwrap()).unwrap();
+            drop(store);
+            assert!(
+                World::open_recovering_with_timestamp(&path, ComputronCosts::zero(), TS).is_err()
+            );
+            let store = PersistentStore::open(&path).unwrap();
+            assert_eq!(store.commit_cursor().unwrap(), cursor);
+            assert_eq!(
+                store.get_config(WORLD_HISTORY_HEAD_KEY).unwrap(),
+                Some(head_bytes)
+            );
+            for (i, bytes) in published.iter().enumerate() {
+                assert_eq!(
+                    store
+                        .get_config(&history_step_key(i as u64))
+                        .unwrap()
+                        .as_ref(),
+                    Some(bytes)
+                );
+            }
+            assert_eq!(
+                encode(&store.commit_record_at(cursor - 1).unwrap().unwrap()).unwrap(),
+                tail
+            );
+            drop(store);
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[test]
+    fn factory_chronology_v1_requires_explicit_migration_without_reset() {
+        let path = scratch_path();
+        make_durable_image(&path); // An ordinary ledger with no factory turns.
+        let store = PersistentStore::open(&path).unwrap();
+        let mut head: WorldHistoryHead =
+            postcard::from_bytes(&store.get_config(WORLD_HISTORY_HEAD_KEY).unwrap().unwrap())
+                .unwrap();
+        // The v1 head/step encodings are a prefix of this format. That format
+        // cannot distinguish no factory setup from a silently lost unused one.
+        head.version = 1;
+        let head_bytes = encode(&head).unwrap();
+        store
+            .set_config(WORLD_HISTORY_HEAD_KEY, &head_bytes)
+            .unwrap();
+        let published: Vec<_> = (0..head.next_step)
+            .map(|i| store.get_config(&history_step_key(i)).unwrap().unwrap())
+            .collect();
+        let checkpoint = store.get_config(WORLD_CHECKPOINT_KEY).unwrap();
+        let cursor = store.commit_cursor().unwrap();
+        drop(store);
+        assert!(matches!(
+            World::open_with_timestamp(&path, ComputronCosts::zero(), TS),
+            Err(OpenError::UnsupportedHistory { .. })
+        ));
+        assert!(matches!(
+            World::open_recovering_with_timestamp(&path, ComputronCosts::zero(), TS),
+            Err(OpenError::UnsupportedHistory { .. })
+        ));
+        let store = PersistentStore::open(&path).unwrap();
+        assert_eq!(
+            store.get_config(WORLD_HISTORY_HEAD_KEY).unwrap(),
+            Some(head_bytes)
+        );
+        assert_eq!(store.commit_cursor().unwrap(), cursor);
+        assert_eq!(store.get_config(WORLD_CHECKPOINT_KEY).unwrap(), checkpoint);
+        for (i, bytes) in published.iter().enumerate() {
+            assert_eq!(
+                store
+                    .get_config(&history_step_key(i as u64))
+                    .unwrap()
+                    .as_ref(),
+                Some(bytes)
+            );
+        }
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
 
     fn append_unpublished_tail(store: &PersistentStore) {
         let cursor = store.commit_cursor().unwrap();
