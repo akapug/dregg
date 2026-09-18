@@ -343,9 +343,9 @@ impl History {
 
     /// Record an existing-cell setup update without rewriting any earlier step.
     pub fn record_genesis_update(&mut self, ledger: &mut Ledger, cell: Cell) {
-        *ledger
-            .get_mut(&cell.id())
-            .expect("genesis update requires an existing cell") = cell.clone();
+        ledger
+            .replace_cell(cell.clone())
+            .expect("genesis update requires the same existing identity");
         self.steps.push(RecordedStep::GenesisUpdate {
             cell: Box::new(cell),
         });
@@ -734,10 +734,12 @@ fn apply_step(
         }
         RecordedStep::GenesisUpdate { cell } => {
             let id = cell.id();
-            let existing = ledger
-                .get_mut(&id)
-                .ok_or(ReplayError::MissingGenesisCell { cell: id })?;
-            *existing = *cell.clone();
+            ledger.replace_cell(*cell.clone()).map_err(|error| {
+                ReplayError::InvalidGenesisUpdate {
+                    cell: id,
+                    reason: error.to_string(),
+                }
+            })?;
             Ok(())
         }
         RecordedStep::Committed {
@@ -1006,8 +1008,9 @@ pub enum ReplayError {
     InvalidGenesisBatch {
         reason: String,
     },
-    MissingGenesisCell {
+    InvalidGenesisUpdate {
         cell: CellId,
+        reason: String,
     },
     /// Asked to replay/diff to a step beyond the recorded history.
     OutOfRange {
@@ -1037,7 +1040,7 @@ impl std::fmt::Display for ReplayError {
             ReplayError::InvalidGenesisBatch { reason } => {
                 write!(f, "invalid genesis publication: {reason}")
             }
-            ReplayError::MissingGenesisCell { cell } => write!(f, "genesis update refers to absent cell {}", short(cell.as_bytes())),
+            ReplayError::InvalidGenesisUpdate { cell, reason } => write!(f, "invalid genesis update of {}: {reason}", short(cell.as_bytes())),
             ReplayError::OutOfRange { step, len } => {
                 write!(f, "replay step {step} out of range (history len {len})")
             }

@@ -322,9 +322,17 @@ impl TimeCockpitModel {
 /// exact order. Original costs, factories and per-turn clocks are reused, and
 /// every receipt and boundary must match before this mirror is returned.
 pub fn reversible_mirror(world: &World) -> Result<ReversibleHistory, BranchError> {
+    reversible_mirror_steps(world, world.recorded_turns().steps())
+}
+
+// Roots and execution configuration remain bound to `world`; accepting a step
+// slice lets tests corrupt copied evidence without mutating the live history.
+fn reversible_mirror_steps(
+    world: &World,
+    steps: &[RecordedStep],
+) -> Result<ReversibleHistory, BranchError> {
     let history: &History = world.recorded_turns();
-    let floor = history
-        .steps()
+    let floor = steps
         .iter()
         .filter_map(|step| match step {
             RecordedStep::Committed { timestamp, .. } => Some(*timestamp),
@@ -337,7 +345,7 @@ pub fn reversible_mirror(world: &World) -> Result<ReversibleHistory, BranchError
         .with_factories(world.replay_factories().to_vec());
     let mut ledger = Ledger::new();
     let mut ex = rh.fresh_executor();
-    for (index, step) in history.steps().iter().enumerate() {
+    for (index, step) in steps.iter().enumerate() {
         match step {
             RecordedStep::Genesis { cell } => {
                 if ledger.contains(&cell.id()) {
@@ -372,8 +380,14 @@ pub fn reversible_mirror(world: &World) -> Result<ReversibleHistory, BranchError
                 turn,
                 receipt,
                 timestamp,
-                ..
+                post_root,
             } => {
+                if *timestamp != receipt.timestamp {
+                    return Err(BranchError::ReplayRefused {
+                        step: index,
+                        reason: "recorded timestamp differs from receipt".to_string(),
+                    });
+                }
                 if turn.previous_receipt_hash != ex.get_last_receipt_hash(&turn.agent) {
                     return Err(BranchError::ReplayRefused {
                         step: index,
@@ -391,6 +405,12 @@ pub fn reversible_mirror(world: &World) -> Result<ReversibleHistory, BranchError
                     return Err(BranchError::ReplayRefused {
                         step: index,
                         reason: "recorded receipt differs".to_string(),
+                    });
+                }
+                if ledger.root() != *post_root {
+                    return Err(BranchError::ReplayRefused {
+                        step: index,
+                        reason: "embedded post-state root differs".to_string(),
                     });
                 }
             }
@@ -543,7 +563,7 @@ impl TimeBranch {
                 ReversibleStep::GenesisUpdate { before, cell } => {
                     let current =
                         working
-                            .get_mut(&cell.id())
+                            .get(&cell.id())
                             .ok_or_else(|| BranchError::ReplayRefused {
                                 step: index,
                                 reason: "setup replacement cell is absent".to_string(),
@@ -554,7 +574,12 @@ impl TimeBranch {
                             reason: "setup preimage differs".to_string(),
                         });
                     }
-                    *current = cell.clone();
+                    working.replace_cell(cell.clone()).map_err(|error| {
+                        BranchError::ReplayRefused {
+                            step: index,
+                            reason: error.to_string(),
+                        }
+                    })?;
                 }
                 ReversibleStep::Committed { turn, receipt, .. } => {
                     ex.set_timestamp(receipt.timestamp);
@@ -697,6 +722,51 @@ mod tests {
             assert!(w.commit_turn(t).is_committed());
         }
         (w, treasury, sink)
+    }
+
+    #[test]
+    fn reversible_mirror_refuses_corrupt_clock_and_embedded_root_evidence() {
+        let (world, _, _) = fixture();
+        let source_root = world.state_root();
+        let recorded = world.recorded_turns().steps().to_vec();
+        let second_turn = recorded
+            .iter()
+            .enumerate()
+            .filter_map(|(index, step)| {
+                matches!(step, RecordedStep::Committed { .. }).then_some(index)
+            })
+            .nth(1)
+            .expect("fixture has a second turn");
+
+        let mut bad_clock = recorded.clone();
+        let RecordedStep::Committed {
+            timestamp, receipt, ..
+        } = &mut bad_clock[second_turn]
+        else {
+            unreachable!("selected a committed step");
+        };
+        // A backward clock update is ignored by the executor. Without checking
+        // the stored field itself, the original receipt can still reproduce.
+        *timestamp = receipt.timestamp.saturating_sub(1);
+        assert!(matches!(reversible_mirror_steps(&world, &bad_clock),
+            Err(BranchError::ReplayRefused { step, reason })
+                if step == second_turn && reason == "recorded timestamp differs from receipt"));
+
+        let mut bad_root = recorded;
+        let RecordedStep::Committed { post_root, .. } = &mut bad_root[second_turn] else {
+            unreachable!("selected a committed step");
+        };
+        post_root[0] ^= 1;
+        assert!(matches!(reversible_mirror_steps(&world, &bad_root),
+            Err(BranchError::ReplayRefused { step, reason })
+                if step == second_turn && reason == "embedded post-state root differs"));
+
+        assert!(reversible_mirror(&world).is_ok());
+        assert_eq!(
+            world.state_root(),
+            source_root,
+            "copied corruptions never modify the live source"
+        );
     }
 
     #[test]

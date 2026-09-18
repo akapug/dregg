@@ -1252,17 +1252,27 @@ impl World {
     fn commit_genesis_update(&mut self, cell: Cell) -> Result<(), String> {
         self.mutation_guard()?;
         let id = cell.id();
+        let existing = self
+            .engine
+            .ledger()
+            .get(&id)
+            .ok_or_else(|| format!("setup replacement cell {} is absent", short(&id)))?;
+        if existing.public_key() != cell.public_key() || existing.token_id() != cell.token_id() {
+            return Err(format!(
+                "setup replacement changes identity of {}",
+                short(&id)
+            ));
+        }
         if let Some(p) = self.persist.as_mut() {
             if let Err(error) = p.record_genesis(&cell, self.engine.ledger()) {
                 return Err(self.latch_durability_failure(error));
             }
         }
         self.ensure_record_ledger();
-        *self
-            .engine
+        self.engine
             .ledger_mut()
-            .get_mut(&id)
-            .expect("a staged genesis update retains its existing cell") = cell.clone();
+            .replace_cell(cell.clone())
+            .expect("a staged genesis update retains its existing identity");
         self.history
             .record_genesis_update(&mut self.record_ledger, cell);
         self.state_root_memo.set(None);
@@ -3679,7 +3689,11 @@ mod tests {
         );
         assert_eq!(reopened.history.len() + 1, roots.len());
         for step in 0..roots.len() {
-            assert_eq!(reopened.history.root_at(step), Some(roots[step]));
+            assert_eq!(
+                reopened.history.root_at(step),
+                Some(roots[step]),
+                "ordered history boundary {step} after reopen"
+            );
             assert_eq!(
                 reopened.history.replay_to(step).unwrap().root(),
                 roots[step]

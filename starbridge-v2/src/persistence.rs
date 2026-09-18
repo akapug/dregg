@@ -1145,11 +1145,13 @@ mod tests {
             .capabilities
             .holds_unfrozen_ref_to(&b));
         for (step, expected) in roots.iter().enumerate() {
-            assert_eq!(reopened.recorded_turns().root_at(step), Some(*expected));
             assert_eq!(
-                reopened.replay_to_step(step).unwrap().ledger().root(),
-                *expected
+                reopened.recorded_turns().root_at(step),
+                Some(*expected),
+                "ordered history boundary {step} after reopen"
             );
+            let mut replayed = reopened.replay_to_step(step).unwrap().ledger().clone();
+            assert_eq!(replayed.root(), *expected);
         }
         drop(reopened);
         let store = PersistentStore::open(&path).unwrap();

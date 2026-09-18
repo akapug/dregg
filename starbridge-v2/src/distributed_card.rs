@@ -294,7 +294,7 @@ mod tests {
     use deos_js::coauthored_card::drive_view;
     use deos_js::ViewPatch;
 
-    /// The authoring authority the shared card requires (the broadest — `None`).
+    /// The held root authority used by authorized contributors.
     fn authority() -> AuthRequired {
         AuthRequired::None
     }
@@ -308,10 +308,10 @@ mod tests {
     /// SEALS the driven fork to envelope bytes + the claimed root (the card crossing
     /// the boundary). Returns `(bytes, root)`.
     fn originate(patch_a: ViewPatch) -> (Vec<u8>, [u8; 32]) {
-        let card = SharedCard::seed(authority());
+        let card = SharedCard::seed(Requirement::Root);
         let mut a = card.fork_for(ALICE, authority());
         drive_view(&mut a, patch_a).expect("A authorized to author the card");
-        seal_fork(&card, &a, authority())
+        seal_fork(&card, &a, Requirement::Root)
     }
 
     #[test]
@@ -407,8 +407,8 @@ mod tests {
 
     #[test]
     fn an_unauthorized_distributed_driver_contributes_no_patch_the_cap_tooth() {
-        // A holds the required (broadest `None`) authority and drives a relabel; carry.
-        let card = SharedCard::seed(AuthRequired::None);
+        // The card requires root authority; A holds the lattice top (`None`).
+        let card = SharedCard::seed(Requirement::Root);
         let mut a = card.fork_for(ALICE, AuthRequired::None);
         drive_view(
             &mut a,
@@ -418,11 +418,10 @@ mod tests {
             },
         )
         .expect("A holds the authoring authority");
-        let (bytes, root) = seal_fork(&card, &a, AuthRequired::None);
+        let (bytes, root) = seal_fork(&card, &a, Requirement::Root);
 
-        // B (another instance) opens + rehydrates a fork bounded by only the STRICTER
-        // `Signature` authority — which does NOT satisfy the card's `None` authoring
-        // cap, so every edit B attempts is refused in-band (no patch, no receipt).
+        // B holds only Signature, which does not satisfy the card's Root demand.
+        // Its edits are refused in-band without a patch or receipt.
         let env_a = open_envelope(&bytes, root).expect("genuine envelope opens");
         let (b_card, mut b_fork) = rehydrate_fork(&env_a, root, BOB, AuthRequired::Signature)
             .expect("B can take the fork (the refusal is per-edit, in-band)");
@@ -518,7 +517,7 @@ mod tests {
         // The string-only path ([`stitch_envelopes`]) and the live-fork path
         // ([`stitch_with_fork`]) agree: both are the SAME `dregg_doc` pushout. A drives
         // a relabel; B drives a disjoint button. Carry BOTH as envelopes and stitch.
-        let card_a = SharedCard::seed(authority());
+        let card_a = SharedCard::seed(Requirement::Root);
         let mut a = card_a.fork_for(ALICE, authority());
         drive_view(
             &mut a,
@@ -528,7 +527,7 @@ mod tests {
             },
         )
         .expect("A authorized");
-        let (a_bytes, a_root) = seal_fork(&card_a, &a, authority());
+        let (a_bytes, a_root) = seal_fork(&card_a, &a, Requirement::Root);
         let env_a = open_envelope(&a_bytes, a_root).unwrap();
 
         // B rehydrates from A's envelope, drives a disjoint button, then seals ITS fork.
@@ -542,7 +541,7 @@ mod tests {
             },
         )
         .expect("B authorized");
-        let (b_bytes, b_root) = seal_fork(&b_card, &b_fork, authority());
+        let (b_bytes, b_root) = seal_fork(&b_card, &b_fork, Requirement::Root);
         let env_b = open_envelope(&b_bytes, b_root).unwrap();
 
         // Both stitch routes keep both edits, no conflict.

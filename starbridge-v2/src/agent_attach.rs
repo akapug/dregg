@@ -606,7 +606,10 @@ mod tests {
         let [_treasury, _service, user] = anchors;
         let agent = user;
         let held = AuthRequired::Signature;
-        let affordances = vec![("bump".to_string(), AuthRequired::Signature)];
+        let affordances = vec![(
+            "bump".to_string(),
+            Requirement::AtLeast(dregg_cell::Credential::Signature),
+        )];
 
         let live = Rc::new(RefCell::new(world));
         let mut applet = attach_agent(

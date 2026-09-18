@@ -643,6 +643,37 @@ impl Ledger {
         result
     }
 
+    /// Replace an existing cell's image without changing its immutable identity.
+    /// Returns the prior image and participates in an active restore point.
+    ///
+    /// A changed clone can still carry the original cell's cached leaf digest.
+    /// Assigning it through `get_mut` would invalidate the outgoing cell, then
+    /// install that stale incoming cache. Invalidate the incoming image itself
+    /// and mark this leaf dirty before publishing the replacement. This keeps
+    /// `root()` equal to a fresh fold of the replacement's actual contents.
+    ///
+    /// The cell stays at its existing leaf position. Public-key routing,
+    /// sovereignty, migration locks, and witness subscriptions are preserved;
+    /// this is not a remove/insert or an authority decision. The caller must
+    /// already be entitled to perform the replacement.
+    pub fn replace_cell(&mut self, cell: Cell) -> Result<Cell, LedgerError> {
+        let id = cell.id();
+        let current = self.cells.get(&id).ok_or(LedgerError::CellNotFound(id))?;
+        if current.public_key() != cell.public_key() || current.token_id() != cell.token_id() {
+            return Err(LedgerError::InvalidDelta(format!(
+                "replacement of {id} changes its immutable identity"
+            )));
+        }
+        self.journal_cell(&id);
+        cell.invalidate_leaf_cache();
+        let before = std::mem::replace(
+            self.cells.get_mut(&id).expect("replacement cell was found"),
+            cell,
+        );
+        self.pending.touch_value(id);
+        Ok(before)
+    }
+
     /// Apply a closure to a cell with automatic dirty-marking and identity-
     /// integrity checking.
     ///
@@ -2045,5 +2076,146 @@ impl SovereignHistory {
     /// Returns true if this history has a compressed IVC proof attached.
     pub fn has_ivc_proof(&self) -> bool {
         self.ivc_proof.is_some()
+    }
+}
+
+#[cfg(test)]
+mod replacement_tests {
+    use super::*;
+
+    #[test]
+    fn replacement_of_changed_warm_clones_matches_fresh_roots_and_decoded_images() {
+        let mut ledger = Ledger::new();
+        let id = ledger
+            .insert_cell(Cell::with_balance([0x61; 32], [0; 32], 100))
+            .unwrap();
+        ledger
+            .insert_cell(Cell::with_balance([0x62; 32], [0; 32], 0))
+            .unwrap();
+        let mut previous_root = ledger.root();
+        for change in 0..3 {
+            // Clone AFTER materializing: this incoming cell has a real cached
+            // old leaf, even though its public fields are about to change.
+            let mut incoming = ledger.get(&id).unwrap().clone();
+            let before = incoming.clone();
+            match change {
+                0 => incoming.program = crate::CellProgram::Predicate(vec![]),
+                1 => {
+                    incoming
+                        .capabilities
+                        .grant(CellId([0x63; 32]), crate::AuthRequired::None)
+                        .unwrap();
+                }
+                _ => {
+                    assert!(incoming.state.set_heap(1, 0, [7; 32]));
+                }
+            }
+            assert_ne!(incoming.state_commitment(), before.state_commitment());
+            assert_eq!(ledger.replace_cell(incoming).unwrap(), before);
+            let root = ledger.root();
+            assert_ne!(
+                root, previous_root,
+                "replacement {change} changes committed content"
+            );
+            assert_eq!(root, ledger.recompute_root_standalone());
+
+            // Serialization drops derived caches, just as a durable reopen does.
+            // The live history must commit to the same bytes before that reset.
+            let mut decoded = Ledger::new();
+            for (_, cell) in ledger.iter() {
+                let bytes = postcard::to_allocvec(cell).unwrap();
+                let fresh: Cell = postcard::from_bytes(&bytes).unwrap();
+                decoded.insert_cell(fresh).unwrap();
+            }
+            assert_eq!(
+                root,
+                decoded.root(),
+                "replacement {change} survives cache reset"
+            );
+            previous_root = root;
+        }
+    }
+
+    #[test]
+    fn replacement_preserves_auxiliary_state_and_the_restore_point() {
+        let mut ledger = Ledger::new();
+        // Two identities share a public key. Replacing the first must not move
+        // it behind the second in the reverse index, as remove/reinsert would.
+        let id = ledger
+            .insert_cell(Cell::with_balance([0x64; 32], [1; 32], 100))
+            .unwrap();
+        ledger
+            .insert_cell(Cell::with_balance([0x64; 32], [2; 32], 200))
+            .unwrap();
+        ledger
+            .register_sovereign_cell(CellId([0x65; 32]), [3; 32])
+            .unwrap();
+        ledger
+            .register_sovereign_cell_ephemeral(CellId([0x66; 32]), [4; 32], 5, 100)
+            .unwrap();
+        ledger.sovereign_witness_sequence.insert(id, 17);
+        ledger
+            .migrate_prepare(&id, [5; 32], [6; 32], crate::CellMode::Hosted, 7)
+            .unwrap();
+        let witness = ledger.subscribe_witness_updates(id);
+        let root = ledger.root();
+        let original = ledger.get(&id).unwrap().clone();
+        let positions = ledger.leaf_positions.clone();
+        let routing = ledger.pubkey_index.clone();
+        let commitments = ledger.sovereign_commitments.clone();
+        let registrations = ledger.sovereign_registrations.clone();
+        let sequences = ledger.sovereign_witness_sequence.clone();
+        let locks = ledger.migration_locks.clone();
+
+        ledger.begin_restore_point();
+        let mut incoming = original.clone();
+        incoming.state.set_balance(300);
+        assert_eq!(ledger.replace_cell(incoming).unwrap(), original);
+        assert!(matches!(&ledger.pending, Pending::Values(ids) if ids.contains(&id)));
+        assert_eq!(ledger.leaf_positions, positions);
+        assert_eq!(ledger.pubkey_index, routing);
+        assert_eq!(ledger.sovereign_commitments, commitments);
+        assert_eq!(ledger.sovereign_registrations, registrations);
+        assert_eq!(ledger.sovereign_witness_sequence, sequences);
+        assert_eq!(ledger.migration_locks, locks);
+        let changed_root = ledger.root();
+        assert_ne!(changed_root, root);
+        ledger.notify_witness_subscribers();
+        assert_eq!(witness.try_recv().unwrap().new_root, changed_root);
+
+        ledger.rollback_restore_point();
+        assert_eq!(ledger.root(), root);
+        assert_eq!(ledger.get(&id), Some(&original));
+        assert_eq!(ledger.sovereign_commitments, commitments);
+        assert_eq!(ledger.sovereign_registrations, registrations);
+        assert_eq!(ledger.sovereign_witness_sequence, sequences);
+        assert_eq!(ledger.migration_locks, locks);
+    }
+
+    #[test]
+    fn replacement_refuses_missing_or_changed_identity_without_mutation() {
+        let mut ledger = Ledger::new();
+        let id = ledger
+            .insert_cell(Cell::with_balance([0x67; 32], [0; 32], 100))
+            .unwrap();
+        let root = ledger.root();
+        let original = ledger.get(&id).unwrap().clone();
+        let routing = ledger.pubkey_index.clone();
+        ledger.begin_restore_point();
+        let mut foreign = original.clone();
+        foreign.public_key = [0x68; 32];
+        assert!(matches!(
+            ledger.replace_cell(foreign),
+            Err(LedgerError::InvalidDelta(_))
+        ));
+        assert!(matches!(
+            ledger.replace_cell(Cell::with_balance([0x69; 32], [0; 32], 0)),
+            Err(LedgerError::CellNotFound(_))
+        ));
+        assert_eq!(ledger.root(), root);
+        assert_eq!(ledger.get(&id), Some(&original));
+        assert_eq!(ledger.pubkey_index, routing);
+        assert!(ledger.restore_point.as_ref().unwrap().cells.is_empty());
+        ledger.rollback_restore_point();
     }
 }

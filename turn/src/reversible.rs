@@ -832,15 +832,12 @@ impl ReversibleHistory {
         cell: Cell,
     ) -> Result<(), ReversibleError> {
         let step = self.steps.len();
-        let current =
-            ledger
-                .get_mut(&cell.id())
-                .ok_or_else(|| ReversibleError::InvalidSetupUpdate {
-                    step,
-                    reason: "replacement requires an existing cell".to_string(),
-                })?;
-        let before = current.clone();
-        *current = cell.clone();
+        let before = ledger.replace_cell(cell.clone()).map_err(|error| {
+            ReversibleError::InvalidSetupUpdate {
+                step,
+                reason: error.to_string(),
+            }
+        })?;
         self.steps
             .push(Arc::new(ReversibleStep::GenesisUpdate { before, cell }));
         self.roots.push(ledger.root());
@@ -966,12 +963,13 @@ impl ReversibleHistory {
         for idx in (k..head).rev() {
             let step = self.steps[idx].as_ref();
             if let ReversibleStep::GenesisUpdate { before, cell } = step {
-                let current = ledger.get_mut(&cell.id()).ok_or_else(|| {
-                    ReversibleError::InvalidSetupUpdate {
-                        step: idx,
-                        reason: "undo replacement cell is absent".to_string(),
-                    }
-                })?;
+                let current =
+                    ledger
+                        .get(&cell.id())
+                        .ok_or_else(|| ReversibleError::InvalidSetupUpdate {
+                            step: idx,
+                            reason: "undo replacement cell is absent".to_string(),
+                        })?;
                 // Later inverse turns may have advanced the nonce. Restore the
                 // complete prior image while retaining that freshness ratchet.
                 let nonce = current.state.nonce();
@@ -984,8 +982,14 @@ impl ReversibleHistory {
                             .to_string(),
                     });
                 }
-                *current = before.clone();
-                current.state.set_nonce(nonce.max(before.state.nonce()));
+                let mut restored = before.clone();
+                restored.state.set_nonce(nonce.max(before.state.nonce()));
+                ledger.replace_cell(restored).map_err(|error| {
+                    ReversibleError::InvalidSetupUpdate {
+                        step: idx,
+                        reason: error.to_string(),
+                    }
+                })?;
                 continue;
             }
             let ReversibleStep::Committed { turn, .. } = step else {
@@ -1327,7 +1331,7 @@ fn apply_step(
         ReversibleStep::GenesisUpdate { before, cell } => {
             let current =
                 ledger
-                    .get_mut(&cell.id())
+                    .get(&cell.id())
                     .ok_or_else(|| ReversibleError::InvalidSetupUpdate {
                         step: index,
                         reason: "replacement cell is absent".to_string(),
@@ -1338,7 +1342,12 @@ fn apply_step(
                     reason: "replacement preimage does not match".to_string(),
                 });
             }
-            *current = cell.clone();
+            ledger.replace_cell(cell.clone()).map_err(|error| {
+                ReversibleError::InvalidSetupUpdate {
+                    step: index,
+                    reason: error.to_string(),
+                }
+            })?;
             Ok(())
         }
         ReversibleStep::Committed { turn, receipt, .. } => {
