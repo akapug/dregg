@@ -871,6 +871,11 @@ impl JsRuntime {
     /// Returns `(script_result, committed_receipt_hashes, the_target_back)`. The
     /// caller keeps the [`AttachedApplet`] (and through it the `WorldSink`) to inspect
     /// the live ledger after the run.
+    ///
+    /// A script error is returned in [`AttachRunOutcome::js_error`] alongside the
+    /// applet and its receipts. Earlier fires have already committed through the
+    /// sink; a later exception does not roll them back. `Err` is reserved for a
+    /// missing attached target, where the runtime cannot recover the outcome.
     pub fn run_attached(
         &mut self,
         applet: AttachedApplet,
@@ -883,15 +888,17 @@ impl JsRuntime {
             Some(JsTarget::Attached(a)) => a,
             _ => return Err("attached target vanished during run".into()),
         };
-        match eval {
-            Ok(result) => Ok(AttachRunOutcome {
-                result,
-                receipts: attached.receipts().to_vec(),
-                fires_committed: attached.receipt_count(),
-                applet: attached,
-            }),
-            Err(e) => Err(e),
-        }
+        let (result, js_error) = match eval {
+            Ok(result) => (result, None),
+            Err(error) => (None, Some(error)),
+        };
+        Ok(AttachRunOutcome {
+            result,
+            js_error,
+            receipts: attached.receipts().to_vec(),
+            fires_committed: attached.receipt_count(),
+            applet: attached,
+        })
     }
 
     /// THE AUTHORING RUN — install a [`CardEditor`] as the `deos.editor.*` target, eval
@@ -998,6 +1005,9 @@ pub struct ComposeRunOutcome {
 pub struct AttachRunOutcome {
     /// The script's i32 completion value, if any.
     pub result: Option<i32>,
+    /// A script evaluation error, independent of the fires already committed.
+    /// Callers must check this even when `run_attached` returned `Ok`.
+    pub js_error: Option<String>,
     /// The receipt hashes the JS committed on the live World, in order.
     pub receipts: Vec<[u8; 32]>,
     /// How many verified turns committed (the audit-tape length).

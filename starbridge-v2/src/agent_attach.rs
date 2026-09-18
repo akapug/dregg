@@ -395,8 +395,14 @@ mod tests {
         // `escalate` (an OVER-REACH — required Proof the agent's Signature does not
         // satisfy → refused in-band by the deos-js cap tooth, no turn).
         let affordances = vec![
-            ("bump".to_string(), AuthRequired::Signature),
-            ("escalate".to_string(), AuthRequired::Proof),
+            (
+                "bump".to_string(),
+                Requirement::AtLeast(dregg_cell::Credential::Signature),
+            ),
+            (
+                "escalate".to_string(),
+                Requirement::AtLeast(dregg_cell::Credential::Proof),
+            ),
         ];
 
         let mut rt = JsRuntime::new().expect("boot SpiderMonkey");
@@ -429,6 +435,7 @@ mod tests {
         let outcome = rt
             .run_attached(applet, &script)
             .expect("run the agent JS on the live World");
+        assert!(outcome.js_error.is_none(), "{:?}", outcome.js_error);
 
         let witness = outcome.result.expect("script produced an int");
         let crawled = witness / 1000;
@@ -495,6 +502,7 @@ mod tests {
             "#,
             )
             .expect("run on the fork");
+        assert!(fork_out.js_error.is_none(), "{:?}", fork_out.js_error);
         // The fork's agent counter is 7 (carried) + 100 = 107.
         assert_eq!(
             fork_out.result,
@@ -517,6 +525,68 @@ mod tests {
             post_height + 1,
             "the fork's own height advanced"
         );
+
+        // A later script exception cannot erase a turn already committed to the
+        // live World. Keep the real receipt and the returned applet on failure.
+        let throwing_applet = attach_agent(
+            WorldSinkAdapter::live(live.clone()),
+            agent,
+            AuthRequired::Signature,
+            vec![(
+                "bump".to_string(),
+                Requirement::AtLeast(dregg_cell::Credential::Signature),
+            )],
+        );
+        let threw = rt
+            .run_attached(
+                throwing_applet,
+                r#"
+                var app = deos.applet({ affordances: ["bump"] });
+                app.fire("bump", 3);
+                throw new Error("after committed fire");
+                "#,
+            )
+            .expect("recover the attached applet even after script failure");
+        assert!(
+            threw.js_error.is_some(),
+            "the script must report its failure"
+        );
+        assert_eq!(threw.result, None);
+        assert_eq!(threw.fires_committed, 1);
+        assert_eq!(threw.receipts.len(), 1);
+        assert_eq!(threw.applet.get_u64(AGENT_COUNTER_SLOT), 10);
+        {
+            let world = live.borrow();
+            assert_eq!(world.height(), post_height + 1);
+            assert_eq!(world.receipts().len(), post_receipts + 1);
+            assert_eq!(
+                threw.receipts[0],
+                world
+                    .receipts()
+                    .last()
+                    .expect("committed receipt")
+                    .receipt_hash(),
+                "the retained failure receipt is the actual live-World receipt"
+            );
+        }
+
+        // A failure before a fire has no new receipt and leaves the live state
+        // alone. Use a fresh attached tape so the count describes this run.
+        let no_fire_applet = attach_agent(
+            WorldSinkAdapter::live(live.clone()),
+            agent,
+            AuthRequired::Signature,
+            vec![],
+        );
+        let no_fire = rt
+            .run_attached(no_fire_applet, "throw new Error('before any fire');")
+            .expect("recover the attached applet after a no-fire error");
+        assert!(no_fire.js_error.is_some());
+        assert_eq!(no_fire.fires_committed, 0);
+        assert!(no_fire.receipts.is_empty());
+        assert_eq!(no_fire.applet.get_u64(AGENT_COUNTER_SLOT), 10);
+        assert_eq!(live.borrow().height(), post_height + 1);
+        assert_eq!(live.borrow().receipts().len(), post_receipts + 1);
     }
 
     /// **AGENT-MEMORY AS umem, LOAD-BEARING ON THE LIVE AGENT PATH** (gpui-free,

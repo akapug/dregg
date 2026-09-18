@@ -94,8 +94,15 @@ pub struct ConfinedToolResult {
     /// Whether dregg admitted the tool-call (the gateway verdict). `false` = the
     /// in-band refusal the model sees (an MCP `isError` result).
     pub admitted: bool,
-    /// The dregg receipt id the metered turn left (hex), if admitted.
+    /// Legacy receipt field: the first resource-fire receipt for `run_js`, or
+    /// the gateway's admission receipt for `terminal` (hex).
     pub receipt: Option<String>,
+    /// Every resource-fire receipt from `run_js`, in commit order. The legacy
+    /// `receipt` field retains its first-receipt meaning for this tool.
+    pub receipts: Vec<String>,
+    /// A script failure after admission. Earlier receipts remain committed;
+    /// admission alone must not make this a successful MCP tool result.
+    pub script_error: Option<String>,
     /// For `terminal`: the confined-PD sandbox-probe verdict bitmask
     /// ([`crate::confined::probe`]). `Some(probe::ALL)` = every confinement tooth
     /// held (file open denied, inet socket denied, only the Endpoint fd, IPC
@@ -349,11 +356,15 @@ impl<'rt> McpToolHost<'rt> {
         match js.tool.run_on(&mut js.rt, gateway, &call, now, &script) {
             Ok(outcome) => {
                 let admitted = outcome.tool_admitted();
-                let receipt = outcome.receipts.first().map(hex32);
+                let receipts: Vec<_> = outcome.receipts.iter().map(hex32).collect();
+                let receipt = receipts.first().cloned();
                 let text = if !admitted {
                     format!("run_js refused: {}", refusal_text(&outcome.tool_outcome))
                 } else if let Some(err) = &outcome.js_error {
-                    format!("run_js eval fault: {err}")
+                    format!(
+                        "run_js eval fault: {err}; {} turn(s) already committed; receipts: {receipts:?}",
+                        outcome.fires_committed
+                    )
                 } else {
                     format!(
                         "ran on the dregg verified World: result={:?}, {} verified turn(s) committed{}",
@@ -370,6 +381,8 @@ impl<'rt> McpToolHost<'rt> {
                     text,
                     admitted,
                     receipt,
+                    receipts,
+                    script_error: outcome.js_error,
                     sandbox_verdict: None,
                     fires_committed: outcome.fires_committed,
                 }
@@ -437,11 +450,15 @@ impl<'rt> McpToolHost<'rt> {
         ) {
             Ok(outcome) => {
                 let admitted = outcome.tool_admitted();
-                let receipt = outcome.receipts.first().map(hex32);
+                let receipts: Vec<_> = outcome.receipts.iter().map(hex32).collect();
+                let receipt = receipts.first().cloned();
                 let text = if !admitted {
                     format!("run_js refused: {}", refusal_text(&outcome.tool_outcome))
                 } else if let Some(err) = &outcome.js_error {
-                    format!("run_js eval fault (world bridge): {err}")
+                    format!(
+                        "run_js eval fault (world bridge): {err}; {} turn(s) already committed; receipts: {receipts:?}",
+                        outcome.fires_committed
+                    )
                 } else {
                     format!(
                         "ran on the COCKPIT'S live World over the world bridge: result={:?}, \
@@ -459,6 +476,8 @@ impl<'rt> McpToolHost<'rt> {
                     text,
                     admitted,
                     receipt,
+                    receipts,
+                    script_error: outcome.js_error,
                     sandbox_verdict: None,
                     fires_committed: outcome.fires_committed,
                 }
@@ -528,6 +547,7 @@ impl<'rt> McpToolHost<'rt> {
                 receipt: None,
                 sandbox_verdict: None,
                 fires_committed: 0,
+                ..Default::default()
             };
         }
 
@@ -563,6 +583,7 @@ impl<'rt> McpToolHost<'rt> {
             receipt,
             sandbox_verdict,
             fires_committed: 0,
+            ..Default::default()
         }
     }
 
@@ -595,6 +616,7 @@ impl<'rt> McpToolHost<'rt> {
             },
             sandbox_verdict: None,
             fires_committed: 0,
+            ..Default::default()
         }
     }
 }
@@ -644,15 +666,20 @@ fn run_command_in_confined_pd(_command: &str) -> std::io::Result<i32> {
 
 /// Serialize a [`ConfinedToolResult`] into an MCP `CallToolResult` value
 /// (`{ content: [{ type: "text", text }], isError }`). A refused call is an
-/// `isError: true` result the model sees in-band.
+/// `isError: true` result the model sees in-band. A script error is also an
+/// unsuccessful result, even when the gateway admitted the call and some fires
+/// already committed.
 fn call_tool_result_value(r: &ConfinedToolResult) -> Value {
     json!({
         "content": [ { "type": "text", "text": r.text } ],
-        "isError": !r.admitted,
+        "isError": !r.admitted || r.script_error.is_some(),
         // deos extension: the receipt + confinement evidence (ignored by a plain
         // MCP client, surfaced by deos's own inspector / the live bake).
         "_deos": {
+            "admitted": r.admitted,
             "receipt": r.receipt,
+            "receipts": r.receipts,
+            "scriptError": r.script_error,
             "sandboxVerdict": r.sandbox_verdict,
             "firesCommitted": r.fires_committed
         }

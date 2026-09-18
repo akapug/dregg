@@ -1287,12 +1287,20 @@ pub fn build_card_over_live(
     let outcome = rt
         .run_attached(applet, applet_js)
         .map_err(|e| format!("card view-tree authoring on the live World: {e}"))?;
+    if let Some(error) = &outcome.js_error {
+        return Err(format!(
+            "card view-tree authoring on the live World: {error}; {} turn(s) already committed; receipts: {:?}",
+            outcome.fires_committed,
+            outcome.receipts.iter().map(hex::encode).collect::<Vec<_>>()
+        ));
+    }
     // The authoring JS stashes the stringified tree into the attached applet's ephemeral
     // view-state (NO turn) — and must commit no fires.
     if outcome.fires_committed != 0 {
         return Err(format!(
-            "card view-tree authoring committed {} turn(s) — it must only build data",
-            outcome.fires_committed
+            "card view-tree authoring committed {} turn(s) — it must only build data; receipts: {:?}",
+            outcome.fires_committed,
+            outcome.receipts.iter().map(hex::encode).collect::<Vec<_>>()
         ));
     }
     let attached = outcome.applet;

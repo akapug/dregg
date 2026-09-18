@@ -88,7 +88,8 @@ pub struct RunJsOutcome {
     /// The receipt hashes of the committed fires, in order (the rewindable tape).
     pub receipts: Vec<[u8; 32]>,
     /// A native/eval error from the JS run, if any (a genuine fault, NOT a
-    /// cap-gate refusal — a refusal is an expected, JS-observable `-1`).
+    /// cap-gate refusal — a refusal is an expected, JS-observable `-1`). Earlier
+    /// committed fires remain in `receipts`; a script error does not undo them.
     pub js_error: Option<String>,
 }
 
@@ -104,7 +105,9 @@ impl RunJsOutcome {
 /// which surfaces in [`RunJsOutcome::js_error`]).
 #[derive(Debug)]
 pub enum RunJsError {
-    /// SpiderMonkey failed to boot or the script failed to compile/evaluate.
+    /// SpiderMonkey failed to boot, or the runtime could not recover its target.
+    /// Script compilation/evaluation failures are carried in `js_error` together
+    /// with any receipts the run already produced.
     Engine(String),
 }
 
@@ -341,22 +344,16 @@ impl RunJsTool {
             COUNTER_SLOT,
         );
 
-        match rt.run_attached(applet, script) {
-            Ok(outcome) => Ok(RunJsOutcome {
-                tool_outcome,
-                result: outcome.result,
-                fires_committed: outcome.fires_committed,
-                receipts: outcome.receipts,
-                js_error: None,
-            }),
-            Err(e) => Ok(RunJsOutcome {
-                tool_outcome,
-                result: None,
-                fires_committed: 0,
-                receipts: Vec::new(),
-                js_error: Some(e),
-            }),
-        }
+        let outcome = rt
+            .run_attached(applet, script)
+            .map_err(RunJsError::Engine)?;
+        Ok(RunJsOutcome {
+            tool_outcome,
+            result: outcome.result,
+            fires_committed: outcome.fires_committed,
+            receipts: outcome.receipts,
+            js_error: outcome.js_error,
+        })
     }
 
     /// A direct, gateway-free fire of one named affordance under the agent's

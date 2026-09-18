@@ -332,6 +332,15 @@ mod js_agent_weld {
 
     #[test]
     fn run_js_over_the_world_bridge_lands_on_the_served_world() {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(run_js_bridge_body)
+            .expect("spawn SpiderMonkey thread")
+            .join()
+            .expect("run_js bridge thread");
+    }
+
+    fn run_js_bridge_body() {
         let path = socket_path("mcp");
         let _ = std::fs::remove_file(&path);
 
@@ -348,7 +357,10 @@ mod js_agent_weld {
             AGENT_PK,
             AGENT_TOKEN,
             vec![(COUNTER_SLOT, pack_u64(0))],
-            vec![("bump".to_string(), AuthRequired::Signature)],
+            vec![(
+                "bump".to_string(),
+                dregg_cell::Requirement::AtLeast(dregg_cell::Credential::Signature),
+            )],
         );
         let mut host = McpToolHost::new(HermesGateway::new(&runtime, root, registry), 0)
             .with_run_js(tool)
@@ -406,6 +418,71 @@ mod js_agent_weld {
             text.contains("COCKPIT'S live World over the world bridge"),
             "the model sees WHERE it ran: {text}"
         );
+        assert_eq!(landed["_deos"]["admitted"], json!(true));
+        assert_eq!(landed["_deos"]["scriptError"], json!(null));
+        assert_eq!(
+            landed["_deos"]["receipts"],
+            json!([landed["_deos"]["receipt"]]),
+            "the new list retains the legacy first receipt"
+        );
+
+        // Both fires reach the real served executor before the exception. The
+        // MCP result must be unsuccessful without pretending those turns rolled
+        // back or dropping all but the first receipt.
+        let partial = host.call_tool(
+            "run_js",
+            &json!({ "script": r#"
+                var app = deos.applet({ affordances: ["bump"] });
+                app.fire("bump", 3);
+                app.fire("bump", 5);
+                throw new Error("after two committed fires");
+            "# }),
+        );
+        assert_eq!(partial["isError"], json!(true), "{partial}");
+        assert_eq!(partial["_deos"]["admitted"], json!(true));
+        assert!(partial["_deos"]["scriptError"].is_string());
+        assert_eq!(partial["_deos"]["firesCommitted"], json!(2));
+        let partial_receipts = partial["_deos"]["receipts"]
+            .as_array()
+            .expect("all committed receipts retained");
+        assert_eq!(partial_receipts.len(), 2);
+        assert_ne!(partial_receipts[0], partial_receipts[1]);
+        assert_eq!(partial["_deos"]["receipt"], partial_receipts[0]);
+        assert!(
+            partial["content"][0]["text"]
+                .as_str()
+                .expect("error text")
+                .contains("2 turn(s) already committed"),
+            "a text-only MCP consumer must also see partial progress: {partial}"
+        );
+
+        // Neither a runtime error before a fire nor a syntax error can acquire
+        // a receipt from a preceding call on the same host/runtime.
+        for script in ["throw new Error('before any fire');", "var = ;"] {
+            let no_fire = host.call_tool("run_js", &json!({ "script": script }));
+            assert_eq!(no_fire["isError"], json!(true), "{no_fire}");
+            assert_eq!(no_fire["_deos"]["admitted"], json!(true));
+            assert!(no_fire["_deos"]["scriptError"].is_string());
+            assert_eq!(no_fire["_deos"]["firesCommitted"], json!(0));
+            assert_eq!(no_fire["_deos"]["receipts"], json!([]));
+            assert_eq!(no_fire["_deos"]["receipt"], json!(null));
+        }
+
+        // A fresh read proves the shared runtime remains usable after throws;
+        // the server-owned ledger below independently checks the actual value.
+        let readback = host.call_tool(
+            "run_js",
+            &json!({ "script": "var app = deos.applet({ affordances: [\"bump\"] }); app.get(0);" }),
+        );
+        assert_eq!(readback["isError"], json!(false), "{readback}");
+        assert_eq!(readback["_deos"]["scriptError"], json!(null));
+        assert_eq!(readback["_deos"]["firesCommitted"], json!(0));
+        assert!(
+            readback["content"][0]["text"]
+                .as_str()
+                .expect("readback text")
+                .contains("Some(15)")
+        );
 
         // Hang up (drop the host's session connection) ⇒ the serving loop
         // returns ⇒ assert ON THE SERVED WORLD: the model's fire LANDED.
@@ -413,14 +490,28 @@ mod js_agent_weld {
         let (world, _served) = server.join().expect("serving thread");
         assert_eq!(
             world.counter(),
-            7,
-            "THE HEADLINE: the MCP run_js fire landed on the SERVED world's ledger"
+            15,
+            "the successful fire and the two pre-exception fires all remain on the served ledger"
         );
         assert_eq!(
             world.receipts.len(),
-            1,
-            "one verified turn on the served world's receipt tape"
+            3,
+            "no-fire errors and readback add no resource turn"
         );
+        let expected_receipts: Vec<_> = world
+            .receipts
+            .iter()
+            .map(|receipt| {
+                json!(
+                    receipt
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect::<String>()
+                )
+            })
+            .collect();
+        assert_eq!(landed["_deos"]["receipt"], expected_receipts[0]);
+        assert_eq!(partial_receipts.as_slice(), &expected_receipts[1..]);
         let _ = std::fs::remove_file(&path);
     }
 }

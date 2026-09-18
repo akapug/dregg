@@ -4370,6 +4370,13 @@ fn render_agent_attach_headless(out: &str, w: f32, h: f32, fork: bool) -> anyhow
     let outcome = rt
         .run_attached(applet, script)
         .map_err(|e| anyhow::anyhow!("agent run_js on the World: {e}"))?;
+    if let Some(error) = &outcome.js_error {
+        anyhow::bail!(
+            "agent run_js on the World: {error}; {} turn(s) already committed; receipts: {:?}",
+            outcome.fires_committed,
+            outcome.receipts.iter().map(hex::encode).collect::<Vec<_>>()
+        );
+    }
     let witness = outcome.result.unwrap_or(-1);
     let crawled = witness / 1000;
     let after = (witness % 1000) / 10;
