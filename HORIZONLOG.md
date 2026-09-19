@@ -1,5 +1,37 @@
 # HORIZONLOG — the named-follow-up burn-down
 
+## SEPTEMBER 19 — New World construction in Mini; cycle 1 integration running
+
+Ember selected **Mini as the New World's construction home**, with Bread as
+reference, then explicitly authorized a substantial implementation minicycle.
+This supersedes the September 18 wind-down for that scope. The earlier Python
+platform wave remains rejected. Wisper is doing separate networking work outside
+our critical path, not the earlier proposed resource-host lifecycle assignment.
+
+Resume from the [cycle contract](../dregg-assortia/sprints/2026-09-19/cycle-1.md),
+[current graph board](../dregg-assortia/CURRENT.md), and
+[captured integration evidence](../dregg-assortia/sprints/2026-09-19/cycle-1-evidence/INDEX.md).
+Mini **12e6608** contains joint scalar/content transactions, current-law scoped
+observation, grant-preserving rule replacement, explicit capability revocation,
+source-owned authoring and the Rust client. The full umbrella/native builds and
+complete legacy native and mixed-resource Rust-client journeys passed. The full
+New World task/content journey is still running; do not promote its partial
+progress to a completed acceptance result.
+
+Mini **b119f86** adds a narrow policy-view JSON repair: return the source-derived
+address and editable predicate required by external policy authors. All 581
+compiled source files match that commit, and its umbrella/native build passed.
+It is the sole Lean-source delta from the preceding tested core. A separate full
+Alice-to-Bob Rust authority recipe is being completed against that executable.
+
+Measured birth fell from **223.78s to 49.43s** for identical signed/genesis inputs
+and identical receipt bytes; a formerly stalled task query completes in 33.55s.
+General equality proofs justify the computation changes. Repeated full semantic
+history replay remains a latency obstacle; a persistent verified host session is
+proposed in Assortia, not implemented. Hosted Hermes, physical interruption,
+provider custody/notarization, Solana operations and deployed STARK assurance
+remain unfinished work. This cycle changes no Bread runtime code.
+
 ## SEPTEMBER 18 — user-requested wind-down; native shared-resource journey passes
 
 Ember asked for no new work and a wind-down. All Mini compiler seats/queues are
