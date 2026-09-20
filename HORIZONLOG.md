@@ -2,6 +2,8 @@
 
 ## SEPTEMBER 19 — Mini core cycle 1 complete; hosted runtime remains next
 
+For a new person or session, begin with the [suite handoff](https://github.com/emberian/dregg-assortia/blob/main/HANDOFF.md): settled decisions, current evidence, run instructions, next work and shared-tree precautions.
+
 Ember selected **Mini as the New World construction home**, with Bread as
 reference. The substantial implementation cycle completed; the rejected Python
 platform wave remains rejected. Wisper is on separate low-level networking work.

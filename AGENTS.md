@@ -5,7 +5,12 @@ to waste an hour here is running the whole test gauntlet in debug mode. Don't.
 Read this first. Deeper state lives in `HORIZONLOG.md`; this is just "how do I run
 things.")*
 
-> ⚑ **HANDOFF IN EFFECT (2026-08-11):** a Claude session wrapped ~53 commits and
+> **Current suite / Mini handoff (2026-09-19):** start at
+> [dregg-assortia/HANDOFF.md](https://github.com/emberian/dregg-assortia/blob/main/HANDOFF.md)
+> for the agent-grain construction direction, completed cycle, evidence and next
+> work. This does not replace the Bread-specific historical handoff below.
+
+> ⚑ **BREAD HISTORICAL HANDOFF (2026-08-11):** a Claude session wrapped ~53 commits and
 > left a measured handoff at **`HANDOFF-2026-08-11-codex.md`** — current state of
 > both Mina directions (40/40, key on devnet, and what that does NOT mean), the
 > known-red ledger, the trap list, decisions reserved for ember, and ranked next
