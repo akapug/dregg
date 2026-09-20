@@ -1,36 +1,34 @@
 # HORIZONLOG — the named-follow-up burn-down
 
-## SEPTEMBER 19 — New World construction in Mini; cycle 1 integration running
+## SEPTEMBER 19 — Mini core cycle 1 complete; hosted runtime remains next
 
-Ember selected **Mini as the New World's construction home**, with Bread as
-reference, then explicitly authorized a substantial implementation minicycle.
-This supersedes the September 18 wind-down for that scope. The earlier Python
-platform wave remains rejected. Wisper is doing separate networking work outside
-our critical path, not the earlier proposed resource-host lifecycle assignment.
+Ember selected **Mini as the New World construction home**, with Bread as
+reference. The substantial implementation cycle completed; the rejected Python
+platform wave remains rejected. Wisper is on separate low-level networking work.
 
-Resume from the [cycle contract](../dregg-assortia/sprints/2026-09-19/cycle-1.md),
+Resume from the [completed cycle result](https://github.com/emberian/dregg-assortia/blob/main/sprints/2026-09-19/cycle-1-result.md),
 [current graph board](../dregg-assortia/CURRENT.md), and
-[captured integration evidence](../dregg-assortia/sprints/2026-09-19/cycle-1-evidence/INDEX.md).
-Mini **12e6608** contains joint scalar/content transactions, current-law scoped
-observation, grant-preserving rule replacement, explicit capability revocation,
-source-owned authoring and the Rust client. The full umbrella/native builds and
-complete legacy native and mixed-resource Rust-client journeys passed. The full
-New World task/content journey is still running; do not promote its partial
-progress to a completed acceptance result.
+[captured evidence](../dregg-assortia/sprints/2026-09-19/cycle-1-evidence/INDEX.md).
+The complete native New World journey passed with eleven events: atomic
+task/content changes, current-law observation, grant-preserving rule replacement,
+explicit per-capability revocation, lost-reply/restart recovery, and deliberate
+management lockout with no owner bypass. Refusals and retries preserve the full
+logical stored image. Legacy and both Rust-client recipes also passed.
 
-Mini **b119f86** adds a narrow policy-view JSON repair: return the source-derived
-address and editable predicate required by external policy authors. All 581
-compiled source files match that commit, and its umbrella/native build passed.
-It is the sole Lean-source delta from the preceding tested core. A separate full
-Alice-to-Bob Rust authority recipe is being completed against that executable.
+The fresh complete journey used Mini **12e6608**, host **0da9f139**, and finished
+23:56:48 UTC after **10,380 seconds**. **b119f86** repaired authorized policy JSON
+authoring; **66d74dd** materializes admitted charges with general exactness proofs.
+All 581 compiled sources match 66d74dd and the full umbrella/native build passed.
+Its installed host **3107faf3** separately reproduced exact accepted views and
+refusals over the completed eleven-event history without changing the image.
+Do not conflate that targeted replay with a second fresh complete journey.
 
-Measured birth fell from **223.78s to 49.43s** for identical signed/genesis inputs
-and identical receipt bytes; a formerly stalled task query completes in 33.55s.
-General equality proofs justify the computation changes. Repeated full semantic
-history replay remains a latency obstacle; a persistent verified host session is
-proposed in Assortia, not implemented. Hosted Hermes, physical interruption,
-provider custody/notarization, Solana operations and deployed STARK assurance
-remain unfinished work. This cycle changes no Bread runtime code.
+Native latency is the next core obligation: a matched eight-event query improved
+105.51s to 91.66s, while smaller comparisons showed no gain. A persistent verified
+host session is specified but unimplemented. Hosted Hermes, physical interruption,
+provider custody/notarization, contributed hosting, Solana operations and deployed
+STARK assurance remain work. Generation-wide native revocation and a delegated
+grant surviving two rule changes also remain open. No Bread runtime code changed.
 
 ## SEPTEMBER 18 — user-requested wind-down; native shared-resource journey passes
 
