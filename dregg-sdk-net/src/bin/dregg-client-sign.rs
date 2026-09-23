@@ -963,10 +963,15 @@ async fn cmd_send(f: Flags) -> Result<()> {
             turn.fee, funding.balance
         )));
     }
+    // THE AGENT'S OWN RECEIPT HEAD, not the node-wide tip. The node admits a
+    // signed turn only when `previous_receipt_hash` equals the head of THIS
+    // agent's chain, and the node-wide tip is another seat's receipt whenever
+    // another seat committed since, so threading it is refused with "receipt
+    // chain mismatch" (see `NodeHttpClient::fetch_agent_receipt_head`).
     turn.previous_receipt_hash = node
-        .fetch_chain_head()
+        .fetch_agent_receipt_head(&cell)
         .await
-        .map_err(|e| err(format!("fetch chain head after funding: {e}")))?;
+        .map_err(|e| err(format!("fetch own-cell receipt head after funding: {e}")))?;
     let bearer = ensure_token(&http, &f.node_url, f.token.clone()).await?;
 
     let signed = clerk.sign_turn(&turn);
@@ -1177,10 +1182,11 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
             turn.fee, funding.balance
         )));
     }
+    // The source's OWN receipt head, for the reason `cmd_send` gives.
     turn.previous_receipt_hash = node
-        .fetch_chain_head()
+        .fetch_agent_receipt_head(&from)
         .await
-        .map_err(|e| err(format!("fetch chain head after funding: {e}")))?;
+        .map_err(|e| err(format!("fetch source-cell receipt head after funding: {e}")))?;
     let bearer = ensure_token(&http, &f.node_url, f.token.clone()).await?;
 
     let signed = clerk.sign_turn(&turn);
@@ -2263,6 +2269,21 @@ mod tests {
     // chain head, the faucet, /turns/submit and the exact-hash receipt query —
     // and DREGG_HOME points the profile loader at a temp identity so no real
     // key is touched and nothing is signed against a live node.
+    //
+    // The cell's own receipt head and the node-wide tip are DIFFERENT here, and
+    // /turns/submit refuses any turn that does not thread the cell's own head,
+    // as a node built after 7ea63fe5d does. So every arm that reaches the POST
+    // also checks which head the signer threaded; the real admission check is
+    // driven in the node crate's `client_threads_the_agent_scoped_receipt_head`.
+
+    /// The source cell's own receipt head, served on `GET /api/cell/{id}`.
+    const AGENT_HEAD: [u8; 32] = [0xa5; 32];
+    /// The node-wide tip, served on `GET /api/receipts`: another agent's receipt.
+    const NODE_TIP: [u8; 32] = [0xc3; 32];
+
+    fn submitted(body: &[u8]) -> dregg_sdk::SignedTurn {
+        postcard::from_bytes(body).expect("the client must send a postcard SignedTurn")
+    }
 
     #[derive(Clone)]
     enum Submit {
@@ -2327,11 +2348,27 @@ mod tests {
         let response = if line.starts_with("GET /status") {
             serde_json::json!({"federation_mode": "solo", "public_key": "11".repeat(32)})
         } else if line.starts_with("GET /api/cell/") {
-            serde_json::json!({"found": true, "balance": 1_000_000, "nonce": 0})
+            serde_json::json!({
+                "found": true, "balance": 1_000_000, "nonce": 0,
+                "last_receipt_hash": hex::encode(AGENT_HEAD),
+            })
         } else if line.starts_with("GET /api/receipts") {
-            serde_json::json!([])
+            serde_json::json!([{
+                "chain_index": 9, "chain_head": true,
+                "receipt_hash": hex::encode(NODE_TIP), "turn_hash": "77".repeat(32),
+            }])
         } else if line.starts_with("POST /api/faucet") {
             serde_json::json!({"success": true, "turn_hash": "22".repeat(32)})
+        } else if line.starts_with("POST /turns/submit")
+            && submitted(&body).turn.previous_receipt_hash != Some(AGENT_HEAD)
+        {
+            // The node's refusal of a turn that does not thread its agent's
+            // own head. It names the turn, as the node's reject path does.
+            serde_json::json!({
+                "accepted": false,
+                "turn_hash": hex::encode(submitted(&body).turn.hash()),
+                "error": "receipt chain mismatch"
+            })
         } else if line.starts_with("POST /turns/submit") {
             match node.submit.clone() {
                 Submit::HttpError => {
