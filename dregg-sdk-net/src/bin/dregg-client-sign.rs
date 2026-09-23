@@ -38,7 +38,7 @@
 use dregg_sdk::AgentCipherclerk;
 use dregg_sdk::profiles;
 use dregg_sdk_net::NodeHttpClient;
-use dregg_turn::action::{Effect, Event, symbol};
+use dregg_turn::action::{Action, Authorization, Effect, Event, symbol};
 use dregg_turn::{ComputronCosts, Turn, TurnExecutor};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -144,6 +144,35 @@ fn build_transfer_turn(
     turn
 }
 
+/// The chat send's single action, UNSIGNED: one `EmitEvent` on `cell`.
+fn chat_action(cell: dregg_sdk::CellId, topic: &str, payload: &str) -> Action {
+    let effect = Effect::EmitEvent {
+        cell,
+        event: Event {
+            topic: symbol(topic),
+            data: pack_payload(payload.as_bytes()),
+        },
+    };
+    dregg_sdk::raw::unsigned_action_named(cell, topic, vec![effect])
+}
+
+/// Wrap an already-authorized chat action in the send's turn envelope.
+/// No signing happens here.
+fn chat_turn(
+    clerk: &AgentCipherclerk,
+    cell: dregg_sdk::CellId,
+    action: Action,
+    nonce: u64,
+    payload: &str,
+) -> Turn {
+    let mut turn = clerk.make_turn_with_actions(vec![action]);
+    turn.agent = cell;
+    turn.nonce = nonce;
+    turn.memo = Some(payload.to_string());
+    turn.valid_until = Some(i64::MAX / 2);
+    turn
+}
+
 fn build_chat_turn(
     clerk: &AgentCipherclerk,
     cell: dregg_sdk::CellId,
@@ -152,24 +181,37 @@ fn build_chat_turn(
     federation_id: &[u8; 32],
     nonce: u64,
 ) -> Turn {
-    let effect = Effect::EmitEvent {
-        cell,
-        event: Event {
-            topic: symbol(topic),
-            data: pack_payload(payload.as_bytes()),
+    let action = clerk.sign_action_hybrid(chat_action(cell, topic, payload), federation_id, nonce);
+    chat_turn(clerk, cell, action, nonce, payload)
+}
+
+/// The fee `build_chat_turn` would declare, computed WITHOUT signing.
+///
+/// `TurnExecutor::estimate_cost` reads the coordination class (effects and
+/// `balance_change`), then per action `action_base`, the authorization
+/// VARIANT (`HybridSignature` costs `2 * signature_verify`) and each effect's
+/// cost. It never reads the nonce, the federation id, the memo or any
+/// signature byte. So a `HybridSignature` with empty placeholder halves
+/// estimates exactly what the signed turn estimates, at any nonce. The test
+/// `unsigned_fee_estimate_equals_the_signed_turns_fee` holds that equality
+/// against a really signed turn, so a future fee rule that reads signature
+/// bytes fails there, not in production.
+fn chat_fee(
+    clerk: &AgentCipherclerk,
+    costs: ComputronCosts,
+    cell: dregg_sdk::CellId,
+    topic: &str,
+    payload: &str,
+) -> u64 {
+    let placeholder = Action {
+        authorization: Authorization::HybridSignature {
+            ed25519: [0u8; 64],
+            ml_dsa: Vec::new(),
+            ml_dsa_pk: Vec::new(),
         },
+        ..chat_action(cell, topic, payload)
     };
-    let action = clerk.sign_action_hybrid(
-        dregg_sdk::raw::unsigned_action_named(cell, topic, vec![effect]),
-        federation_id,
-        nonce,
-    );
-    let mut turn = clerk.make_turn_with_actions(vec![action]);
-    turn.agent = cell;
-    turn.nonce = nonce;
-    turn.memo = Some(payload.to_string());
-    turn.valid_until = Some(i64::MAX / 2);
-    turn
+    TurnExecutor::new(costs).estimate_cost(&chat_turn(clerk, cell, placeholder, 0, payload))
 }
 
 /// The cost model the CLIENT estimates its declared `turn.fee` against.
@@ -888,43 +930,32 @@ async fn cmd_send(f: Flags) -> Result<()> {
         .fetch_executor_federation_id()
         .await
         .map_err(|e| err(format!("fetch executor federation id: {e}")))?;
-    let estimate_nonce = node
-        .fetch_cell_nonce(&cell)
-        .await
-        .map_err(|e| err(format!("fetch own-cell nonce for fee estimate: {e}")))?;
-    let mut turn = build_chat_turn(
-        &clerk,
-        cell,
-        &f.topic,
-        &payload,
-        &federation_id,
-        estimate_nonce,
-    );
-    // Coordination-aware estimate: `fee = 0` when opted in (this is always an
-    // EmitEvent-only turn), so the send rides dregg's exempt admission free.
-    turn.fee = TurnExecutor::new(fee_cost_model()).estimate_cost(&turn);
+    // The fee depends on neither the nonce nor any signature byte (see
+    // `chat_fee`), so it is sized here without signing. The one signed build
+    // happens below, at the nonce fetched after funding.
+    let fee = chat_fee(&clerk, fee_cost_model(), cell, &f.topic, &payload);
 
     // Funding is SEND correctness, not a one-time join convenience. One grant
     // reserves a bounded six-send burst inside the faucet's 60-second window;
     // cap the requested delta to the node's 10,000-computron per-request law.
-    let desired = f.fund.max(turn.fee.saturating_mul(SEND_FUNDING_HORIZON));
+    let desired = f.fund.max(fee.saturating_mul(SEND_FUNDING_HORIZON));
     let target = desired.min(presence.balance.saturating_add(FAUCET_MAX_GRANT));
-    if target < turn.fee {
+    if target < fee {
         return Err(err(format!(
             "turn fee {} exceeds the current balance {} plus the faucet's {}-computron grant cap",
-            turn.fee, presence.balance, FAUCET_MAX_GRANT
+            fee, presence.balance, FAUCET_MAX_GRANT
         )));
     }
-    let funding = ensure_cell(&http, &f.node_url, &cell_hex, &pk_hex, turn.fee, target).await?;
+    let funding = ensure_cell(&http, &f.node_url, &cell_hex, &pk_hex, fee, target).await?;
 
     // Funding can wait up to 10s and another same-profile sender can commit in
-    // that window. Refetch the nonce immediately before signing, then rebuild
-    // the action because dregg-action-sig-v3 binds that nonce.
+    // that window. Fetch the nonce immediately before signing, because
+    // dregg-action-sig-v3 binds it.
     let nonce = node
         .fetch_cell_nonce(&cell)
         .await
-        .map_err(|e| err(format!("refetch own-cell nonce after funding: {e}")))?;
-    turn = build_chat_turn(&clerk, cell, &f.topic, &payload, &federation_id, nonce);
+        .map_err(|e| err(format!("fetch own-cell nonce after funding: {e}")))?;
+    let mut turn = build_chat_turn(&clerk, cell, &f.topic, &payload, &federation_id, nonce);
     turn.fee = TurnExecutor::new(fee_cost_model()).estimate_cost(&turn);
     if turn.fee > funding.balance {
         return Err(err(format!(
@@ -1567,6 +1598,80 @@ mod tests {
         };
         turn.fee = TurnExecutor::new(ComputronCosts::default()).estimate_cost(&turn);
         turn
+    }
+
+    fn exempt_costs() -> ComputronCosts {
+        let mut costs = ComputronCosts::default();
+        costs.coordination_exempt = true;
+        costs
+    }
+
+    /// The unsigned estimate must equal the fee of the REALLY signed turn, for
+    /// both cost models, several payload sizes and any nonce. This is the
+    /// equality that lets `cmd_send` skip the estimate-only signature.
+    #[test]
+    fn unsigned_fee_estimate_equals_the_signed_turns_fee() {
+        let clerk = AgentCipherclerk::from_seed([7u8; 64]);
+        let cell = clerk.cell_id("default");
+        let federation_id = [9u8; 32];
+        let long = "x".repeat(1_000);
+        for costs in [ComputronCosts::default(), exempt_costs()] {
+            for payload in ["", "hi", "a chat-sized payload of some words", long.as_str()] {
+                let fee = chat_fee(&clerk, costs.clone(), cell, "helm.chat", payload);
+                for nonce in [0u64, 1, 41] {
+                    let signed =
+                        build_chat_turn(&clerk, cell, "helm.chat", payload, &federation_id, nonce);
+                    assert!(matches!(
+                        signed.call_forest.roots[0].action.authorization,
+                        Authorization::HybridSignature { .. }
+                    ));
+                    assert_eq!(
+                        fee,
+                        TurnExecutor::new(costs.clone()).estimate_cost(&signed),
+                        "exempt={} payload_len={} nonce={nonce}",
+                        costs.coordination_exempt,
+                        payload.len()
+                    );
+                }
+            }
+        }
+        let paid = chat_fee(&clerk, ComputronCosts::default(), cell, "helm.chat", "hi");
+        assert!(paid > 0, "the non-exempt fee must stay a real fee");
+        assert_eq!(chat_fee(&clerk, exempt_costs(), cell, "helm.chat", "hi"), 0);
+    }
+
+    /// For a fixed key, federation, nonce and payload, the turn the new flow
+    /// signs and submits is byte-identical to the one the old flow (sign once
+    /// to estimate, then rebuild and sign again) signed and submitted.
+    #[test]
+    fn one_signed_build_is_byte_identical_to_the_old_estimate_then_rebuild_flow() {
+        let clerk = AgentCipherclerk::from_seed([3u8; 64]);
+        let cell = clerk.cell_id("default");
+        let federation_id = [5u8; 32];
+        let payload = "the same chat post under both flows";
+        let (estimate_nonce, nonce) = (11u64, 12u64); // another sender raced in between
+        let costs = ComputronCosts::default();
+        let head = Some([4u8; 32]);
+
+        // OLD: sign at the estimate nonce, estimate, then rebuild at the fresh nonce.
+        let mut old = build_chat_turn(&clerk, cell, "helm.chat", payload, &federation_id, estimate_nonce);
+        old.fee = TurnExecutor::new(costs.clone()).estimate_cost(&old);
+        let old_funding_fee = old.fee;
+        old = build_chat_turn(&clerk, cell, "helm.chat", payload, &federation_id, nonce);
+        old.fee = TurnExecutor::new(costs.clone()).estimate_cost(&old);
+        old.previous_receipt_hash = head;
+        let old_signed = postcard::to_stdvec(&clerk.sign_turn(&old)).unwrap();
+
+        // NEW: unsigned estimate, then the one signed build at the fresh nonce.
+        let new_funding_fee = chat_fee(&clerk, costs.clone(), cell, "helm.chat", payload);
+        let mut new = build_chat_turn(&clerk, cell, "helm.chat", payload, &federation_id, nonce);
+        new.fee = TurnExecutor::new(costs).estimate_cost(&new);
+        new.previous_receipt_hash = head;
+        let new_signed = postcard::to_stdvec(&clerk.sign_turn(&new)).unwrap();
+
+        assert_eq!(old_funding_fee, new_funding_fee, "funding is sized identically");
+        assert_eq!(old_signed, new_signed, "the submitted SignedTurn bytes are identical");
+        assert_eq!(new.nonce, nonce);
     }
 
     #[test]
