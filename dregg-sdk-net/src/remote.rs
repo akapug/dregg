@@ -76,8 +76,23 @@ struct FederationInfoLite {
     is_local: bool,
     #[serde(default)]
     member_count: usize,
-    #[serde(default)]
-    committee_epoch: u64,
+}
+
+impl FederationInfoLite {
+    /// The `is_local` entry of `/api/federations` with members is the
+    /// configured committee the executor signs under
+    /// (`executor_setup::federation_id_for_executor`). An unconfigured node
+    /// lists its local entry with NO members (`api::federation_infos` counts
+    /// `known_federation_keys`, empty until a committee is loaded), so the
+    /// member count alone separates the two. `committee_epoch` does not:
+    /// `dregg-node init` mints its committee at epoch 0, so requiring a
+    /// positive epoch sent every init-minted node down the
+    /// `blake3(operator pubkey)` path and signed its actions over the wrong
+    /// binding (the same defect `NodeHttpClient::fetch_executor_federation_id`
+    /// had against the `/status` solo flag).
+    fn is_configured_local(&self) -> bool {
+        self.is_local && self.member_count > 0
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -223,9 +238,7 @@ impl RemoteRuntime {
         if let Ok(feds) = self
             .get_json::<Vec<FederationInfoLite>>("/api/federations")
             .await
-            && let Some(local) = feds
-                .iter()
-                .find(|f| f.is_local && f.member_count > 0 && f.committee_epoch > 0)
+            && let Some(local) = feds.iter().find(|f| f.is_configured_local())
         {
             return hex_decode_32(&local.federation_id);
         }
@@ -973,6 +986,29 @@ mod tests {
         assert!(hex_decode_32("abcd").is_err(), "wrong length refuses");
     }
 
+    /// The committee `dregg-node init` mints is a configured committee of one
+    /// at epoch 0; its executor signs under the committee id. The unconfigured
+    /// node lists its local entry with no members and must NOT read as
+    /// configured, whatever epoch it reports.
+    #[test]
+    fn an_init_minted_committee_at_epoch_zero_is_configured() {
+        let feds: Vec<FederationInfoLite> = serde_json::from_str(
+            r#"[{"federation_id":"aa","is_local":true,"member_count":1,"committee_epoch":0}]"#,
+        )
+        .expect("federations shape");
+        assert!(feds[0].is_configured_local(), "epoch 0 is not unconfigured");
+
+        let unconfigured: Vec<FederationInfoLite> = serde_json::from_str(
+            r#"[{"federation_id":"bb","is_local":true,"member_count":0,"committee_epoch":3},
+                {"federation_id":"cc","is_local":false,"member_count":4,"committee_epoch":1}]"#,
+        )
+        .expect("federations shape");
+        assert!(
+            unconfigured.iter().all(|f| !f.is_configured_local()),
+            "a memberless local entry and a foreign committee are not the executor's"
+        );
+    }
+
     #[test]
     fn node_response_shapes_parse() {
         let feds: Vec<FederationInfoLite> = serde_json::from_str(
@@ -981,7 +1017,6 @@ mod tests {
         .expect("federations shape");
         assert!(feds[0].is_local);
         assert_eq!(feds[0].member_count, 3);
-        assert_eq!(feds[0].committee_epoch, 2);
 
         let head = [0xA5; 32];
         let cell: CellDetailLite = serde_json::from_value(serde_json::json!({
