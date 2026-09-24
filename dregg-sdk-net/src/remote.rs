@@ -237,6 +237,10 @@ impl RemoteRuntime {
     /// with a real committee. An unconfigured solo node (the devnet default)
     /// serves a placeholder there while its executor binds
     /// `blake3(operator pubkey)` — mirrored here.
+    ///
+    /// Only a discovered id is cached. A failed discovery returns before the
+    /// `OnceLock` is touched, so the next call asks the node again instead of
+    /// pinning a guess for the runtime's whole life.
     pub async fn federation_id(&self) -> Result<[u8; 32], SdkError> {
         if let Some(id) = self.federation_id.get() {
             return Ok(*id);
@@ -246,14 +250,23 @@ impl RemoteRuntime {
     }
 
     async fn discover_federation_id(&self) -> Result<[u8; 32], SdkError> {
-        // A node that does not serve the listing (a non-success status) reads
-        // as unconfigured. A transport failure or an unreadable listing is an
-        // error, never the `blake3(operator pubkey)` fallback: guessing there
-        // signs every action of a configured node over the wrong binding.
-        let feds = self
+        // Only a 404 means the node does not serve the listing (an older
+        // node), which reads as unconfigured. Any other failure (another
+        // status, a 5xx included, a transport failure, an unreadable listing)
+        // is an error, never the `blake3(operator pubkey)` fallback: guessing
+        // there signs every action of a configured node over the wrong binding.
+        let feds = match self
             .get_json_or_status::<Vec<FederationInfoLite>>("/api/federations")
             .await?
-            .unwrap_or_default();
+        {
+            Ok(feds) => feds,
+            Err(reqwest::StatusCode::NOT_FOUND) => Vec::new(),
+            Err(status) => {
+                return Err(SdkError::Wire(format!(
+                    "GET /api/federations: HTTP {status}"
+                )));
+            }
+        };
         if let Some(local) = feds.iter().find(|f| f.is_configured_local()) {
             return hex_decode_32(&local.federation_id);
         }
@@ -700,61 +713,113 @@ mod tests {
         server.await.expect("fixture server task");
     }
 
-    /// The listing route decides the binding, so how it FAILS matters. A node
-    /// that drops the `/api/federations` request is a transport failure, not an
-    /// unconfigured node: discovery must refuse rather than fall back to
-    /// `blake3(operator pubkey)`, even though the identity route answers. A
-    /// node that answers the listing 404 is an older node and falls back.
-    #[tokio::test]
-    async fn a_dropped_federation_listing_is_an_error_not_the_solo_fallback() {
+    /// A fixture node for the listing route. Each `/api/federations` request
+    /// takes the next scripted answer, and `None` (or an exhausted script)
+    /// closes the connection with no response. `/api/node/identity` always
+    /// answers `node_pk`.
+    async fn listing_fixture(
+        node_pk: [u8; 32],
+        listing: Vec<Option<(&'static str, String)>>,
+    ) -> (RemoteRuntime, tokio::task::JoinHandle<()>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let node_pk = [0x5C; 32];
-        for drop_listing in [true, false] {
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-                .await
-                .expect("bind fixture server");
-            let addr = listener.local_addr().expect("fixture address");
-            let server = tokio::spawn(async move {
-                while let Ok((mut stream, _)) = listener.accept().await {
-                    let mut request = vec![0u8; 4096];
-                    let n = stream.read(&mut request).await.unwrap_or(0);
-                    let request = String::from_utf8_lossy(&request[..n]).to_string();
-                    let (status, body) = if request.starts_with("GET /api/federations ") {
-                        if drop_listing {
-                            continue; // closes the connection with no response
-                        }
-                        ("404 Not Found", String::new())
-                    } else if request.starts_with("GET /api/node/identity ") {
-                        let body = serde_json::json!({ "public_key": hex_encode(&node_pk) });
-                        ("200 OK", body.to_string())
-                    } else {
-                        ("404 Not Found", String::new())
-                    };
-                    let response = format!(
-                        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                        body.len(),
-                    );
-                    let _ = stream.write_all(response.as_bytes()).await;
-                }
-            });
-
-            let clerk = AgentCipherclerk::from_seed([0x32; 64]);
-            let runtime = RemoteRuntime::connect(format!("http://{addr}"), clerk);
-            let got = runtime.federation_id().await;
-            server.abort();
-            if drop_listing {
-                assert!(
-                    got.is_err(),
-                    "a dropped listing must refuse, not sign over blake3(pk): {got:?}"
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fixture server");
+        let addr = listener.local_addr().expect("fixture address");
+        let server = tokio::spawn(async move {
+            let mut listing = listing.into_iter();
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut request = vec![0u8; 4096];
+                let n = stream.read(&mut request).await.unwrap_or(0);
+                let request = String::from_utf8_lossy(&request[..n]).to_string();
+                let (status, body) = if request.starts_with("GET /api/federations ") {
+                    match listing.next().flatten() {
+                        Some(answer) => answer,
+                        None => continue, // closes the connection with no response
+                    }
+                } else if request.starts_with("GET /api/node/identity ") {
+                    let body = serde_json::json!({ "public_key": hex_encode(&node_pk) });
+                    ("200 OK", body.to_string())
+                } else {
+                    ("404 Not Found", String::new())
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len(),
                 );
-            } else {
-                assert_eq!(
-                    got.expect("a 404 listing falls back to the solo derivation"),
-                    *blake3::hash(&node_pk).as_bytes(),
-                );
+                let _ = stream.write_all(response.as_bytes()).await;
             }
-        }
+        });
+        let clerk = AgentCipherclerk::from_seed([0x32; 64]);
+        (
+            RemoteRuntime::connect(format!("http://{addr}"), clerk),
+            server,
+        )
+    }
+
+    const FIXTURE_NODE_PK: [u8; 32] = [0x5C; 32];
+
+    /// A node that drops the `/api/federations` request is a transport failure,
+    /// not an unconfigured node: discovery refuses rather than fall back to
+    /// `blake3(operator pubkey)`, even though the identity route answers.
+    #[tokio::test]
+    async fn a_dropped_federation_listing_is_an_error_not_the_solo_fallback() {
+        let (runtime, server) = listing_fixture(FIXTURE_NODE_PK, vec![None]).await;
+        let got = runtime.federation_id().await;
+        server.abort();
+        assert!(got.is_err(), "a dropped listing must refuse: {got:?}");
+    }
+
+    /// A 404 is a node that does not serve the listing: it falls back to the
+    /// solo derivation.
+    #[tokio::test]
+    async fn a_404_listing_is_an_older_node_and_falls_back_to_blake3() {
+        let listing = vec![Some(("404 Not Found", String::new()))];
+        let (runtime, server) = listing_fixture(FIXTURE_NODE_PK, listing).await;
+        let got = runtime.federation_id().await;
+        server.abort();
+        assert_eq!(
+            got.expect("a 404 listing falls back"),
+            *blake3::hash(&FIXTURE_NODE_PK).as_bytes()
+        );
+    }
+
+    /// Any other failing status, a 5xx included, is an error: a node that serves
+    /// the listing but failed to answer it may well be configured.
+    #[tokio::test]
+    async fn a_server_error_on_the_listing_is_an_error_not_the_solo_fallback() {
+        let listing = vec![Some(("503 Service Unavailable", String::new()))];
+        let (runtime, server) = listing_fixture(FIXTURE_NODE_PK, listing).await;
+        let got = runtime.federation_id().await;
+        server.abort();
+        assert!(got.is_err(), "a 503 listing must refuse: {got:?}");
+    }
+
+    /// A failed discovery is not cached: after one transient 503, the next call
+    /// asks again and binds the configured committee the node then lists.
+    #[tokio::test]
+    async fn a_transient_listing_failure_is_retried_not_pinned() {
+        let committee = [0xC0; 32];
+        let listed = serde_json::json!([{
+            "federation_id": hex_encode(&committee),
+            "is_local": true,
+            "member_count": 1,
+        }]);
+        let listing = vec![
+            Some(("503 Service Unavailable", String::new())),
+            Some(("200 OK", listed.to_string())),
+        ];
+        let (runtime, server) = listing_fixture(FIXTURE_NODE_PK, listing).await;
+        let first = runtime.federation_id().await;
+        let second = runtime.federation_id().await;
+        server.abort();
+        assert!(first.is_err(), "the 503 must refuse: {first:?}");
+        assert_eq!(
+            second.expect("the retry reads the listing"),
+            committee,
+            "the second call must bind the committee, not a cached fallback"
+        );
     }
 
     // ─── builder staging ───
