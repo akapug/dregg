@@ -310,17 +310,19 @@ impl RemoteRuntime {
         Ok(infos.into_iter().find(|r| r.turn_hash == turn_hash))
     }
 
-    /// Devnet funding: `POST /api/faucet` to materialize this agent's hosted
-    /// cell with its REAL Ed25519 owner key and claim `amount` computrons.
+    /// Devnet funding: `POST /api/faucet` to materialize this agent's cell and
+    /// claim `amount` computrons.
     ///
-    /// This does not enroll the agent's ML-DSA identity. Native-PQ admission
-    /// remains fail-closed until trusted node/genesis state independently binds
-    /// that key and the cell's live delegation epoch.
+    /// The request carries no `public_key`. With one, a solo node mints a
+    /// hosted cell bound to the Ed25519 key and carrying no ML-DSA anchor; the
+    /// node's first-turn claim declines a cell that is already the signer's,
+    /// and admission refuses a hybrid turn against it as not enrolled, so that
+    /// cell could never act. Without one the node leaves a zero-pk stub, and
+    /// this agent's first hybrid turn claims it with the envelope's identity.
     pub async fn faucet(&self, amount: u64) -> Result<(), SdkError> {
         let body = serde_json::json!({
             "recipient": hex_encode(&self.cell.0),
             "amount": amount,
-            "public_key": hex_encode(&self.cipherclerk.public_key().0),
         });
         let url = format!("{}/api/faucet", self.base);
         let resp = self
@@ -819,6 +821,32 @@ mod tests {
             second.expect("the retry reads the listing"),
             committee,
             "the second call must bind the committee, not a cached fallback"
+        );
+    }
+
+    /// A funding request reaches the node with no `public_key`, so the cell it
+    /// leaves is the zero-pk stub a first hybrid turn claims. `TestNode` binds
+    /// the key when one arrives, as a solo node does.
+    #[cfg(feature = "test-support")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn faucet_leaves_a_claimable_stub() {
+        let (node, _agent) = crate::test_support::TestNode::genesis([0x11; 32], [0x22; 32], 0);
+        let spawned = node.spawn().await;
+        let runtime = RemoteRuntime::connect(
+            spawned.base_url().to_string(),
+            AgentCipherclerk::from_seed([0x33; 64]),
+        );
+        runtime.faucet(0).await.expect("materialize");
+        let cell = runtime.cell_id();
+        let node = spawned.lock().await;
+        assert_eq!(
+            node.faucet_requests(),
+            [serde_json::json!({ "recipient": hex_encode(&cell.0), "amount": 0 })]
+        );
+        assert_eq!(
+            node.ledger().get(&cell).map(|c| *c.public_key()),
+            Some([0u8; 32]),
+            "the node must hold a claimable zero-pk stub"
         );
     }
 
