@@ -235,7 +235,7 @@ impl NodeHttpClient {
     /// configured local committee. A transport failure, or a configured entry
     /// whose id does not decode, is an `Err`: guessing the id there would sign
     /// every action over the wrong binding.
-    async fn fetch_configured_local_federation_id(&self) -> Result<Option<[u8; 32]>, SdkError> {
+    pub async fn fetch_configured_local_federation_id(&self) -> Result<Option<[u8; 32]>, SdkError> {
         let url = format!("{}/api/federations", self.base_url);
         let resp = self
             .http
