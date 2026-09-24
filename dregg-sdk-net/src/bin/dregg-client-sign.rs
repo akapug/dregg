@@ -643,6 +643,24 @@ async fn wait_for_balance(
     Ok(None)
 }
 
+/// The `POST /api/faucet` body. It never carries `public_key`.
+///
+/// With `public_key`, a solo node's zero-amount arm mints a hosted cell bound
+/// to the Ed25519 key and carrying no ML-DSA anchor. The node's first-turn
+/// claim (`signed_turn_validation::claimed_actor_cell`) declines a cell that is
+/// already the signer's, and `validate_signed_turn` refuses a hybrid turn
+/// against a cell with no anchor and no enrollment as not enrolled, before it
+/// reads the posture: that cell can never act (node test
+/// `a_key_bound_zero_amount_cell_cannot_act_but_a_stub_takes_its_first_turn`).
+/// Without it the node leaves a zero-pk stub in the default asset, and this
+/// signer's first hybrid turn claims it with the envelope's own identity. A
+/// funded grant lands as a stub either way. Measured on both node lines: an
+/// init-minted node and a genesis-less solo node from before the claim
+/// existed each commit a stub's first send.
+fn faucet_request(cell_hex: &str, amount: u64) -> serde_json::Value {
+    serde_json::json!({ "recipient": cell_hex, "amount": amount })
+}
+
 /// Ensure the profile's canonical cell exists and is spendable at
 /// `minimum_balance`. An existing depleted cell is not "done": request enough
 /// from the owner faucet to reach `target_balance`, require a committed faucet
@@ -654,7 +672,6 @@ async fn ensure_cell(
     http: &reqwest::Client,
     node_url: &str,
     cell_hex: &str,
-    pk_hex: &str,
     minimum_balance: u64,
     target_balance: u64,
 ) -> Result<FundingOutcome> {
@@ -672,11 +689,7 @@ async fn ensure_cell(
 
     let raw = http
         .post(format!("{node_url}/api/faucet"))
-        .json(&serde_json::json!({
-            "recipient": cell_hex,
-            "amount": shortfall,
-            "public_key": pk_hex,
-        }))
+        .json(&faucet_request(cell_hex, shortfall))
         .send()
         .await
         .map_err(|e| err(format!("POST /api/faucet: {e}")))?;
@@ -880,7 +893,14 @@ async fn cmd_join(f: Flags) -> Result<()> {
     } else {
         (f.fund, f.fund)
     };
-    let funding = ensure_cell(&http, &f.node_url, &cell_hex, &pk_hex, minimum_balance, target_balance).await?;
+    let funding = ensure_cell(
+        &http,
+        &f.node_url,
+        &cell_hex,
+        minimum_balance,
+        target_balance,
+    )
+    .await?;
     println!(
         "{}",
         serde_json::json!({
@@ -923,8 +943,7 @@ async fn cmd_send(f: Flags) -> Result<()> {
     // Materialize first without consuming the funded faucet bucket. The zero-
     // amount path is explicitly outside the per-cell 1/min limit, so a brand-new
     // profile can immediately receive the fee-sized positive top-up below.
-    let pk_hex = hex::encode(clerk.public_key().0);
-    let presence = ensure_cell(&http, &f.node_url, &cell_hex, &pk_hex, 0, 0).await?;
+    let presence = ensure_cell(&http, &f.node_url, &cell_hex, 0, 0).await?;
 
     let federation_id = node
         .fetch_executor_federation_id()
@@ -946,7 +965,7 @@ async fn cmd_send(f: Flags) -> Result<()> {
             fee, presence.balance, FAUCET_MAX_GRANT
         )));
     }
-    let funding = ensure_cell(&http, &f.node_url, &cell_hex, &pk_hex, fee, target).await?;
+    let funding = ensure_cell(&http, &f.node_url, &cell_hex, fee, target).await?;
 
     // Funding can wait up to 10s and another same-profile sender can commit in
     // that window. Fetch the nonce immediately before signing, because
@@ -1118,11 +1137,10 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
     let from_hex = hex::encode(from.as_bytes());
     let to_hex = resolve_destination(&to_flag, &from_hex, &name)?;
     let to = parse_cell_hex("--to", &to_hex)?;
-    let pk_hex = hex::encode(clerk.public_key().0);
 
     // Materialize the source without consuming the funded faucet bucket, the
     // same zero-amount path `send` opens with.
-    let presence = ensure_cell(&http, &f.node_url, &from_hex, &pk_hex, 0, 0).await?;
+    let presence = ensure_cell(&http, &f.node_url, &from_hex, 0, 0).await?;
 
     let federation_id = node
         .fetch_executor_federation_id()
@@ -1159,7 +1177,7 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
             turn.fee, presence.balance
         )));
     }
-    let funding = ensure_cell(&http, &f.node_url, &from_hex, &pk_hex, needed, target).await?;
+    let funding = ensure_cell(&http, &f.node_url, &from_hex, needed, target).await?;
 
     // Funding can wait up to 10s and another sender on this profile can commit
     // in that window. Refetch the nonce immediately before signing, then
@@ -1719,13 +1737,9 @@ mod tests {
     #[tokio::test]
     async fn low_balance_http_top_up_commits_and_enables_real_chat_turn() {
         let (url, state, handle) = spawn_faucet_node(90, FaucetMode::Commit).await;
-        let (cell_hex, pk_hex, recipient) = {
+        let (cell_hex, recipient) = {
             let node = state.lock().await;
-            (
-                hex::encode(node.recipient.0),
-                hex::encode(node.ledger.get(&node.recipient).unwrap().public_key()),
-                node.recipient,
-            )
+            (hex::encode(node.recipient.0), node.recipient)
         };
         let payload = b"This chat-sized send must fail before funding and commit after the HTTP faucet top-up.";
         let turn = real_chat_turn(recipient, payload);
@@ -1738,7 +1752,7 @@ mod tests {
         );
 
         let http = reqwest::Client::new();
-        let outcome = ensure_cell(&http, &url, &cell_hex, &pk_hex, 1_510, 9_060)
+        let outcome = ensure_cell(&http, &url, &cell_hex, 1_510, 9_060)
             .await
             .expect("existing low-balance cell must top up");
         assert!(outcome.topped_up);
@@ -1758,26 +1772,68 @@ mod tests {
         handle.abort();
     }
 
+    /// The body carries no `public_key` at any amount: a key in it makes the
+    /// dead key-bound cell on a solo node (see [`faucet_request`]).
+    #[test]
+    fn a_stub_materialization_carries_no_public_key() {
+        let cell = "ab".repeat(32);
+        for amount in [0, 5_000] {
+            let body = faucet_request(&cell, amount);
+            assert_eq!(
+                body,
+                serde_json::json!({ "recipient": cell, "amount": amount })
+            );
+        }
+    }
+
+    /// THE WIRING, against a real-executor node: whatever the node lists on
+    /// `/api/federations` (no committee, or a configured one), the
+    /// materialization `ensure_cell` sends it carries no `public_key`, and the
+    /// cell the node is left holding is the zero-pk stub a first turn claims.
+    /// `TestNode` mints the key-bound hosted cell when a key arrives, as a solo
+    /// node does, so a key that reaches the wire fails the stub assertion too.
+    #[cfg(feature = "test-support")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn every_node_shape_receives_a_keyless_materialization() {
+        use dregg_sdk_net::test_support::TestNode;
+
+        let clerk = AgentCipherclerk::from_seed([0x5A; 64]);
+        let cell = clerk.cell_id("default");
+        let cell_hex = hex::encode(cell.as_bytes());
+        for configured in [false, true] {
+            let (node, _agent) = TestNode::genesis([0x11; 32], [0x22; 32], 0);
+            let node = if configured {
+                node.with_configured_committee([0x33; 32])
+            } else {
+                node
+            };
+            let spawned = node.spawn().await;
+            let http = reqwest::Client::new();
+            let outcome = ensure_cell(&http, spawned.base_url(), &cell_hex, 0, 0)
+                .await
+                .expect("materialize");
+            assert!(outcome.materialized, "configured={configured}");
+            let node = spawned.lock().await;
+            assert_eq!(
+                node.faucet_requests(),
+                [serde_json::json!({ "recipient": cell_hex, "amount": 0 })],
+                "configured={configured}: the node must receive exactly one keyless request"
+            );
+            assert_eq!(
+                node.ledger().get(&cell).map(|c| *c.public_key()),
+                Some([0u8; 32]),
+                "configured={configured}: the node must hold a claimable zero-pk stub"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn rate_limited_duplicate_joins_in_flight_grant() {
         let (url, state, handle) = spawn_faucet_node(90, FaucetMode::RateLimitedThenCommit).await;
-        let (cell_hex, pk_hex) = {
-            let node = state.lock().await;
-            (
-                hex::encode(node.recipient.0),
-                hex::encode(node.ledger.get(&node.recipient).unwrap().public_key()),
-            )
-        };
-        let outcome = ensure_cell(
-            &reqwest::Client::new(),
-            &url,
-            &cell_hex,
-            &pk_hex,
-            1_510,
-            9_060,
-        )
-        .await
-        .expect("duplicate owner must join the in-flight grant");
+        let cell_hex = hex::encode(state.lock().await.recipient.0);
+        let outcome = ensure_cell(&reqwest::Client::new(), &url, &cell_hex, 1_510, 9_060)
+            .await
+            .expect("duplicate owner must join the in-flight grant");
         assert!(outcome.joined_in_flight);
         assert_eq!(outcome.balance, 9_060);
         assert_eq!(state.lock().await.calls, 1);
