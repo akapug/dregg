@@ -203,6 +203,19 @@ impl RemoteRuntime {
     }
 
     async fn get_json<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, SdkError> {
+        self.get_json_or_status(path)
+            .await?
+            .map_err(|status| SdkError::Wire(format!("GET {path}: HTTP {status}")))
+    }
+
+    /// GET `path` and parse its JSON body. The inner `Err` is the status of a
+    /// node that answered without success; the outer `Err` is a transport
+    /// failure or an unreadable body. A caller that treats "not served" as an
+    /// answer must still refuse on the outer one.
+    async fn get_json_or_status<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+    ) -> Result<Result<T, reqwest::StatusCode>, SdkError> {
         let url = format!("{}{}", self.base, path);
         let resp = self
             .http
@@ -211,13 +224,11 @@ impl RemoteRuntime {
             .await
             .map_err(|e| SdkError::Wire(format!("GET {path}: {e}")))?;
         if !resp.status().is_success() {
-            return Err(SdkError::Wire(format!(
-                "GET {path}: HTTP {}",
-                resp.status()
-            )));
+            return Ok(Err(resp.status()));
         }
         resp.json::<T>()
             .await
+            .map(Ok)
             .map_err(|e| SdkError::Wire(format!("GET {path}: bad body: {e}")))
     }
 
@@ -235,11 +246,15 @@ impl RemoteRuntime {
     }
 
     async fn discover_federation_id(&self) -> Result<[u8; 32], SdkError> {
-        if let Ok(feds) = self
-            .get_json::<Vec<FederationInfoLite>>("/api/federations")
-            .await
-            && let Some(local) = feds.iter().find(|f| f.is_configured_local())
-        {
+        // A node that does not serve the listing (a non-success status) reads
+        // as unconfigured. A transport failure or an unreadable listing is an
+        // error, never the `blake3(operator pubkey)` fallback: guessing there
+        // signs every action of a configured node over the wrong binding.
+        let feds = self
+            .get_json_or_status::<Vec<FederationInfoLite>>("/api/federations")
+            .await?
+            .unwrap_or_default();
+        if let Some(local) = feds.iter().find(|f| f.is_configured_local()) {
             return hex_decode_32(&local.federation_id);
         }
         // Solo-node derivation: blake3(operator pubkey).
@@ -683,6 +698,63 @@ mod tests {
             Some(expected_head),
         );
         server.await.expect("fixture server task");
+    }
+
+    /// The listing route decides the binding, so how it FAILS matters. A node
+    /// that drops the `/api/federations` request is a transport failure, not an
+    /// unconfigured node: discovery must refuse rather than fall back to
+    /// `blake3(operator pubkey)`, even though the identity route answers. A
+    /// node that answers the listing 404 is an older node and falls back.
+    #[tokio::test]
+    async fn a_dropped_federation_listing_is_an_error_not_the_solo_fallback() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let node_pk = [0x5C; 32];
+        for drop_listing in [true, false] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind fixture server");
+            let addr = listener.local_addr().expect("fixture address");
+            let server = tokio::spawn(async move {
+                while let Ok((mut stream, _)) = listener.accept().await {
+                    let mut request = vec![0u8; 4096];
+                    let n = stream.read(&mut request).await.unwrap_or(0);
+                    let request = String::from_utf8_lossy(&request[..n]).to_string();
+                    let (status, body) = if request.starts_with("GET /api/federations ") {
+                        if drop_listing {
+                            continue; // closes the connection with no response
+                        }
+                        ("404 Not Found", String::new())
+                    } else if request.starts_with("GET /api/node/identity ") {
+                        let body = serde_json::json!({ "public_key": hex_encode(&node_pk) });
+                        ("200 OK", body.to_string())
+                    } else {
+                        ("404 Not Found", String::new())
+                    };
+                    let response = format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len(),
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                }
+            });
+
+            let clerk = AgentCipherclerk::from_seed([0x32; 64]);
+            let runtime = RemoteRuntime::connect(format!("http://{addr}"), clerk);
+            let got = runtime.federation_id().await;
+            server.abort();
+            if drop_listing {
+                assert!(
+                    got.is_err(),
+                    "a dropped listing must refuse, not sign over blake3(pk): {got:?}"
+                );
+            } else {
+                assert_eq!(
+                    got.expect("a 404 listing falls back to the solo derivation"),
+                    *blake3::hash(&node_pk).as_bytes(),
+                );
+            }
+        }
     }
 
     // ─── builder staging ───
