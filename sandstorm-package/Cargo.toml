@@ -1,0 +1,18 @@
+[package]
+name = "sandstorm-package"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Standalone signed Sandstorm SPK and manifest parser"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+lzma-rs = "0.3"
+ed25519-dalek = { version = "2.1", features = ["std"] }
+sha2 = "0.10"
+data-encoding = "2"
+
+[lints.rust]
+unsafe_code = "forbid"
+unexpected_cfgs = "deny"

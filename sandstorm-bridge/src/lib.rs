@@ -50,13 +50,13 @@
 //!   egress) flows through the cap-gated bridge; nothing bypasses it.
 
 pub mod bridge;
-pub mod capnp_wire;
+pub use sandstorm_package::capnp_wire;
 pub mod cell;
 pub mod grain;
 pub mod limits;
 pub mod manifest;
 pub mod net;
-pub mod spk;
+pub use sandstorm_package::spk;
 pub mod tenant;
 pub mod webauth_rail;
 

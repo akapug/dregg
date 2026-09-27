@@ -19208,6 +19208,17 @@ dependencies = [
  "dregg-circuit",
  "dregg-pq-testkit",
  "ed25519-dalek",
+ "sandstorm-package",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "sandstorm-package"
+version = "0.1.0"
+dependencies = [
+ "data-encoding",
+ "ed25519-dalek",
  "lzma-rs",
  "serde",
  "serde_json",
