@@ -1,5 +1,24 @@
 # HORIZONLOG — the named-follow-up burn-down
 
+## SEPTEMBER 27 — first real SPK process; Mini app authority remains next
+
+Resume through the [suite handoff](https://github.com/emberian/dregg-assortia/blob/main/HANDOFF.md)
+and [checkpoint 19](https://github.com/emberian/dregg-assortia/blob/main/sprints/2026-09-26/checkpoint-19.md).
+The active goal is a shared application-grain platform using actual packaged
+apps, Mini authority, hosted Hermes and selective fn version transport. Bread's
+`sandstorm-package` leaf at **581911535** is pinned by Mini's signed ingestion.
+
+On persvati, Mini's private bounded runner executed the signed Simple Todos
+SPK create action, retained its `/var`, then ran its `continueCommand` and
+received HTTP 200 over typed fd-3 RPC. See Mini **f70aa4d** for exact package,
+binary, unit and failure/recovery evidence. This is actual app execution,
+not an authorized or public service. Mini **95ee02c** repaired a hosted
+composite-birth historical lookup on a *copied* Store; **42e5705**, **1808b0b**
+and **6f945ab** add candidate application sessions, dispatch identity and
+role-description transport. Native app admission, exact role resolution,
+browser/Hermes access and selected fn release remain work. Bread's other
+current edits belong to other lanes and are not adopted by this checkpoint.
+
 ## SEPTEMBER 26 — active overnight Mini / fn construction
 
 Resume through the [suite handoff](https://github.com/emberian/dregg-assortia/blob/main/HANDOFF.md),
