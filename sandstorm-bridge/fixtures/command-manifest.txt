@@ -1,0 +1,8 @@
+(appVersion = 7,
+ appTitle = (defaultText = "Command Wire"),
+ actions = [(command = (argv = ["/action", "init"], environ = [(key = "ACTION_ENV", value = "new")]),
+             nounPhrase = (defaultText = "thing"))],
+ continueCommand = (deprecatedExecutablePath = "/legacy-exec",
+                    argv = ["/sandstorm-http-bridge", "8000", "--", "/start.sh"],
+                    environ = [(key = "PATH", value = "/usr/bin:/bin"),
+                               (key = "APP_MODE", value = "staging")]))

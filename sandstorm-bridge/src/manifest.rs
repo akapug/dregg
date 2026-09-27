@@ -267,19 +267,35 @@ fn read_localized(s: &Struct<'_, '_>, slot: usize) -> Result<String, capnp_wire:
     }
 }
 
-/// Read a `Manifest.Command` (or `None` → an empty command): `argv` is pointer slot 1.
+/// Read a `Manifest.Command` (or `None` → an empty command). In `package.capnp`,
+/// `deprecatedExecutablePath`, `argv`, and `environ` occupy pointer slots 0, 1,
+/// and 2 respectively; each `Util.KeyValue` in `environ` has `key` and `value`
+/// in pointer slots 0 and 1. The deprecated path, when present, is prepended
+/// to `argv`, as the upstream schema specifies.
 fn read_command(cmd: Option<Struct<'_, '_>>) -> Result<Command, capnp_wire::CapnpError> {
-    let argv = match cmd {
-        Some(c) => match c.get_list(1)? {
-            Some(l) => l.text_list()?,
-            None => Vec::new(),
-        },
+    let Some(cmd) = cmd else {
+        return Ok(Command {
+            argv: Vec::new(),
+            environ: Vec::new(),
+        });
+    };
+    let mut argv = match cmd.get_list(1)? {
+        Some(list) => list.text_list()?,
         None => Vec::new(),
     };
-    Ok(Command {
-        argv,
-        environ: Vec::new(),
-    })
+    let deprecated_executable_path = cmd.get_text(0)?;
+    if !deprecated_executable_path.is_empty() {
+        argv.insert(0, deprecated_executable_path);
+    }
+    let environ = match cmd.get_list(2)? {
+        Some(list) => list
+            .structs()?
+            .into_iter()
+            .map(|entry| Ok((entry.get_text(0)?, entry.get_text(1)?)))
+            .collect::<Result<Vec<_>, capnp_wire::CapnpError>>()?,
+        None => Vec::new(),
+    };
+    Ok(Command { argv, environ })
 }
 
 /// Read `Manifest.actions` (pointer slot 0). Each `Action`'s `command` is pointer slot
@@ -321,6 +337,58 @@ fn bridge_config_from_argv(argv: &[String]) -> Option<BridgeConfig> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decodes_real_schema_command_environment_and_deprecated_executable() {
+        // capnp encode against Sandstorm package.capnp and util.capnp at
+        // a97cf3ee19d3bf2761cd597583ca5d998de425d8 generated this framed
+        // Manifest message. It carries both action and continue commands;
+        // the latter has all three Command pointer fields populated.
+        let hex = concat!(
+            "000000003e00000000000000020005000000000000000000070000000000000011000000370000006800000000000300",
+            "0000000000000000cc000000000002000000000000000000040000000100050000000000000000000000000000000000",
+            "0c0000000000030000000000000000000000000000000000340000000000020000000000000000000500000016000000",
+            "11000000170000000500000042000000050000002a0000002f616374696f6e00696e6974000000000400000000000200",
+            "050000005a0000000900000022000000414354494f4e5f454e560000000000006e657700000000000500000032000000",
+            "00000000000000007468696e67000000090000006a0000000d0000002600000035000000270000002f6c65676163792d",
+            "65786563000000000d000000ba000000150000002a000000150000001a00000015000000520000002f73616e6473746f",
+            "726d2d687474702d627269646765000038303030000000002d2d0000000000002f73746172742e736800000000000000",
+            "08000000000002000d0000002a0000000d00000072000000110000004a00000015000000420000005041544800000000",
+            "2f7573722f62696e3a2f62696e0000004150505f4d4f4445000000000000000073746167696e6700050000006a000000",
+            "0000000000000000436f6d6d616e64205769726500000000",
+        );
+        let bytes = hex
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+            .collect::<Vec<_>>();
+        let manifest = SpkManifest::from_capnp(&bytes).unwrap();
+        assert_eq!(manifest.app_title, "Command Wire");
+        assert_eq!(manifest.app_version, 7);
+        assert_eq!(
+            manifest.continue_command.argv,
+            [
+                "/legacy-exec",
+                "/sandstorm-http-bridge",
+                "8000",
+                "--",
+                "/start.sh"
+            ]
+        );
+        assert_eq!(
+            manifest.continue_command.environ,
+            [
+                ("PATH".into(), "/usr/bin:/bin".into()),
+                ("APP_MODE".into(), "staging".into())
+            ]
+        );
+        assert_eq!(manifest.actions.len(), 1);
+        assert_eq!(manifest.actions[0].command.argv, ["/action", "init"]);
+        assert_eq!(
+            manifest.actions[0].command.environ,
+            [("ACTION_ENV".into(), "new".into())]
+        );
+    }
 
     /// A trimmed Etherpad-shaped manifest (an http-bridge app with an editor/viewer
     /// role model) — the kind of `.spk` the catalog is full of.
