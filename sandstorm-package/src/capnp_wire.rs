@@ -12,11 +12,8 @@
 //! Only the slice of capnp the `.spk` format uses is implemented: struct pointers,
 //! list pointers (byte/`Data`, `Text`, pointer-list, and composite-struct lists),
 //! far pointers (single- and double-word landing pads), and the single-segment writer.
-//! Every traversal is bounded — a list count is validated against the words actually
-//! present before anything is allocated, and pointer-following is depth-limited — so a
-//! malformed or hostile message is refused with bounded memory rather than looping or
-//! over-allocating (defense in depth: the archive is decoded only *after* its Ed25519
-//! signature verifies, but the reader does not rely on that).
+//! Pointer-following is depth-limited. Archive tree traversal has its own budget in
+//! `spk`, because each nested field access starts a new pointer-follow operation.
 
 /// Why decoding a capnp message failed.
 #[derive(Debug, PartialEq, Eq)]
@@ -47,8 +44,8 @@ impl std::fmt::Display for CapnpError {
 }
 impl std::error::Error for CapnpError {}
 
-/// The cap on how deep `get_*` will follow pointers — guards against cycles and
-/// pathological nesting in a hostile message.
+/// The cap on far-pointer hops in one `get_*` operation. Archive directory
+/// nesting is separately bounded by the `spk` decoder.
 const MAX_DEPTH: u32 = 256;
 
 /// A parsed, framed capnp message: its segments, borrowed from the input buffer.
@@ -331,10 +328,13 @@ impl<'a, 'm> Struct<'a, 'm> {
     /// empty if absent).
     pub fn get_text(&self, i: usize) -> Result<String, CapnpError> {
         let mut b = self.get_data(i)?;
-        if b.last() == Some(&0) {
-            b.pop();
+        if b.is_empty() {
+            return Ok(String::new());
         }
-        Ok(String::from_utf8_lossy(&b).into_owned())
+        if b.pop() != Some(0) {
+            return Err(CapnpError::Framing("Text lacks trailing NUL"));
+        }
+        String::from_utf8(b).map_err(|_| CapnpError::Framing("Text is not UTF-8"))
     }
 }
 
@@ -423,6 +423,11 @@ impl<'a, 'm> List<'a, 'm> {
         if body_words != self.count {
             return Err(CapnpError::Framing("composite word count mismatch"));
         }
+        // A zero-width struct can be repeated an enormous number of times while
+        // consuming no backing words. None of our schema's struct lists use one.
+        if stride == 0 && elem_count != 0 {
+            return Err(CapnpError::ListTooLarge);
+        }
         let total_words = self
             .start_word
             .checked_add(1)
@@ -470,10 +475,15 @@ impl<'a, 'm> List<'a, 'm> {
                 Resolved::Null => out.push(String::new()),
                 Resolved::List(l) => {
                     let mut b = l.bytes()?;
-                    if b.last() == Some(&0) {
-                        b.pop();
+                    if !b.is_empty() {
+                        if b.pop() != Some(0) {
+                            return Err(CapnpError::Framing("Text lacks trailing NUL"));
+                        }
                     }
-                    out.push(String::from_utf8_lossy(&b).into_owned());
+                    out.push(
+                        String::from_utf8(b)
+                            .map_err(|_| CapnpError::Framing("Text is not UTF-8"))?,
+                    );
                 }
                 Resolved::Struct(_) => {
                     return Err(CapnpError::WrongKind("text list slot is a struct"))
