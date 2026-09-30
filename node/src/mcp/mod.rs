@@ -1170,6 +1170,47 @@ mod tests {
         );
     }
 
+    /// A node with NO configured federation signs and verifies under ONE id.
+    /// There `federation_id_for_executor` falls back to `blake3(cclerk pubkey)`,
+    /// which differs from the raw `federation_id` field. The handlers used to sign
+    /// under the field while the node's executor verified under the fallback, so
+    /// every signed MCP turn on such a node was refused as `InvalidAuthorization`
+    /// ("Ed25519 signature verification failed").
+    #[tokio::test]
+    async fn an_unconfigured_federation_node_admits_its_own_signed_mcp_turn() {
+        let (state, _tmp) = fresh_unlocked_state().await;
+        let (target_cell, recipient_cell) = {
+            let s = state.read().await;
+            assert!(
+                !s.federation_configured,
+                "the premise is a node with no configured federation"
+            );
+            assert_ne!(
+                crate::executor_setup::federation_id_for_executor(&s),
+                s.federation_id,
+                "the executor's federation id must differ from the raw field here, \
+                 or this test cannot tell the two apart"
+            );
+            let id = dregg_cell::CellId::derive_raw(&s.cclerk.public_key().0, &[0u8; 32]);
+            drop(s);
+            let recipient = insert_cell(&state, [0x78u8; 32], 0).await;
+            (hex_encode(&id.0), hex_encode(&recipient.0))
+        };
+        let params = serde_json::json!({
+            "to_agent": recipient_cell,
+            "target_cell": target_cell,
+            "permissions": "signature",
+        });
+
+        let result = dispatch_tool("dregg_grant_capability", params, &state).await;
+        let j = extract_json(&result);
+        assert_eq!(
+            j.get("activity_status").and_then(|v| v.as_str()),
+            Some("committed"),
+            "a signed MCP turn on a node without a configured federation must commit: {j}"
+        );
+    }
+
     // ── dregg_exercise_bearer_cap ────────────────────────────────────────
 
     /// THE HONEST PATH: a self-delegation the node's own key signed, carrying a real
@@ -1189,7 +1230,7 @@ mod tests {
                 &dregg_cell::AuthRequired::Signature,
                 &bearer_pk,
                 10_000,
-                &s.federation_id,
+                &crate::executor_setup::federation_id_for_executor(&s),
             );
             // The delegator IS this node's key: `cell_by_pubkey(delegator_pk)` must find
             // the agent cell (`Cell::with_balance(cclerk.public_key().0, …)`), and the

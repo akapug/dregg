@@ -883,7 +883,9 @@ pub(super) async fn handle_resources_read(
             let v = serde_json::json!({
                 "public_key": hex_encode(&pk),
                 "agent_cell_id": hex_encode(cell_id.as_bytes()),
-                "federation_id": hex_encode(&s.federation_id),
+                // The id turns must be signed under: the one the node's executor
+                // verifies with (`/status` `executor_federation_id`).
+                "federation_id": hex_encode(&crate::executor_setup::federation_id_for_executor(&s)),
                 "mcp_cap_issuer_pubkey": hex_encode(&issuer),
                 "mcp_cap_enforcement": s.mcp_cap_enforce,
                 "unlocked": s.unlocked,

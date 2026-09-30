@@ -255,7 +255,7 @@ pub(super) async fn tool_create_cell_from_factory_effect(
             agent_cell_id,
             vec![effect],
             &s.cclerk,
-            &s.federation_id,
+            &crate::executor_setup::federation_id_for_executor(&s),
             nonce,
         ),
         depends_on: vec![],
@@ -382,7 +382,8 @@ pub(super) async fn run_starbridge_action(
     // Node identity + agent cell.
     let pk_bytes = s.cclerk.public_key().0;
     let agent_cell_id = dregg_cell::CellId::derive_raw(&pk_bytes, &[0u8; 32]);
-    let federation_id = [0u8; 32];
+    // Sign under the id the node's executor (configured below) verifies under.
+    let federation_id = crate::executor_setup::federation_id_for_executor(&s);
 
     // Re-sign the action with the node's cipherclerk (overwrites the temp
     // signature placed by the starbridge-apps builder).

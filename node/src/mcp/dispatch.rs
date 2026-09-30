@@ -125,7 +125,9 @@ impl McpCapContext {
             enforce: s.mcp_cap_enforce,
             issuer_pubkey,
             authority_cell: mcp_authority_cell(&node_pk, &issuer_pubkey),
-            federation_id: s.federation_id,
+            // The id the node's executor verifies under (`/status`'s
+            // `executor_federation_id`), never the raw field.
+            federation_id: crate::executor_setup::federation_id_for_executor(&s),
             block_height: crate::executor_setup::attested_block_height(&s),
         }
     }

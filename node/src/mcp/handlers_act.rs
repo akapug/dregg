@@ -234,7 +234,7 @@ pub(super) async fn tool_submit_turn(params: &Value, state: &NodeState) -> McpTo
     // Rust `TurnExecutor` is the demoted differential reference. Previously this
     // surface called `executor.execute` directly, leaving Rust authoritative on the
     // MCP path — the remaining Stage-0 seam this closes.
-    let federation_id = s.federation_id;
+    let federation_id = crate::executor_setup::federation_id_for_executor(&s);
     let mut executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
     // The node's executor shape: attested + 1 height (the clock `valid_until` is checked
     // against), timestamp, restored receipt heads and side state, registries, fee cells.
@@ -799,15 +799,16 @@ pub(super) async fn tool_captp_deliver(params: &Value, state: &NodeState) -> Mcp
 
     let expires_at = params.get("expires_at").and_then(|v| v.as_u64());
 
-    let target_federation_bytes: [u8; 32] =
+    // Absent = THIS node's federation, resolved under the state lock below as the id
+    // the node's executor checks `cert.target_federation` against.
+    let target_federation_param: Option<[u8; 32]> =
         match params.get("target_federation").and_then(|v| v.as_str()) {
             Some(h) => match hex_decode(h) {
-                Ok(b) => b,
+                Ok(b) => Some(b),
                 Err(_) => return McpToolResult::error("invalid hex for target_federation"),
             },
-            None => [0u8; 32],
+            None => None,
         };
-    let target_federation = dregg_types::FederationId(target_federation_bytes);
 
     let introducer_sk = match params.get("introducer_sk").and_then(|v| v.as_str()) {
         Some(h) => match hex_decode(h) {
@@ -853,6 +854,9 @@ pub(super) async fn tool_captp_deliver(params: &Value, state: &NodeState) -> Mcp
     if !s.unlocked {
         return McpToolResult::error("cipherclerk is locked; unlock first");
     }
+    let target_federation_bytes = target_federation_param
+        .unwrap_or_else(|| crate::executor_setup::federation_id_for_executor(&s));
+    let target_federation = dregg_types::FederationId(target_federation_bytes);
 
     let recipient_pk = s.cclerk.public_key().0;
     let target_cell_id = dregg_cell::CellId(target_cell_bytes);
@@ -883,7 +887,7 @@ pub(super) async fn tool_captp_deliver(params: &Value, state: &NodeState) -> Mcp
         .get(&agent_cell_id)
         .map(|c| c.state.nonce())
         .unwrap_or(0);
-    let federation_id = s.federation_id;
+    let federation_id = crate::executor_setup::federation_id_for_executor(&s);
     let signing_msg = dregg_turn::Authorization::captp_delivered_signing_message_for_federation(
         &federation_id,
         &cert.nonce,
@@ -1151,7 +1155,7 @@ pub(super) async fn tool_bilateral_action(params: &Value, state: &NodeState) -> 
     }
 
     let agent_cell_id = from_cell;
-    let federation_id = s.federation_id;
+    let federation_id = crate::executor_setup::federation_id_for_executor(&s);
 
     // The ACTING CELL's replay nonce, off the ledger. `receipt_chain_length()` is the
     // number of receipts in the node-WIDE log across every agent — the same wrong scope

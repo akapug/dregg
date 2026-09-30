@@ -108,7 +108,7 @@ pub(super) async fn tool_grant_capability(params: &Value, state: &NodeState) -> 
             agent_cell_id,
             vec![effect],
             &s.cclerk,
-            &s.federation_id,
+            &crate::executor_setup::federation_id_for_executor(&s),
             nonce,
         ),
         depends_on: vec![],
@@ -576,7 +576,7 @@ pub(super) async fn tool_create_bearer_cap(params: &Value, state: &NodeState) ->
         3 => dregg_cell::AuthRequired::Either,
         _ => dregg_cell::AuthRequired::Impossible,
     };
-    let federation_id = s.federation_id;
+    let federation_id = crate::executor_setup::federation_id_for_executor(&s);
     let msg = dregg_turn::TurnExecutor::compute_bearer_delegation_message(
         &dregg_cell::CellId(target_cell_arr),
         &perm_auth_required,
@@ -678,7 +678,7 @@ pub(super) async fn tool_exercise_bearer_cap(params: &Value, state: &NodeState) 
     if !s.unlocked {
         return McpToolResult::error("cipherclerk is locked; unlock first");
     }
-    let federation_id = s.federation_id;
+    let federation_id = crate::executor_setup::federation_id_for_executor(&s);
 
     // Check expiry against current height.
     let current_height = s
@@ -1047,15 +1047,16 @@ pub(super) async fn tool_exercise_handoff_cert(params: &Value, state: &NodeState
     let expires_at = params.get("expires_at").and_then(|v| v.as_u64());
 
     // ── Target federation ────────────────────────────────────────────────────
-    let target_federation_bytes: [u8; 32] =
+    // Absent = THIS node's federation, resolved under the state lock below as the id
+    // the node's executor checks `cert.target_federation` against.
+    let target_federation_param: Option<[u8; 32]> =
         match params.get("target_federation").and_then(|v| v.as_str()) {
             Some(h) => match hex_decode(h) {
-                Ok(b) => b,
+                Ok(b) => Some(b),
                 Err(_) => return McpToolResult::error("invalid hex for target_federation"),
             },
-            None => [0u8; 32],
+            None => None,
         };
-    let target_federation = dregg_types::FederationId(target_federation_bytes);
 
     // ── Introducer key ───────────────────────────────────────────────────────
     // If introducer_sk is supplied, derive pk from it (testing path).
@@ -1142,6 +1143,9 @@ pub(super) async fn tool_exercise_handoff_cert(params: &Value, state: &NodeState
     if !s.unlocked {
         return McpToolResult::error("cipherclerk is locked; unlock first");
     }
+    let target_federation_bytes = target_federation_param
+        .unwrap_or_else(|| crate::executor_setup::federation_id_for_executor(&s));
+    let target_federation = dregg_types::FederationId(target_federation_bytes);
 
     let recipient_pk: [u8; 32] = match params.get("recipient_pk").and_then(|v| v.as_str()) {
         Some(h) => match hex_decode(h) {
@@ -1191,7 +1195,7 @@ pub(super) async fn tool_exercise_handoff_cert(params: &Value, state: &NodeState
         .get(&agent_cell_id)
         .map(|c| c.state.nonce())
         .unwrap_or(0);
-    let federation_id = s.federation_id;
+    let federation_id = crate::executor_setup::federation_id_for_executor(&s);
     let signing_msg = dregg_turn::Authorization::captp_delivered_signing_message_for_federation(
         &federation_id,
         &cert.nonce,
