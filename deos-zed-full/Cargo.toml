@@ -260,7 +260,14 @@ title_bar = { git = "https://github.com/emberian/zed", rev = "adb9026524", featu
 # carries the `CosmicTextSystem` (real text shaping); `image` is `RgbaImage::save`
 # (the captured screenshot → PNG). Same zed-fork rev as `gpui`, so the
 # renderer/text types unify with the rest of the graph.
-gpui_platform = { git = "https://github.com/emberian/zed", rev = "adb9026524", features = ["test-support", "font-kit"] }
+# `runtime_shaders`, as deos-zed/Cargo.toml sets it: gpui_macos then embeds the
+# Metal shader SOURCE and compiles it when a renderer is created, instead of
+# running `xcrun metal` in its build script. Without it the build needs Xcode's
+# optional Metal Toolchain component, even for tests that never render. This is a
+# dev-dependency, so it reaches only test/example builds. A normal build of this
+# lib has no gpui_platform by default; under `full-zed` it arrives through
+# deos-hermes, which already enables runtime_shaders too.
+gpui_platform = { git = "https://github.com/emberian/zed", rev = "adb9026524", features = ["test-support", "font-kit", "runtime_shaders"] }
 gpui_wgpu = { git = "https://github.com/emberian/zed", rev = "adb9026524" }
 image = { version = "0.25" }
 
