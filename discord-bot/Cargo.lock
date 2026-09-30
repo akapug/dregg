@@ -2885,6 +2885,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "chacha20poly1305",
+ "ed25519-dalek",
  "getrandom 0.3.4",
  "hmac 0.12.1",
  "rmp-serde",
