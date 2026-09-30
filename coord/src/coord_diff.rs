@@ -400,7 +400,7 @@ mod two_phase_commit_diff {
             preconditions,
             id0,
             0,
-            None,
+            1_800,
         );
 
         let nodes = vec![node_id(1), node_id(2), node_id(3)];

@@ -82,7 +82,7 @@ fn twoc_pc_commits_through_the_verified_gate_when_present() {
         balance_change: None,
         witness_blobs: vec![],
     });
-    let af = AtomicForest::new(nodes.clone(), forest, vec![], initiator, 0, None);
+    let af = AtomicForest::new(nodes.clone(), forest, vec![], initiator, 0, 1_800);
 
     let mut coord = Coordinator::new(
         node_id(1),

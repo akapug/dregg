@@ -14,6 +14,11 @@ use crate::atomic::{AtomicForest, AtomicForestBuilder, Coordinator, Decision, Pa
 use crate::causal::CausalDag;
 use crate::error::CoordError;
 
+/// A deadline (a block height) inside the admission window of every height these tests run at.
+const LIVE_DEADLINE: i64 = 1_800;
+/// The height the tests' coordinators execute and certify commits at.
+const COMMIT_HEIGHT: u64 = 1;
+
 // ─── Test Helpers ──────────────────────────────────────────────────────────────
 
 /// Create a test node ID from a simple integer.
@@ -447,7 +452,7 @@ mod atomic_forest_tests {
             )],
             cell_a.id(),
             0,
-            None,
+            LIVE_DEADLINE,
         );
 
         assert!(af.validate().is_ok());
@@ -465,7 +470,7 @@ mod atomic_forest_tests {
             vec![],
             CellId::from_bytes([0u8; 32]),
             0,
-            None,
+            LIVE_DEADLINE,
         );
         assert_eq!(af.validate().unwrap_err(), CoordError::EmptyForest);
     }
@@ -487,7 +492,7 @@ mod atomic_forest_tests {
             witness_blobs: vec![],
         });
 
-        let af = AtomicForest::new(vec![], forest, vec![], cell_a.id(), 0, None);
+        let af = AtomicForest::new(vec![], forest, vec![], cell_a.id(), 0, LIVE_DEADLINE);
         assert_eq!(af.validate().unwrap_err(), CoordError::NoParticipants);
     }
 
@@ -517,6 +522,7 @@ mod atomic_forest_tests {
             .set_forest(forest)
             .set_initiator(cell_a.id())
             .set_fee(0)
+            .set_valid_until(LIVE_DEADLINE)
             .add_precondition(
                 cell_a.id(),
                 Preconditions {
@@ -589,7 +595,7 @@ mod coordinator_tests {
             ],
             id_a,
             0,
-            None,
+            LIVE_DEADLINE,
         );
 
         let nodes = vec![node_id(1), node_id(2)];
@@ -789,7 +795,7 @@ mod coordinator_tests {
         assert_eq!(decision, Some(Decision::Commit));
 
         // Commit.
-        let commit_msg = coord.commit(&mut ledger).unwrap();
+        let commit_msg = coord.commit(&mut ledger, COMMIT_HEIGHT).unwrap();
         assert_eq!(commit_msg.signatures.len(), 2);
 
         // Verify state changes.
@@ -907,7 +913,7 @@ mod coordinator_tests {
         coord.receive_vote(node_id(1), Vote::yes(sig)).unwrap();
 
         // Try to commit with only 1/2 votes.
-        let err = coord.commit(&mut ledger).unwrap_err();
+        let err = coord.commit(&mut ledger, COMMIT_HEIGHT).unwrap_err();
         assert!(matches!(
             err,
             CoordError::ThresholdNotMet {
@@ -941,7 +947,7 @@ mod coordinator_tests {
         let decision = coord.receive_vote(node_id(1), Vote::yes(sig)).unwrap();
         assert_eq!(decision, Some(Decision::Commit));
 
-        let commit_msg = coord.commit(&mut ledger).unwrap();
+        let commit_msg = coord.commit(&mut ledger, COMMIT_HEIGHT).unwrap();
         assert_eq!(commit_msg.signatures.len(), 1);
 
         assert_eq!(ledger.get(&id_a).unwrap().state.balance(), 9500);
@@ -1028,30 +1034,22 @@ mod coordinator_tests {
         assert!(matches!(err, CoordError::BudgetExceeded { .. }));
     }
 
-    /// This is the property the whole `AtomicForest::valid_until` field exists for:
-    /// a stale proposal must be REFUSED at commit, not silently accepted.
-    ///
-    /// Non-vacuity matters more here than in most tests: before this fix, this exact
-    /// scenario committed successfully — twice over. `Turn { valid_until: None, .. }`
-    /// skipped the executor's expiration check entirely
-    /// (`turn/src/executor/execute.rs:426`), AND even with a real `Some(past)` deadline,
-    /// `TurnExecutor::new`'s default `current_timestamp: 0` meant `0 > valid_until` was
-    /// false for any realistic (positive, post-1970) deadline — the check could never
-    /// fire either way. Both gaps are closed by this commit; this test would have
-    /// FAILED (committed instead of rejecting) against the pre-fix code on either count.
+    /// A stale proposal is REFUSED at commit, at the height the coordinator executes at:
+    /// the forest is valid through height 5, the coordinator commits at 6, and the turn is
+    /// `Expired` although the quorum voted Yes. (The votes here are hand-signed; a
+    /// `Participant` would have refused to vote on it at all, see
+    /// `participant_tests::a_participant_refuses_to_vote_yes_on_a_stale_deadline`.)
     #[test]
     fn commit_refuses_a_forest_whose_deadline_has_already_passed() {
         let _native = crate::atomic::NativeDifferentialArmed::new();
-        let (mut ledger, _id_a, _id_b, stale_af, signing_keys, participant_keys) =
-            setup_two_party();
-        // Rebuild the SAME forest with a deadline far in the past (1970 + 1 day).
+        let (mut ledger, _id_a, _id_b, af, signing_keys, participant_keys) = setup_two_party();
         let stale_af = AtomicForest::new(
-            stale_af.participants,
-            stale_af.forest,
-            stale_af.preconditions,
-            stale_af.initiator,
-            stale_af.fee,
-            Some(86_400),
+            af.participants,
+            af.forest,
+            af.preconditions,
+            af.initiator,
+            af.fee,
+            5,
         );
         let mut coord = Coordinator::new(
             node_id(1),
@@ -1067,17 +1065,21 @@ mod coordinator_tests {
         coord.receive_vote(node_id(1), Vote::yes(sig_a)).unwrap();
         let sig_b = Vote::sign_yes(&prop_msg.proposal_id, &stale_af.hash, &signing_keys[1]);
         let decision = coord.receive_vote(node_id(2), Vote::yes(sig_b)).unwrap();
-        assert_eq!(decision, Some(Decision::Commit), "quorum reached, as normal");
+        assert_eq!(
+            decision,
+            Some(Decision::Commit),
+            "quorum reached, as normal"
+        );
 
         let err = coord
-            .commit(&mut ledger)
-            .expect_err("a Turn whose valid_until is in 1970 must be refused, not committed");
-        assert!(
-            matches!(
-                err,
-                CoordError::TurnExecution(dregg_turn::TurnError::Expired { .. })
-            ),
-            "expected TurnError::Expired, got: {err:?}"
+            .commit(&mut ledger, 6)
+            .expect_err("a forest valid through height 5 must be refused at height 6");
+        assert_eq!(
+            err,
+            CoordError::TurnExecution(dregg_turn::TurnError::Expired {
+                valid_until: 5,
+                height: 6
+            })
         );
     }
 }
@@ -1137,7 +1139,7 @@ mod participant_tests {
             ],
             id_a,
             0,
-            None,
+            LIVE_DEADLINE,
         );
 
         let nodes = vec![node_id(1), node_id(2)];
@@ -1219,6 +1221,7 @@ mod participant_tests {
                 consumed_capabilities: vec![],
             },
             signatures: vec![(node_id(1), sig_1), (node_id(2), sig_2)],
+            block_height: COMMIT_HEIGHT,
         };
 
         let receipt = participant
@@ -1231,34 +1234,19 @@ mod participant_tests {
         assert_eq!(participant.ledger.get(&id_b).unwrap().state.balance(), 5500);
     }
 
-    /// The participant-side twin of
-    /// `coordinator_tests::commit_refuses_a_forest_whose_deadline_has_already_passed`:
-    /// `apply_commit` must refuse a forest whose `valid_until` has already passed too,
-    /// not just `commit`. This is the scenario the whole design exists for — a
-    /// participant applying a QC-certified commit long after the coordinator built it —
-    /// so it is deliberately NOT the same forest object as the coordinator's test, only
-    /// the same shape: this participant only ever sees what arrives over the wire.
-    #[test]
-    fn apply_commit_refuses_a_forest_whose_deadline_has_already_passed() {
-        let (ledger, id_a, id_b, af, signing_keys, participant_keys) =
-            setup_participant_scenario();
-        let stale_af = AtomicForest::new(
-            af.participants,
-            af.forest,
-            af.preconditions,
-            af.initiator,
-            af.fee,
-            Some(86_400), // 1970 + 1 day — long expired by wall-clock "now".
-        );
-        let mut participant =
-            Participant::with_costs(id_a, node_id(1), signing_keys[0], ledger, zero_costs());
-
-        let proposal_id = stale_af.hash;
-        let sig_1 = Vote::sign_yes(&proposal_id, &stale_af.hash, &signing_keys[0]);
-        let sig_2 = Vote::sign_yes(&proposal_id, &stale_af.hash, &signing_keys[1]);
-        let commit = CommitMessage {
+    /// A commit carrying `height` for `af`, with a valid QC from both participants.
+    fn commit_at(
+        af: &AtomicForest,
+        agent: CellId,
+        signing_keys: &[[u8; 32]],
+        height: u64,
+    ) -> CommitMessage {
+        let proposal_id = af.hash;
+        let sig_1 = Vote::sign_yes(&proposal_id, &af.hash, &signing_keys[0]);
+        let sig_2 = Vote::sign_yes(&proposal_id, &af.hash, &signing_keys[1]);
+        CommitMessage {
             proposal_id,
-            receipt: dregg_turn::TurnReceipt {
+            receipt: TurnReceipt {
                 turn_hash: [0u8; 32],
                 forest_hash: [0u8; 32],
                 pre_state_hash: [0u8; 32],
@@ -1268,7 +1256,7 @@ mod participant_tests {
                 computrons_used: 0,
                 action_count: 1,
                 previous_receipt_hash: None,
-                agent: id_a,
+                agent,
                 federation_id: [0u8; 32],
                 routing_directives: vec![],
                 introduction_exports: vec![],
@@ -1281,21 +1269,119 @@ mod participant_tests {
                 consumed_capabilities: vec![],
             },
             signatures: vec![(node_id(1), sig_1), (node_id(2), sig_2)],
-        };
+            block_height: height,
+        }
+    }
 
-        let err = participant
-            .apply_commit(&commit, &stale_af, &participant_keys, 2)
-            .expect_err("a Turn whose valid_until is in 1970 must be refused, not applied");
-        assert!(
-            matches!(
-                err,
-                CoordError::TurnExecution(dregg_turn::TurnError::Expired { .. })
+    /// A certified commit applies IDENTICALLY on every replica. Expiry is evaluated at the
+    /// height the commit carries, not at each replica's own height: a replica that is far
+    /// behind and one that is far past the deadline both apply the same commit to the
+    /// same state and receipt, and a commit carrying a height past the deadline is refused
+    /// on both. (This replaces a test that pinned the old behaviour, where each replica's
+    /// wall clock decided, and a late replica refused a commit the coordinator had made.)
+    #[test]
+    fn a_certified_commit_applies_identically_on_every_replica() {
+        let (ledger, id_a, id_b, af, signing_keys, participant_keys) = setup_participant_scenario();
+        let replica = |own_height: u64| {
+            let mut p = Participant::with_costs(
+                id_a,
+                node_id(1),
+                signing_keys[0],
+                ledger.clone(),
+                zero_costs(),
+            );
+            p.set_block_height(own_height);
+            p
+        };
+        let mut behind = replica(0);
+        let mut ahead = replica(1_000_000);
+
+        let commit = commit_at(&af, id_a, &signing_keys, COMMIT_HEIGHT);
+        let r_behind = behind
+            .apply_commit(&commit, &af, &participant_keys, 2)
+            .unwrap();
+        let r_ahead = ahead
+            .apply_commit(&commit, &af, &participant_keys, 2)
+            .unwrap();
+        assert_eq!(r_behind.receipt_hash(), r_ahead.receipt_hash());
+        for p in [&behind, &ahead] {
+            assert_eq!(p.ledger.get(&id_a).unwrap().state.balance(), 9500);
+            assert_eq!(p.ledger.get(&id_b).unwrap().state.balance(), 5500);
+        }
+
+        let late = commit_at(&af, id_a, &signing_keys, LIVE_DEADLINE as u64 + 1);
+        for own_height in [0, 1_000_000] {
+            let mut p = replica(own_height);
+            let err = p
+                .apply_commit(&late, &af, &participant_keys, 2)
+                .expect_err("a commit carrying a height past the deadline is refused");
+            assert!(
+                matches!(
+                    err,
+                    CoordError::TurnExecution(dregg_turn::TurnError::Expired { .. })
+                ),
+                "expected Expired, got {err:?}"
+            );
+            assert_eq!(p.ledger.get(&id_a).unwrap().state.balance(), 10000);
+        }
+    }
+
+    /// Vote-time freshness: a participant votes Yes only while the deadline still admits
+    /// the next height. At attested height 1_799 the next height is 1_800 = LIVE_DEADLINE
+    /// (Yes); at 1_800 the next is 1_801 (No, naming the deadline).
+    #[test]
+    fn a_participant_refuses_to_vote_yes_on_a_stale_deadline() {
+        let (ledger, id_a, _, af, signing_keys, _) = setup_participant_scenario();
+        let mut participant =
+            Participant::with_costs(id_a, node_id(1), signing_keys[0], ledger, zero_costs());
+
+        participant.set_block_height(LIVE_DEADLINE as u64 - 1);
+        assert!(participant.evaluate_proposal(&af.hash, &af).is_yes());
+
+        participant.timeout_abort();
+        participant.set_block_height(LIVE_DEADLINE as u64);
+        match participant.evaluate_proposal(&af.hash, &af) {
+            Vote::No { reason, .. } => assert!(
+                reason.contains("deadline not admissible") && reason.contains("expired"),
+                "the refusal names the deadline: {reason}"
             ),
-            "expected TurnError::Expired, got: {err:?}"
-        );
-        // And the ledger must be UNTOUCHED — a refused apply must not partially move state.
-        assert_eq!(participant.ledger.get(&id_a).unwrap().state.balance(), 10000);
-        assert_eq!(participant.ledger.get(&id_b).unwrap().state.balance(), 5000);
+            other => panic!("a stale deadline must be voted No, got {other:?}"),
+        }
+    }
+
+    /// The forest's `hash` is recomputed on receipt. A forest whose fields were changed
+    /// after hashing (here the fee) is voted No, refused by `apply_commit` even under a QC
+    /// signed over its stored hash, and refused by `decode_from_wire`.
+    #[test]
+    fn a_forest_whose_hash_does_not_match_its_contents_is_refused_everywhere() {
+        let (ledger, id_a, _, af, signing_keys, participant_keys) = setup_participant_scenario();
+        assert_eq!(af.verify_hash(), Ok(()));
+        let mut tampered = af.clone();
+        tampered.fee = 999;
+        assert!(matches!(
+            tampered.verify_hash(),
+            Err(CoordError::HashMismatch { .. })
+        ));
+
+        let mut participant =
+            Participant::with_costs(id_a, node_id(1), signing_keys[0], ledger, zero_costs());
+        match participant.evaluate_proposal(&tampered.hash, &tampered) {
+            Vote::No { reason, .. } => assert!(reason.contains("forest hash")),
+            other => panic!("a tampered forest must be voted No, got {other:?}"),
+        }
+
+        let commit = commit_at(&tampered, id_a, &signing_keys, COMMIT_HEIGHT);
+        assert!(matches!(
+            participant.apply_commit(&commit, &tampered, &participant_keys, 2),
+            Err(CoordError::HashMismatch { .. })
+        ));
+
+        assert!(matches!(
+            AtomicForest::decode_from_wire(&tampered.encode_for_wire()),
+            Err(CoordError::HashMismatch { .. })
+        ));
+        let decoded = AtomicForest::decode_from_wire(&af.encode_for_wire()).unwrap();
+        assert_eq!(decoded.hash, af.hash);
     }
 
     #[test]
@@ -1339,6 +1425,7 @@ mod participant_tests {
                 consumed_capabilities: vec![],
             },
             signatures: vec![(node_id(1), sig_1), (node_id(2), sig_2)],
+            block_height: COMMIT_HEIGHT,
         };
 
         assert!(participant.verify_commit(&commit, &af, &participant_keys));
@@ -1430,7 +1517,7 @@ mod integration {
             ],
             id_a,
             0,
-            None,
+            LIVE_DEADLINE,
         );
 
         let mut coord = Coordinator::new(
@@ -1452,7 +1539,7 @@ mod integration {
 
         // Note: agent nonce is 1 now (after the direct turn).
         // The coordinator builds a turn with the current nonce.
-        coord.commit(&mut ledger).unwrap();
+        coord.commit(&mut ledger, COMMIT_HEIGHT).unwrap();
 
         // Final state: A=9000+2000=11000, B=6000-2000=4000.
         assert_eq!(ledger.get(&id_a).unwrap().state.balance(), 11000);
@@ -1524,7 +1611,7 @@ mod integration {
             ],
             id_a,
             0,
-            None,
+            LIVE_DEADLINE,
         );
 
         // Threshold 2 of 3 (majority).
@@ -1548,7 +1635,7 @@ mod integration {
         assert_eq!(decision, Some(Decision::Commit));
 
         // Commit even though C hasn't voted.
-        coord.commit(&mut ledger).unwrap();
+        coord.commit(&mut ledger, COMMIT_HEIGHT).unwrap();
 
         assert_eq!(ledger.get(&id_a).unwrap().state.balance(), 9800);
         assert_eq!(ledger.get(&id_b).unwrap().state.balance(), 5100);
@@ -1589,7 +1676,14 @@ mod integration {
             witness_blobs: vec![],
         });
 
-        let af = AtomicForest::new(vec![node_a, node_b, node_c], forest, vec![], id_a, 0, None);
+        let af = AtomicForest::new(
+            vec![node_a, node_b, node_c],
+            forest,
+            vec![],
+            id_a,
+            0,
+            LIVE_DEADLINE,
+        );
 
         // Need all 3.
         let mut coord = Coordinator::new(
@@ -1618,123 +1712,59 @@ mod integration {
 
 mod valid_until_tests {
     use super::*;
-    use crate::atomic::default_valid_until;
 
-    /// The sentinel must be `Some` — `None` here skips the executor's expiration check
-    /// entirely (`turn/src/executor/execute.rs:426`), so a `Turn` built from a forest
-    /// that used this default would never expire, no matter how stale.
-    #[test]
-    fn default_valid_until_is_some() {
-        assert!(
-            default_valid_until().is_some(),
-            "a None here means every atomic turn using this default never expires — see \
-             the doc comment on default_valid_until"
-        );
-    }
-
-    /// The stamped deadline must be a future wall-clock second count.
-    #[test]
-    fn default_valid_until_is_a_future_wall_clock_horizon() {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-        let stamped =
-            default_valid_until().expect("must be Some, see default_valid_until_is_some");
-        assert!(
-            stamped > now,
-            "stamped valid_until ({stamped}) must be strictly after now ({now})"
-        );
-    }
-
-    /// `AtomicForestBuilder::new()` must default to an expiring deadline, not `None` — a
-    /// caller who forgets to call `set_valid_until` should still get a safe forest.
-    #[test]
-    fn builder_defaults_to_an_expiring_deadline_not_none() {
-        let cell_a = make_cell(1, 10000);
+    fn one_action_forest(target: CellId) -> CallForest {
         let mut forest = CallForest::new();
         forest.add_root(Action {
-            target: cell_a.id(),
+            target,
             method: [0u8; 32],
             args: vec![],
             authorization: Authorization::Unchecked,
             preconditions: Preconditions::default(),
-            effects: vec![Effect::IncrementNonce { cell: cell_a.id() }],
+            effects: vec![Effect::IncrementNonce { cell: target }],
             may_delegate: DelegationMode::None,
             commitment_mode: CommitmentMode::Full,
             balance_change: None,
             witness_blobs: vec![],
         });
+        forest
+    }
+
+    /// The builder has no default deadline: without `set_valid_until` it refuses, and with
+    /// one the forest carries exactly that height.
+    #[test]
+    fn the_builder_refuses_to_build_without_a_deadline() {
+        let cell = make_cell(1, 10000).id();
         let mut builder = AtomicForestBuilder::new();
         builder
             .add_participant(node_id(1))
-            .set_forest(forest)
-            .set_initiator(cell_a.id());
-        // Deliberately never calls set_valid_until().
-        let af = builder.build().unwrap();
-        assert!(
-            af.valid_until.is_some(),
-            "a builder whose caller never calls set_valid_until() must still default to \
-             Some(..), not None"
-        );
+            .set_forest(one_action_forest(cell))
+            .set_initiator(cell);
+        assert!(matches!(builder.build(), Err(CoordError::MissingDeadline)));
+
+        let mut builder = AtomicForestBuilder::new();
+        builder
+            .add_participant(node_id(1))
+            .set_forest(one_action_forest(cell))
+            .set_initiator(cell)
+            .set_valid_until(LIVE_DEADLINE);
+        assert_eq!(builder.build().unwrap().valid_until, LIVE_DEADLINE);
     }
 
-    /// `AtomicForest`'s hash MUST change when `valid_until` changes — it travels inside
-    /// the same hashed/signed envelope every Yes vote is bound to (see the field's doc
-    /// comment on why: the deadline must be decided ONCE and be tamper-evident, not
-    /// re-derivable independently by whoever later turns the forest into a `Turn`).
+    /// The deadline is inside the hash every Yes vote signs.
     #[test]
     fn hash_changes_when_valid_until_changes() {
-        let mut forest = CallForest::new();
-        forest.add_root(Action {
-            target: CellId::from_bytes([1u8; 32]),
-            method: [0u8; 32],
-            args: vec![],
-            authorization: Authorization::Unchecked,
-            preconditions: Preconditions::default(),
-            effects: vec![],
-            may_delegate: DelegationMode::None,
-            commitment_mode: CommitmentMode::Full,
-            balance_change: None,
-            witness_blobs: vec![],
-        });
-        let participants = vec![node_id(1)];
-        let initiator = CellId::from_bytes([1u8; 32]);
-
-        let af_none = AtomicForest::new(
-            participants.clone(),
-            forest.clone(),
-            vec![],
-            initiator,
-            0,
-            None,
-        );
-        let af_some = AtomicForest::new(participants, forest, vec![], initiator, 0, Some(12345));
-
-        assert_ne!(
-            af_none.hash, af_some.hash,
-            "changing valid_until must change the forest hash, or a participant's Yes vote \
-             would not actually bind them to the deadline they were shown"
-        );
-    }
-
-    /// Ratchet against the unbounded `valid_until` sentinel regrowing in the two places
-    /// this module builds a `Turn` from an `AtomicForest`: `Coordinator::commit` and
-    /// `Participant::apply_commit`. `include_str!` reads `atomic.rs` at COMPILE time, so
-    /// this cannot go stale against what actually ships.
-    #[test]
-    fn no_atomic_turn_rebuilds_the_unbounded_valid_until_sentinel() {
-        let src = include_str!("atomic.rs");
-        let sentinel_field = "valid_until";
-        let sentinel_value = "None";
-        let needle = format!("{sentinel_field}: {sentinel_value},");
-        assert!(
-            !src.contains(&needle),
-            "atomic.rs builds a Turn with `{sentinel_field}` bound to a bare \
-             `{sentinel_value}` — this turn will NEVER expire (the executor's expiration \
-             check is skipped entirely when this field is `{sentinel_value}`, \
-             turn/src/executor/execute.rs:426). Read it from the AtomicForest instead, as \
-             both commit() and apply_commit() now do."
-        );
+        let cell = CellId::from_bytes([1u8; 32]);
+        let at = |valid_until| {
+            AtomicForest::new(
+                vec![node_id(1)],
+                one_action_forest(cell),
+                vec![],
+                cell,
+                0,
+                valid_until,
+            )
+        };
+        assert_ne!(at(LIVE_DEADLINE).hash, at(LIVE_DEADLINE + 1).hash);
     }
 }

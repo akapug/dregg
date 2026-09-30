@@ -5513,9 +5513,12 @@ async fn handle_blocklace_message(
             forest_data,
             ..
         } => {
-            let local_ledger = {
+            let (local_ledger, attested) = {
                 let s = state.read().await;
-                s.ledger.clone()
+                (
+                    s.ledger.clone(),
+                    crate::executor_setup::attested_block_height(&s),
+                )
             };
             let (node_id, signing_key) = {
                 let s = state.read().await;
@@ -5529,6 +5532,7 @@ async fn handle_blocklace_message(
                 node_id,
                 signing_key,
                 local_ledger,
+                attested,
             ) {
                 Ok(vote) => {
                     let approve = vote.is_yes();
@@ -5723,6 +5727,7 @@ fn dispatch_atomic_proposal(
     node_id: [u8; 32],
     signing_key: [u8; 32],
     ledger: dregg_cell::Ledger,
+    block_height: u64,
 ) -> Result<dregg_coord::Vote, dregg_coord::CoordError> {
     // Reconstruct the full forest from the richer wire payload.
     let forest = dregg_coord::AtomicForest::decode_from_wire(forest_data)?;
@@ -5756,6 +5761,8 @@ fn dispatch_atomic_proposal(
     // The vote is SIGNED over the coordinator's proposal_id so it verifies on return.
     let cell_id = dregg_cell::CellId(node_id);
     let mut participant = dregg_coord::Participant::new(cell_id, node_id, signing_key, ledger);
+    // Freshness (the forest's `valid_until`, a block height) is judged at our attested height.
+    participant.set_block_height(block_height);
     Ok(participant.evaluate_proposal(&proposal_id, &forest))
 }
 
@@ -5834,7 +5841,8 @@ async fn tally_returned_vote(
                 Some(a) => a,
                 None => return,
             };
-            match active.coordinator.commit(&mut s.ledger) {
+            let height = crate::executor_setup::attested_block_height(&s) + 1;
+            match active.coordinator.commit(&mut s.ledger, height) {
                 Ok(_commit_msg) => {
                     info!(
                         from = %from,
@@ -18477,7 +18485,7 @@ mod tests {
             vec![], // no explicit preconditions: the participant validates locally
             from,
             0,
-            None,
+            1_800,
         )
     }
 
@@ -18514,6 +18522,7 @@ mod tests {
             node_b,
             signing_key,
             ledger,
+            0,
         )
         .expect("a well-formed proposal must reach the engine and produce a vote");
 
@@ -18547,6 +18556,7 @@ mod tests {
             [0x0b; 32],
             [0x42; 32],
             dregg_cell::Ledger::new(),
+            0,
         )
         .unwrap_err();
         assert!(
@@ -18569,9 +18579,10 @@ mod tests {
         let wire = forest.encode_for_wire();
         let wrong_hash = [0x99; 32];
         let pid = dregg_coord::Coordinator::proposal_id_for(&wrong_hash, &node_a);
-        let err =
-            dispatch_atomic_proposal(&wire, wrong_hash, pid, node_a, node_b, [0x42; 32], ledger)
-                .unwrap_err();
+        let err = dispatch_atomic_proposal(
+            &wire, wrong_hash, pid, node_a, node_b, [0x42; 32], ledger, 0,
+        )
+        .unwrap_err();
         assert!(
             matches!(err, dregg_coord::CoordError::HashMismatch { .. }),
             "a forest whose hash disagrees with the announced hash is rejected: {err}"
@@ -18601,6 +18612,7 @@ mod tests {
             node_b,
             [0x42; 32],
             ledger,
+            0,
         )
         .unwrap_err();
         assert!(
@@ -18686,7 +18698,7 @@ mod tests {
             vec![],
             cell_a,
             0,
-            None,
+            1_800,
         );
         let forest_hash = forest.hash;
         let mut participant_keys = HashMap::new();
@@ -18738,6 +18750,7 @@ mod tests {
             node_b,
             sk_b,
             b_ledger,
+            0,
         )
         .expect("B reaches the engine and votes");
         assert!(b_vote.is_yes(), "B approves on its local ledger");

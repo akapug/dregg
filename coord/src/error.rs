@@ -83,6 +83,10 @@ pub enum CoordError {
     /// The proposed forest's estimated cost exceeds the coordinator's max budget.
     BudgetExceeded { estimated: u64, max_budget: u64 },
 
+    /// An `AtomicForestBuilder` was built without a `valid_until` deadline (a block
+    /// height). Every atomic forest carries one; there is no default.
+    MissingDeadline,
+
     /// A `forest_data` wire payload (e.g. a received `ProposeAtomicTurn`) failed
     /// to deserialize back into an `AtomicForest`.
     WireDecode(String),
@@ -188,6 +192,10 @@ impl core::fmt::Display for CoordError {
                     "estimated cost {estimated} exceeds max budget {max_budget}"
                 )
             }
+            CoordError::MissingDeadline => write!(
+                f,
+                "atomic forest has no valid_until deadline (a block height); set one with set_valid_until"
+            ),
             CoordError::WireDecode(e) => write!(f, "atomic-forest wire decode error: {e}"),
             CoordError::TurnExecution(e) => write!(f, "turn execution error: {e}"),
             CoordError::Ledger(e) => write!(f, "ledger error: {e}"),

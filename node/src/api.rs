@@ -8336,6 +8336,15 @@ async fn post_atomic_proposal(
     let forest: dregg_turn::CallForest =
         serde_json::from_value(req.forest).map_err(|_| StatusCode::BAD_REQUEST)?;
 
+    // The deadline, a block height decided once here at propose time and carried
+    // (hashed, voted on) inside the forest: this node's attested height plus the default
+    // horizon (`executor_setup::default_valid_until`).
+    let valid_until = {
+        let s = state.read().await;
+        crate::executor_setup::default_valid_until(&s)
+            .expect("the node's default deadline is always Some")
+    };
+
     // Build the atomic forest.
     let atomic_forest = dregg_coord::AtomicForest::new(
         participants.clone(),
@@ -8343,11 +8352,7 @@ async fn post_atomic_proposal(
         vec![], // preconditions left empty; participants validate locally
         initiator,
         req.fee,
-        // Decided ONCE here, at propose time, and carried (hashed, signed) inside the
-        // forest — NOT re-derived independently wherever the forest is later turned
-        // into a Turn (coordinator commit, each participant's apply_commit). See
-        // AtomicForest::valid_until's doc.
-        dregg_coord::default_valid_until(),
+        valid_until,
     );
 
     // Create the coordinator with the node's identity.
@@ -8577,8 +8582,10 @@ async fn post_atomic_vote(
         Some(dregg_coord::Decision::Commit) => {
             // Extract the proposal so we can borrow ledger mutably.
             let mut active = s.atomic_proposals.remove(&proposal_id).unwrap();
-            // Execute the atomic turn against the ledger.
-            match active.coordinator.commit(&mut s.ledger) {
+            // Execute the atomic turn against the ledger at the next height (the
+            // submit executor's height), which the commit carries to participants.
+            let height = crate::executor_setup::attested_block_height(&s) + 1;
+            match active.coordinator.commit(&mut s.ledger, height) {
                 Ok(_commit_msg) => Ok(Json(AtomicVoteResponse {
                     accepted: true,
                     decision: Some("commit".to_string()),
@@ -8703,6 +8710,8 @@ async fn post_evaluate_proposal(
 
     let mut participant =
         dregg_coord::Participant::new(cell_id, node_id, signing_key, s.ledger.clone());
+    // Freshness is judged against this node's attested height.
+    participant.set_block_height(crate::executor_setup::attested_block_height(&s));
 
     // Evaluate the proposal locally.
     let vote = participant.evaluate_proposal(&proposal_id, &atomic_forest);
@@ -12635,7 +12644,7 @@ mod tests {
             witness_blobs: vec![],
         };
         forest.add_root(action);
-        AtomicForest::new(participants, forest, vec![], cell_id, 0, None)
+        AtomicForest::new(participants, forest, vec![], cell_id, 0, 1_800)
     }
 
     fn test_event(height: u64) -> CommittedEvent {

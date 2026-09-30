@@ -97,7 +97,7 @@ fn public_backbone() -> (Ledger, AtomicForest) {
     let mut forest = CallForest::new();
     forest.add_root(transfer_action(id0, id1, 10));
 
-    let af = AtomicForest::new(vec![node_id(1)], forest, vec![], id0, 0, None);
+    let af = AtomicForest::new(vec![node_id(1)], forest, vec![], id0, 0, 1_800);
     (ledger, af)
 }
 
@@ -437,7 +437,7 @@ fn mixed_turn_public_commits_and_private_admits() {
     let decision = coord.receive_vote(node_id(1), vote).unwrap();
     assert_eq!(decision, Some(Decision::Commit), "public 2PC must commit");
     // The public side actually applies to the shared ledger.
-    let _commit = coord.commit(&mut ledger).expect("public commit applies");
+    let _commit = coord.commit(&mut ledger, 1).expect("public commit applies");
 
     // PRIVATE side: a witnessless leg with a binding proof, consenting to the same jid.
     let leg = PrivateLeg::new(asset("private-asset"), root("ppre"), root("ppost"), jid);

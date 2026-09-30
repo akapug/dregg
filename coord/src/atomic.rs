@@ -16,38 +16,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::CoordError;
 
-/// Validity horizon (wall-clock seconds) for atomic-turn proposals built with this
-/// default.
-///
-/// `Turn::valid_until` (`turn/src/turn.rs`) is compared against the executor's
-/// wall-clock `current_timestamp`, entirely separate from `block_height`
-/// (`turn/src/executor/mod.rs`). `None` skips the executor's expiration check
-/// entirely (`turn/src/executor/execute.rs:426`) — a turn built that way never
-/// expires, no matter how stale. Mirrors `default_valid_until` in `node/src/api.rs` /
-/// `sdk/src/runtime.rs` / `intent/src/fulfillment.rs` (same rationale, same fix, same
-/// 1-hour horizon); `dregg-coord` depends on none of those crates, hence its own copy.
-///
-/// `pub`, not `pub(crate)`: the one production call site that proposes an atomic
-/// forest lives in `dregg-node` (`node/src/api.rs`), a different crate.
-const ATOMIC_TURN_VALIDITY_HORIZON_SECS: i64 = 3600;
-
-/// Wall-clock Unix seconds, `now`.
-///
-/// Shared by [`default_valid_until`] (stamps the deadline) and `commit`/`apply_commit`
-/// (stamp the executor's clock the deadline is checked against — see the note on
-/// `TurnExecutor::current_timestamp` at both call sites: without it, `valid_until`
-/// alone is inert here).
-fn wall_clock_now_secs() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
-}
-
-pub fn default_valid_until() -> Option<i64> {
-    Some(wall_clock_now_secs() + ATOMIC_TURN_VALIDITY_HORIZON_SECS)
-}
-
 // ─── AtomicForest ──────────────────────────────────────────────────────────────
 
 /// A multi-party call forest: actions contributed by multiple participants
@@ -64,17 +32,16 @@ pub struct AtomicForest {
     pub initiator: CellId,
     /// The fee for this atomic turn.
     pub fee: u64,
-    /// Wall-clock deadline (Unix seconds) for the `Turn` this forest will become.
+    /// The deadline of the `Turn` this forest will become: a BLOCK HEIGHT
+    /// (`Turn::valid_until`), required — an atomic forest always expires.
     ///
-    /// Decided ONCE, here, at propose time — NOT re-derived independently by
-    /// `Coordinator::commit()` and `Participant::apply_commit()`, which build the same
-    /// logical `Turn` at different times, on different machines. If each stamped its
-    /// own `now + horizon` independently, a participant applying a commit long after
-    /// the coordinator built it would launder a stale proposal into artificial
-    /// freshness — the exact bug this field exists to close, reopened by a different
-    /// door. Included in `hash` (below), so every participant sees and implicitly
-    /// signs off on the deadline before voting Yes.
-    pub valid_until: Option<i64>,
+    /// Decided ONCE, at propose time — NOT re-derived by `Coordinator::commit()` or
+    /// `Participant::apply_commit()`, which build the same logical `Turn` at different
+    /// times, on different machines; stamping `now + horizon` at each site would launder
+    /// a stale proposal into freshness. It is covered by `hash`, which every Yes vote
+    /// signs, and `hash` is recomputed on receipt ([`Self::verify_hash`]), so a relayer
+    /// cannot move the deadline without every vote failing.
+    pub valid_until: i64,
     /// BLAKE3 hash of the entire atomic forest structure.
     pub hash: [u8; 32],
 }
@@ -82,19 +49,15 @@ pub struct AtomicForest {
 impl AtomicForest {
     /// Create a new atomic forest, computing its hash.
     ///
-    /// `valid_until` is REQUIRED (not defaulted to `None` here) so every call site
-    /// makes an explicit choice. Production callers should use
-    /// [`default_valid_until`]; test fixtures that don't exercise expiration are free
-    /// to pass `None` — see `no_atomic_forest_field_omits_the_unbounded_sentinel_by_typo`
-    /// in this module's tests for why that is a different, unenforceable-by-type
-    /// property from `Turn::valid_until: None` being reachable in `commit`/`apply_commit`.
+    /// `valid_until` is a block height, typically
+    /// `dregg_turn::valid_until_at(latest_attested_height, horizon)`.
     pub fn new(
         participants: Vec<[u8; 32]>,
         forest: CallForest,
         preconditions: Vec<(CellId, Preconditions)>,
         initiator: CellId,
         fee: u64,
-        valid_until: Option<i64>,
+        valid_until: i64,
     ) -> Self {
         let forest_hash = forest.compute_hash();
         let hash = Self::compute_hash(
@@ -128,7 +91,7 @@ impl AtomicForest {
         preconditions: &[(CellId, Preconditions)],
         initiator: &CellId,
         fee: u64,
-        valid_until: Option<i64>,
+        valid_until: i64,
     ) -> [u8; 32] {
         let mut hasher = blake3::Hasher::new();
         hasher.update(b"dregg-coord:atomic-forest");
@@ -143,17 +106,33 @@ impl AtomicForest {
         }
         hasher.update(initiator.as_bytes());
         hasher.update(&fee.to_le_bytes());
-        // Tagged explicitly (a leading 0/1 byte) so None and Some(0) hash differently.
-        match valid_until {
-            Some(v) => {
-                hasher.update(&[1u8]);
-                hasher.update(&v.to_le_bytes());
-            }
-            None => {
-                hasher.update(&[0u8]);
-            }
-        };
+        hasher.update(&valid_until.to_le_bytes());
         *hasher.finalize().as_bytes()
+    }
+
+    /// Recompute the hash from the fields and refuse a forest whose stored `hash`
+    /// differs. `hash` is what every Yes vote and the commit QC sign, so a forest whose
+    /// fields were changed in flight (the call forest, the fee, the deadline) must not
+    /// be judged or applied under the hash it arrived with. Called by
+    /// [`Self::decode_from_wire`], [`Participant::evaluate_proposal`] and
+    /// [`Participant::apply_commit`].
+    pub fn verify_hash(&self) -> Result<(), CoordError> {
+        let computed = Self::compute_hash(
+            &self.participants,
+            &self.forest.compute_hash(),
+            &self.preconditions,
+            &self.initiator,
+            self.fee,
+            self.valid_until,
+        );
+        if computed == self.hash {
+            Ok(())
+        } else {
+            Err(CoordError::HashMismatch {
+                claimed: self.hash,
+                computed,
+            })
+        }
     }
 
     /// Validate that the forest is structurally sound.
@@ -205,8 +184,14 @@ impl AtomicForest {
     /// `PeerMessage::ProposeAtomicTurn`. The receive-side counterpart of
     /// [`Self::encode_for_wire`]; the funnel calls this to lift the gossiped
     /// proposal back into the in-process coord engine instead of dropping it.
+    ///
+    /// The decoded forest's `hash` is recomputed ([`Self::verify_hash`]); a payload
+    /// whose hash does not match its fields is refused, not handed on.
     pub fn decode_from_wire(bytes: &[u8]) -> Result<Self, CoordError> {
-        postcard::from_bytes(bytes).map_err(|e| CoordError::WireDecode(e.to_string()))
+        let forest: Self =
+            postcard::from_bytes(bytes).map_err(|e| CoordError::WireDecode(e.to_string()))?;
+        forest.verify_hash()?;
+        Ok(forest)
     }
 }
 
@@ -447,6 +432,10 @@ pub struct CommitMessage {
     pub receipt: TurnReceipt,
     /// Aggregated signatures from all Yes voters.
     pub signatures: Vec<([u8; 32], [u8; 64])>,
+    /// The block height the coordinator executed the turn at. Every participant
+    /// re-executes at THIS height, so a certified commit gets the same deadline verdict
+    /// on every replica instead of each replica's own clock deciding it.
+    pub block_height: u64,
 }
 
 /// Message sent by the coordinator to abort the atomic turn.
@@ -711,7 +700,14 @@ impl Coordinator {
     ///
     /// Transitions: Proposing -> Committed.
     /// Returns a CommitMessage and the TurnReceipt.
-    pub fn commit(&mut self, ledger: &mut Ledger) -> Result<CommitMessage, CoordError> {
+    /// `block_height` is the height the turn executes at (a node passes its attested
+    /// height + 1); the forest's `valid_until` is checked against it and it travels in
+    /// the [`CommitMessage`].
+    pub fn commit(
+        &mut self,
+        ledger: &mut Ledger,
+        block_height: u64,
+    ) -> Result<CommitMessage, CoordError> {
         let (forest, votes, proposal_id) = match &self.state {
             CoordinatorState::Proposing {
                 forest,
@@ -752,12 +748,8 @@ impl Coordinator {
             call_forest: forest.forest.clone(),
             fee: forest.fee,
             memo: Some("atomic multi-party turn".to_string()),
-            // Read from the forest, NOT re-derived here: commit() and apply_commit()
-            // build the same logical Turn at different times/places (coordinator now,
-            // each participant potentially much later). Independently stamping
-            // `now + horizon` at each site would let a participant launder a stale
-            // proposal into artificial freshness. See AtomicForest::valid_until's doc.
-            valid_until: forest.valid_until,
+            // Read from the forest, never re-derived: see AtomicForest::valid_until.
+            valid_until: Some(forest.valid_until),
             depends_on: Vec::new(),
             previous_receipt_hash: None,
             conservation_proof: None,
@@ -773,14 +765,9 @@ impl Coordinator {
 
         // Execute the turn with proper metering.
         let mut executor = TurnExecutor::new(self.costs.clone());
-        // `TurnExecutor::new` defaults `current_timestamp` to 0 — without advancing it,
-        // the expiration check (`turn/src/executor/execute.rs:426`,
-        // `if self.current_timestamp > valid_until`) can never fire no matter what
-        // `turn.valid_until` says, making the fix above inert. This executor is
-        // constructed fresh per call and isn't wired through the node's
-        // `executor_setup::configure_turn_executor` (unlike the thin-HTTP path), so
-        // nothing else sets this; do it here.
-        executor.current_timestamp = wall_clock_now_secs();
+        // The deadline is a block height; this executor runs at the caller's height (a
+        // fresh executor's 0 would refuse every deadline).
+        executor.set_block_height(block_height);
         let result = executor.execute(&turn, ledger);
 
         match result {
@@ -801,6 +788,7 @@ impl Coordinator {
                     proposal_id,
                     receipt: receipt.clone(),
                     signatures,
+                    block_height,
                 };
 
                 self.state = CoordinatorState::Committed {
@@ -1115,9 +1103,18 @@ pub struct Participant {
     pub voted_yes_at: Option<Instant>,
     /// The proposal_id the participant is currently participating in.
     pub active_proposal: Option<[u8; 32]>,
+    /// The latest attested block height this participant knows. A proposal is voted
+    /// Yes only if its deadline still admits the next height (`block_height + 1`, the
+    /// height a turn committed now would run at). Set it with [`Self::set_block_height`].
+    pub block_height: u64,
 }
 
 impl Participant {
+    /// Set the latest attested block height this participant judges freshness against.
+    pub fn set_block_height(&mut self, height: u64) {
+        self.block_height = height;
+    }
+
     /// Create a new participant with a signing key.
     pub fn new(cell_id: CellId, node_id: [u8; 32], signing_key: [u8; 32], ledger: Ledger) -> Self {
         Participant {
@@ -1129,6 +1126,7 @@ impl Participant {
             vote_timeout: Duration::from_secs(60),
             voted_yes_at: None,
             active_proposal: None,
+            block_height: 0,
         }
     }
 
@@ -1149,6 +1147,7 @@ impl Participant {
             vote_timeout: Duration::from_secs(60),
             voted_yes_at: None,
             active_proposal: None,
+            block_height: 0,
         }
     }
 
@@ -1192,6 +1191,21 @@ impl Participant {
     /// The `proposal_id` comes from the ProposeMessage and is included in the
     /// signing message to bind the vote to a specific proposal (preventing replay).
     pub fn evaluate_proposal(&mut self, proposal_id: &[u8; 32], forest: &AtomicForest) -> Vote {
+        // The hash every vote signs must be the hash of what is being voted on.
+        if let Err(e) = forest.verify_hash() {
+            let sig = Vote::sign_no(proposal_id, &forest.hash, &self.signing_key);
+            return Vote::no(format!("forest hash does not match its contents: {e}"), sig);
+        }
+
+        // Freshness: a Yes vote locks this participant for a turn that must still be
+        // admissible at the next height. An expired (or out-of-range) deadline is
+        // refused here, before anyone commits, rather than discovered at apply time.
+        if let Err(e) = dregg_turn::check_deadline(self.block_height + 1, Some(forest.valid_until))
+        {
+            let sig = Vote::sign_no(proposal_id, &forest.hash, &self.signing_key);
+            return Vote::no(format!("deadline not admissible: {e}"), sig);
+        }
+
         // Check we're a participant.
         if !forest.is_participant(&self.node_id) {
             let sig = Vote::sign_no(proposal_id, &forest.hash, &self.signing_key);
@@ -1250,6 +1264,9 @@ impl Participant {
         participant_keys: &HashMap<[u8; 32], [u8; 32]>,
         threshold: usize,
     ) -> Result<TurnReceipt, CoordError> {
+        // The QC below signs `forest.hash`; the forest applied must be the one it names.
+        forest.verify_hash()?;
+
         // Verify the commit message has enough valid signatures (QC).
         if commit.signatures.len() < threshold {
             return Err(CoordError::ThresholdNotMet {
@@ -1288,12 +1305,8 @@ impl Participant {
             call_forest: forest.forest.clone(),
             fee: forest.fee,
             memo: Some("atomic multi-party turn".to_string()),
-            // Read from the forest, NOT re-derived here: commit() and apply_commit()
-            // build the same logical Turn at different times/places (coordinator now,
-            // each participant potentially much later). Independently stamping
-            // `now + horizon` at each site would let a participant launder a stale
-            // proposal into artificial freshness. See AtomicForest::valid_until's doc.
-            valid_until: forest.valid_until,
+            // Read from the forest, never re-derived: see AtomicForest::valid_until.
+            valid_until: Some(forest.valid_until),
             depends_on: Vec::new(),
             previous_receipt_hash: None,
             conservation_proof: None,
@@ -1308,10 +1321,10 @@ impl Participant {
         };
 
         let mut executor = TurnExecutor::new(self.costs.clone());
-        // See the identical comment in Coordinator::commit(): without advancing
-        // current_timestamp past its TurnExecutor::new default of 0, valid_until can
-        // never be exceeded and the expiration check is inert.
-        executor.current_timestamp = wall_clock_now_secs();
+        // Expiry is evaluated at the height the coordinator executed at, carried in the
+        // commit — never this replica's own clock — so a certified commit gets the same
+        // verdict on every replica.
+        executor.set_block_height(commit.block_height);
         let result = executor.execute(&turn, &mut self.ledger);
 
         // Clear active proposal state on successful apply.
@@ -1363,12 +1376,9 @@ pub struct AtomicForestBuilder {
 }
 
 impl AtomicForestBuilder {
-    /// Create a new builder.
-    ///
-    /// `valid_until` defaults to [`default_valid_until()`], NOT `None` — a builder
-    /// whose caller forgets to set it should still produce an expiring turn. Call
-    /// [`Self::set_valid_until`] to override (e.g. a test that wants `None`, or a
-    /// caller with its own horizon policy).
+    /// Create a new builder. It has no deadline until [`Self::set_valid_until`] is
+    /// called, and [`Self::build`] refuses without one (`CoordError::MissingDeadline`):
+    /// the builder cannot know the chain height, so it does not invent a deadline.
     pub fn new() -> Self {
         AtomicForestBuilder {
             participants: Vec::new(),
@@ -1376,7 +1386,7 @@ impl AtomicForestBuilder {
             preconditions: Vec::new(),
             initiator: None,
             fee: 0,
-            valid_until: default_valid_until(),
+            valid_until: None,
         }
     }
 
@@ -1410,23 +1420,23 @@ impl AtomicForestBuilder {
         self
     }
 
-    /// Override the validity deadline (defaults to [`default_valid_until()`] — see
-    /// [`Self::new`]).
-    pub fn set_valid_until(&mut self, valid_until: Option<i64>) -> &mut Self {
-        self.valid_until = valid_until;
+    /// Set the deadline, a block height (`dregg_turn::valid_until_at`). Required.
+    pub fn set_valid_until(&mut self, valid_until: i64) -> &mut Self {
+        self.valid_until = Some(valid_until);
         self
     }
 
     /// Build the atomic forest.
     pub fn build(self) -> Result<AtomicForest, CoordError> {
         let initiator = self.initiator.ok_or(CoordError::NoParticipants)?;
+        let valid_until = self.valid_until.ok_or(CoordError::MissingDeadline)?;
         let forest = AtomicForest::new(
             self.participants,
             self.forest,
             self.preconditions,
             initiator,
             self.fee,
-            self.valid_until,
+            valid_until,
         );
         forest.validate()?;
         Ok(forest)
