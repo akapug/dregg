@@ -27,6 +27,7 @@
 //! [`PayRole::WatchOnly`]: a process only holds custody material when the operator
 //! deliberately asks for it.
 
+use dregg_bridge::solana_holdings::{AcceptedTokenProgram, HoldingAssetPolicy, HoldingProofError};
 use zeroize::Zeroizing;
 
 /// A user of the payment system — the discord user id (a snowflake string) or any
@@ -206,10 +207,14 @@ impl std::fmt::Debug for Seed {
     }
 }
 
-/// The canonical SPL Token program id (`TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`)
-/// — this is a well-known PUBLIC network constant, not a secret and not the
-/// mint/treasury. Every real SPL token account is owned by this program; the
-/// consensus path binds it before trusting a decoded balance.
+/// The canonical LEGACY SPL Token program id (`TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`)
+/// — a well-known PUBLIC network constant, not a secret and not the mint/treasury.
+///
+/// This is NOT "the" token program of the payment rail: each accepted asset carries its
+/// own ([`PayConfig::token_program_for`]), and the live `$DREGG` mint is Token-2022. It
+/// is the program of legacy-SPL assets (USDC) and of the 1-of-1 NFT export mints
+/// ([`crate::nft_mint`]). Pinned equal to the bridge's
+/// [`AcceptedTokenProgram::Legacy`] by a unit test.
 pub const SPL_TOKEN_PROGRAM_ID: [u8; 32] = [
     6, 221, 246, 225, 215, 101, 161, 147, 217, 203, 225, 70, 206, 235, 121, 172, 28, 180, 133, 237,
     95, 91, 55, 145, 58, 140, 245, 133, 126, 255, 0, 169,
@@ -246,8 +251,15 @@ pub struct PayConfig {
     pub rpc_endpoint: String,
     /// Devnet (default, safe) or mainnet (operator flip, real funds).
     pub network: Network,
-    /// The SPL Token program id — defaults to [`SPL_TOKEN_PROGRAM_ID`].
-    pub spl_token_program: [u8; 32],
+    /// The token program that owns `$DREGG` token accounts. PRIVATE on purpose: it is
+    /// only ever set through a path that checks it against the mint
+    /// ([`PayConfig::set_token_program`], the env constructors), because a `$DREGG`
+    /// mint read under the wrong program is not an error anywhere downstream — it is a
+    /// silent zero (every transfer "added nothing").
+    dregg_token_program: AcceptedTokenProgram,
+    /// The token program that owns USDC token accounts (legacy SPL Token on every
+    /// real cluster). Private for the same reason as `dregg_token_program`.
+    usdc_token_program: AcceptedTokenProgram,
 
     // ── dual-asset pricing (ember's economics; all config, no mainnet secret) ──
     /// The USD price of one run (default `$0.10`). ~10× the ~`$0.01` Bedrock
@@ -306,7 +318,11 @@ impl PayConfig {
             price_per_run,
             rpc_endpoint: "https://api.devnet.solana.com".to_string(),
             network: Network::Devnet,
-            spl_token_program: SPL_TOKEN_PROGRAM_ID,
+            // Mock mints are fresh legacy-SPL mints. A test that hands in the LIVE
+            // `$DREGG` mint must say Token-2022 via `set_token_program`, or every
+            // watcher built from this config refuses at construction.
+            dregg_token_program: AcceptedTokenProgram::Legacy,
+            usdc_token_program: AcceptedTokenProgram::Legacy,
             price_usd_per_run: DEFAULT_PRICE_USD_PER_RUN,
             dregg_discount_bps: DEFAULT_DREGG_DISCOUNT_BPS,
             otc_discount_bps: DEFAULT_OTC_DISCOUNT_BPS,
@@ -335,6 +351,43 @@ impl PayConfig {
         }
     }
 
+    /// The token program that owns `asset`'s token accounts.
+    pub fn token_program_for(&self, asset: Asset) -> AcceptedTokenProgram {
+        match asset {
+            Asset::Dregg => self.dregg_token_program,
+            Asset::Usdc => self.usdc_token_program,
+        }
+    }
+
+    /// The checked (mint, token program) pair for `asset` — what every watcher,
+    /// balance reader and sweeper is built from. Re-checked on every call rather than
+    /// trusted from construction, because [`PayConfig::mint`] / [`PayConfig::usdc_mint`]
+    /// are public and can be reassigned after the program was chosen.
+    ///
+    /// Refuses the live `$DREGG` mint paired with legacy SPL Token
+    /// ([`HoldingProofError::DreggProgramMismatch`]): under that pairing the credit path
+    /// reads every real `$DREGG` payment as "this transaction added nothing".
+    pub fn asset_policy(&self, asset: Asset) -> Result<HoldingAssetPolicy, ConfigError> {
+        HoldingAssetPolicy::new(self.mint_for(asset), self.token_program_for(asset))
+            .map_err(|error| ConfigError::AssetPolicy { asset, error })
+    }
+
+    /// Set the token program for `asset`, refusing a pairing [`PayConfig::asset_policy`]
+    /// refuses. On refusal the config is left unchanged.
+    pub fn set_token_program(
+        &mut self,
+        asset: Asset,
+        program: AcceptedTokenProgram,
+    ) -> Result<(), ConfigError> {
+        HoldingAssetPolicy::new(self.mint_for(asset), program)
+            .map_err(|error| ConfigError::AssetPolicy { asset, error })?;
+        match asset {
+            Asset::Dregg => self.dregg_token_program = program,
+            Asset::Usdc => self.usdc_token_program = program,
+        }
+        Ok(())
+    }
+
     /// The token decimals for an asset.
     pub fn decimals_for(&self, asset: Asset) -> u8 {
         match asset {
@@ -347,7 +400,8 @@ impl PayConfig {
     /// environment. Reads: `DREGG_PAY_MINT` (base58 mint), `DREGG_PAY_TREASURY`
     /// (base58 treasury), `DREGG_PAY_SEED` (hex or base58 seed), `DREGG_PAY_PRICE_PER_RUN`
     /// (u64), `DREGG_PAY_RPC` (RPC url), `DREGG_PAY_NETWORK` (`devnet`|`mainnet`,
-    /// default devnet). No mainnet value is ever a compiled-in default — the
+    /// default devnet), and the REQUIRED per-asset token programs `DREGG_PAY_TOKEN_PROGRAM`
+    /// / `DREGG_PAY_USDC_TOKEN_PROGRAM` (see [`token_program_from_env`]). No mainnet value is ever a compiled-in default — the
     /// mint/treasury/seed MUST be supplied by the operator or this fails closed.
     ///
     /// **Custody.** This REQUIRES `DREGG_PAY_SEED` and returns a config with
@@ -358,6 +412,8 @@ impl PayConfig {
         let get = |k: &str| std::env::var(k).map_err(|_| ConfigError::MissingEnv(k.to_string()));
         let mint = parse_pubkey_base58(&get("DREGG_PAY_MINT")?)?;
         let usdc_mint = parse_pubkey_base58(&get("DREGG_PAY_USDC_MINT")?)?;
+        let dregg_token_program = token_program_from_env("DREGG_PAY_TOKEN_PROGRAM")?;
+        let usdc_token_program = token_program_from_env("DREGG_PAY_USDC_TOKEN_PROGRAM")?;
         let treasury = DepositAddress::from_base58(&get("DREGG_PAY_TREASURY")?)?;
         let seed_raw = get("DREGG_PAY_SEED")?;
         let seed_bytes = parse_seed(&seed_raw)?;
@@ -402,7 +458,7 @@ impl PayConfig {
         let otc_discount_bps = parse_u32("DREGG_PAY_OTC_DISCOUNT_BPS", DEFAULT_OTC_DISCOUNT_BPS)?;
         let usdc_decimals = parse_u8("DREGG_PAY_USDC_DECIMALS", DEFAULT_USDC_DECIMALS)?;
         let dregg_decimals = parse_u8("DREGG_PAY_DREGG_DECIMALS", DEFAULT_DREGG_DECIMALS)?;
-        Ok(PayConfig {
+        PayConfig {
             mint,
             usdc_mint,
             treasury,
@@ -410,13 +466,15 @@ impl PayConfig {
             price_per_run,
             rpc_endpoint,
             network,
-            spl_token_program: SPL_TOKEN_PROGRAM_ID,
+            dregg_token_program,
+            usdc_token_program,
             price_usd_per_run,
             dregg_discount_bps,
             otc_discount_bps,
             usdc_decimals,
             dregg_decimals,
-        })
+        }
+        .checked()
     }
 
     /// Build a **seed-free ([`PayRole::WatchOnly`]) config** from the operator
@@ -436,6 +494,8 @@ impl PayConfig {
         let get = |k: &str| std::env::var(k).map_err(|_| ConfigError::MissingEnv(k.to_string()));
         let mint = parse_pubkey_base58(&get("DREGG_PAY_MINT")?)?;
         let usdc_mint = parse_pubkey_base58(&get("DREGG_PAY_USDC_MINT")?)?;
+        let dregg_token_program = token_program_from_env("DREGG_PAY_TOKEN_PROGRAM")?;
+        let usdc_token_program = token_program_from_env("DREGG_PAY_USDC_TOKEN_PROGRAM")?;
         let treasury = DepositAddress::from_base58(&get("DREGG_PAY_TREASURY")?)?;
         let price_per_run = get("DREGG_PAY_PRICE_PER_RUN")?
             .parse::<u64>()
@@ -470,7 +530,7 @@ impl PayConfig {
                 Err(_) => Ok(d),
             }
         };
-        Ok(PayConfig {
+        PayConfig {
             mint,
             usdc_mint,
             treasury,
@@ -478,7 +538,8 @@ impl PayConfig {
             price_per_run,
             rpc_endpoint,
             network,
-            spl_token_program: SPL_TOKEN_PROGRAM_ID,
+            dregg_token_program,
+            usdc_token_program,
             price_usd_per_run: parse_f64("DREGG_PAY_PRICE_USD", DEFAULT_PRICE_USD_PER_RUN)?,
             dregg_discount_bps: parse_u32(
                 "DREGG_PAY_DREGG_DISCOUNT_BPS",
@@ -487,7 +548,15 @@ impl PayConfig {
             otc_discount_bps: parse_u32("DREGG_PAY_OTC_DISCOUNT_BPS", DEFAULT_OTC_DISCOUNT_BPS)?,
             usdc_decimals: parse_u8("DREGG_PAY_USDC_DECIMALS", DEFAULT_USDC_DECIMALS)?,
             dregg_decimals: parse_u8("DREGG_PAY_DREGG_DECIMALS", DEFAULT_DREGG_DECIMALS)?,
-        })
+        }
+        .checked()
+    }
+
+    /// Refuse a config whose (mint, token program) pairing is refused for either asset.
+    fn checked(self) -> Result<Self, ConfigError> {
+        self.asset_policy(Asset::Dregg)?;
+        self.asset_policy(Asset::Usdc)?;
+        Ok(self)
     }
 
     /// Whether this config carries the signing [`Seed`] (a [`PayRole::Sweeper`]
@@ -511,6 +580,8 @@ impl std::fmt::Debug for PayConfig {
             .field("otc_discount_bps", &self.otc_discount_bps)
             .field("rpc_endpoint", &self.rpc_endpoint)
             .field("network", &self.network)
+            .field("dregg_token_program", &self.dregg_token_program)
+            .field("usdc_token_program", &self.usdc_token_program)
             .finish()
     }
 }
@@ -527,6 +598,15 @@ pub enum ConfigError {
     BadSeed(String),
     /// A numeric/config value did not parse.
     BadValue(String),
+    /// An asset's (mint, token program) pairing is refused — a program that is neither
+    /// canonical SPL Token nor Token-2022, or the live `$DREGG` mint under legacy SPL
+    /// Token (which would read every real payment as zero).
+    AssetPolicy {
+        /// The asset whose pairing was refused.
+        asset: Asset,
+        /// The bridge's refusal.
+        error: HoldingProofError,
+    },
 }
 
 impl std::fmt::Display for ConfigError {
@@ -536,6 +616,9 @@ impl std::fmt::Display for ConfigError {
             ConfigError::BadPubkey(s) => write!(f, "invalid base58 pubkey: {s}"),
             ConfigError::BadSeed(s) => write!(f, "invalid seed value: {s}"),
             ConfigError::BadValue(k) => write!(f, "invalid value for {k}"),
+            ConfigError::AssetPolicy { asset, error } => {
+                write!(f, "refused token program for {asset}: {error}")
+            }
         }
     }
 }
@@ -553,6 +636,22 @@ pub fn parse_pubkey_base58(s: &str) -> Result<[u8; 32], ConfigError> {
     let mut out = [0u8; 32];
     out.copy_from_slice(&v);
     Ok(out)
+}
+
+/// Read a REQUIRED per-asset token program from `key`: the base58 id of canonical legacy
+/// SPL Token (`TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`) or Token-2022
+/// (`TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb`). There is no default: a defaulted
+/// program is how the rail came to read the Token-2022 `$DREGG` mint as legacy.
+fn token_program_from_env(key: &str) -> Result<AcceptedTokenProgram, ConfigError> {
+    let raw = std::env::var(key).map_err(|_| ConfigError::MissingEnv(key.to_string()))?;
+    let id = parse_pubkey_base58(&raw)?;
+    if id == AcceptedTokenProgram::Legacy.program_id() {
+        Ok(AcceptedTokenProgram::Legacy)
+    } else if id == AcceptedTokenProgram::Token2022.program_id() {
+        Ok(AcceptedTokenProgram::Token2022)
+    } else {
+        Err(ConfigError::BadValue(key.to_string()))
+    }
 }
 
 /// Parse a seed given as `hex:...`/`0x...` hex or bare base58.
@@ -574,4 +673,96 @@ fn decode_hex(s: &str) -> Option<Vec<u8>> {
         .step_by(2)
         .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dregg_bridge::solana_holdings::DREGG_MAINNET_MINT;
+
+    /// The two program ids and the live mint, read back as the base58 an operator sees
+    /// on an explorer — and the legacy constant pinned to the bridge's.
+    #[test]
+    fn token_program_ids_and_live_mint_are_canonical() {
+        let b58 = |k: [u8; 32]| bs58::encode(k).into_string();
+        assert_eq!(
+            SPL_TOKEN_PROGRAM_ID,
+            AcceptedTokenProgram::Legacy.program_id()
+        );
+        assert_eq!(
+            b58(AcceptedTokenProgram::Legacy.program_id()),
+            "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        );
+        assert_eq!(
+            b58(AcceptedTokenProgram::Token2022.program_id()),
+            "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        );
+        assert_eq!(
+            b58(DREGG_MAINNET_MINT),
+            "XkeTXo1125vz5H9svJpGiw4JvLbN8VmMu9cmMvspump"
+        );
+    }
+
+    fn live_dregg_cfg() -> PayConfig {
+        PayConfig::devnet_mock(
+            *b"seedseedseedseedseedseedseedseed",
+            DREGG_MAINNET_MINT,
+            DepositAddress([2u8; 32]),
+            100,
+        )
+    }
+
+    /// The live `$DREGG` mint under legacy SPL Token is the silent-zero pairing: it is
+    /// refused by `asset_policy` (what every watcher is built from) and by the setter,
+    /// and a refused set leaves the config unchanged.
+    #[test]
+    fn live_dregg_mint_under_legacy_program_is_refused() {
+        let mut cfg = live_dregg_cfg();
+        let refused = ConfigError::AssetPolicy {
+            asset: Asset::Dregg,
+            error: HoldingProofError::DreggProgramMismatch,
+        };
+        assert_eq!(cfg.asset_policy(Asset::Dregg).unwrap_err(), refused);
+        assert_eq!(
+            cfg.set_token_program(Asset::Dregg, AcceptedTokenProgram::Legacy)
+                .unwrap_err(),
+            refused
+        );
+        assert_eq!(
+            cfg.token_program_for(Asset::Dregg),
+            AcceptedTokenProgram::Legacy
+        );
+        cfg.set_token_program(Asset::Dregg, AcceptedTokenProgram::Token2022)
+            .unwrap();
+        assert_eq!(
+            cfg.asset_policy(Asset::Dregg).unwrap(),
+            HoldingAssetPolicy::dregg_mainnet()
+        );
+        // USDC keeps its own program: the choice is per asset.
+        assert_eq!(
+            cfg.token_program_for(Asset::Usdc),
+            AcceptedTokenProgram::Legacy
+        );
+        assert!(cfg.asset_policy(Asset::Usdc).is_ok());
+    }
+
+    /// The live mint moved into the USDC slot is refused there too — the pairing, not
+    /// the slot, is what is checked.
+    #[test]
+    fn live_dregg_mint_is_refused_under_legacy_in_either_slot() {
+        let mut cfg = PayConfig::devnet_mock(
+            *b"seedseedseedseedseedseedseedseed",
+            [9u8; 32],
+            DepositAddress([2u8; 32]),
+            100,
+        );
+        cfg.usdc_mint = DREGG_MAINNET_MINT;
+        assert!(matches!(
+            cfg.asset_policy(Asset::Usdc),
+            Err(ConfigError::AssetPolicy {
+                asset: Asset::Usdc,
+                error: HoldingProofError::DreggProgramMismatch,
+            })
+        ));
+    }
 }

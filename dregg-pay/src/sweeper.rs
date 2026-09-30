@@ -17,10 +17,10 @@
 
 use ed25519_dalek::SigningKey;
 
-use crate::config::{DepositAddress, PayConfig, UserId};
+use crate::config::{Asset, ConfigError, DepositAddress, PayConfig, UserId};
 use crate::hd::{DepositAddressProvider, HdDeposit};
 use crate::watcher::{AccountFetcher, WatchError};
-use dregg_bridge::solana_holdings::{HoldingProofError, decode_spl_token_account};
+use dregg_bridge::solana_holdings::{HoldingAssetPolicy, HoldingProofError, decode_token_account};
 
 /// The result of a sweep.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -125,6 +125,10 @@ pub struct SweepRequest<'a> {
     pub to: DepositAddress,
     /// The `$DREGG` mint being transferred.
     pub mint: [u8; 32],
+    /// The token program that owns the source/destination token accounts — the
+    /// program the transfer instruction (and the ATA derivation) must name. The live
+    /// `$DREGG` mint is Token-2022; a legacy-SPL transfer of it fails on chain.
+    pub token_program: [u8; 32],
     /// The amount to transfer, in atomic units.
     pub amount: u64,
     /// The custody signing key for `from` (derived from the seed).
@@ -147,23 +151,24 @@ pub trait TxSubmitter {
 pub struct SolanaSweeper<F: AccountFetcher, T: TxSubmitter> {
     hd: HdDeposit,
     treasury: DepositAddress,
-    mint: [u8; 32],
-    spl_token_program: [u8; 32],
+    /// The checked (mint, token program) pair of the swept asset (`$DREGG`).
+    policy: HoldingAssetPolicy,
     fetcher: F,
     submitter: T,
 }
 
 impl<F: AccountFetcher, T: TxSubmitter> SolanaSweeper<F, T> {
-    /// Build from a [`PayConfig`] + an RPC fetcher + a tx submitter.
-    pub fn new(config: &PayConfig, fetcher: F, submitter: T) -> Self {
-        SolanaSweeper {
+    /// Build from a [`PayConfig`] + an RPC fetcher + a tx submitter. Sweeps `$DREGG`
+    /// under its configured token program; refused when that pairing is refused
+    /// ([`PayConfig::asset_policy`]).
+    pub fn new(config: &PayConfig, fetcher: F, submitter: T) -> Result<Self, ConfigError> {
+        Ok(SolanaSweeper {
             hd: HdDeposit::new(config),
             treasury: config.treasury,
-            mint: config.mint,
-            spl_token_program: config.spl_token_program,
+            policy: config.asset_policy(Asset::Dregg)?,
             fetcher,
             submitter,
-        }
+        })
     }
 }
 
@@ -173,22 +178,22 @@ impl<F: AccountFetcher, T: TxSubmitter> Sweeper for SolanaSweeper<F, T> {
         //    closed on wrong program owner / mint).
         let fetched = self
             .fetcher
-            .fetch_token_account(address, &self.mint)
+            .fetch_token_account(address, self.policy.mint())
             .map_err(SweepError::Read)?;
         let amount = match fetched {
             None => 0,
             Some(a) => {
-                if a.owner_program != self.spl_token_program {
+                if a.owner_program != self.policy.program_id() {
                     return Err(SweepError::Read(WatchError::Holding(
                         HoldingProofError::NotSplTokenProgram {
                             owner_program: a.owner_program,
                         },
                     )));
                 }
-                let (mint, owner, amt) = decode_spl_token_account(&a.data).ok_or(
-                    SweepError::Read(WatchError::Holding(HoldingProofError::NotTokenAccount)),
-                )?;
-                if mint != self.mint {
+                let decoded = decode_token_account(&a.data, self.policy.token_program())
+                    .map_err(|e| SweepError::Read(WatchError::Holding(e)))?;
+                let (mint, owner, amt) = (decoded.mint, decoded.owner, decoded.amount);
+                if mint != *self.policy.mint() {
                     return Err(SweepError::Read(WatchError::Holding(
                         HoldingProofError::WrongMint,
                     )));
@@ -226,7 +231,8 @@ impl<F: AccountFetcher, T: TxSubmitter> Sweeper for SolanaSweeper<F, T> {
             user,
             from: *address,
             to: self.treasury,
-            mint: self.mint,
+            mint: *self.policy.mint(),
+            token_program: self.policy.program_id(),
             amount,
             signing_key: &signing_key,
         };
@@ -244,13 +250,14 @@ impl<F: AccountFetcher, T: TxSubmitter> Sweeper for SolanaSweeper<F, T> {
 /// The canonical bytes a sweep signs when the submitter is a bare signer (a devnet
 /// / test convenience). A PRODUCTION submitter signs the assembled Solana
 /// transaction message instead; this is the minimal message that binds
-/// `from ‖ to ‖ mint ‖ amount` for the driven test's custody proof.
+/// `from ‖ to ‖ mint ‖ token_program ‖ amount` for the driven test's custody proof.
 pub fn sweep_message(request: &SweepRequest) -> Vec<u8> {
-    let mut msg = Vec::with_capacity(32 * 3 + 8 + 16);
-    msg.extend_from_slice(b"dregg-pay/sweep/v1");
+    let mut msg = Vec::with_capacity(32 * 4 + 8 + 16);
+    msg.extend_from_slice(b"dregg-pay/sweep/v2");
     msg.extend_from_slice(&request.from.to_bytes());
     msg.extend_from_slice(&request.to.to_bytes());
     msg.extend_from_slice(&request.mint);
+    msg.extend_from_slice(&request.token_program);
     msg.extend_from_slice(&request.amount.to_le_bytes());
     msg
 }
@@ -330,8 +337,10 @@ mod tests {
         data[0..32].copy_from_slice(&mint);
         data[32..64].copy_from_slice(&alice_addr.to_bytes());
         data[64..72].copy_from_slice(&750u64.to_le_bytes());
+        data[108] = 1; // AccountState::Initialized
 
-        let sweeper = SolanaSweeper::new(&cfg, OneAccountFetcher { data }, SigningSubmitter);
+        let sweeper =
+            SolanaSweeper::new(&cfg, OneAccountFetcher { data }, SigningSubmitter).unwrap();
         let out = sweeper.sweep(&alice, &alice_addr).unwrap();
         assert_eq!(out.amount, 750);
         assert!(out.reference.is_some());

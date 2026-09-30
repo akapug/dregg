@@ -26,6 +26,8 @@ Set these in the operator's secured env (`/etc/dregg/pay.env`, mode 0600 — see
 | `DREGG_PAY_NETWORK` | `devnet` (default) or `mainnet` — the go-live flip |
 | `DREGG_PAY_MINT` | the `$DREGG` SPL mint (mainnet: `XkeTXo1125vz5H9svJpGiw4JvLbN8VmMu9cmMvspump`) |
 | `DREGG_PAY_USDC_MINT` | the USDC SPL mint |
+| `DREGG_PAY_TOKEN_PROGRAM` | **required, no default** — the program that owns `$DREGG` token accounts. Mainnet: Token-2022 `TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb`. The live mint under legacy `Tokenkeg…` is refused at startup (it would credit every real payment as zero) |
+| `DREGG_PAY_USDC_TOKEN_PROGRAM` | **required, no default** — the program that owns USDC token accounts. Mainnet USDC: legacy SPL Token `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA` |
 | `DREGG_PAY_TREASURY` | the treasury address deposits sweep to (mainnet: `J2pW9PQdkJTy2PTzdFUnYFHgbT8btCaY7ZqYHpMFJF5G`) |
 | `DREGG_PAY_SEED` | the HD seed for deposit-address derivation **and** the sweeper — **the custody point; operator-only** |
 | `DREGG_PAY_RPC` | the Solana RPC endpoint |

@@ -715,11 +715,13 @@ pub struct NftMinter {
 }
 
 impl NftMinter {
-    /// Build from a [`PayConfig`] (uses its seed + SPL Token program id).
+    /// Build from a [`PayConfig`] (uses its seed). The export NFTs are fresh 1-of-1
+    /// mints this minter creates, so their program is its own choice — legacy SPL
+    /// Token — and NOT any payment asset's program (`$DREGG` is Token-2022).
     pub fn new(config: &PayConfig) -> Self {
         NftMinter {
             hd: HdDeposit::new(config),
-            spl_token_program: config.spl_token_program,
+            spl_token_program: crate::config::SPL_TOKEN_PROGRAM_ID,
             mint_lamports: MINT_RENT_LAMPORTS,
         }
     }
