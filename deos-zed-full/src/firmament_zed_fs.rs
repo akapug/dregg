@@ -27,7 +27,7 @@
 //! # What's real vs stubbed in THIS slice
 //!
 //! REAL (cell-backed, receipted): `load`, `load_bytes`, `save`, `atomic_write`,
-//! `write`, `create_file`, `create_dir`, `rename`, `metadata` (with a distinct
+//! `write`, `create_file`, `create_dir`, `metadata` (with a distinct
 //! per-cell inode so the worktree RECURSES into nested cell directories),
 //! `is_file`, `is_dir`, `read_dir`, `canonicalize`, `open_handle` (a stable
 //! cell-path handle), `open_sync`.
@@ -44,9 +44,15 @@
 //! + a no-op watcher — the worktree scan reads the cell namespace directly, so
 //! the project panel lists + recurses the cells; live cross-pane refresh off the
 //! receipt log is the follow-on), `git_init`/`git_clone`/`git_config` (no git
-//! mutation over cells yet), `trash`/`restore`/`remove_*` beyond the namespace,
-//! `extract_tar_file`, `create_symlink`. Each stub is an explicit, honest
-//! `bail!`/empty — never a silent wrong answer.
+//! mutation over cells yet), `extract_tar_file`, `create_symlink`. Each stub is
+//! an explicit `bail!`/empty — never a silent wrong answer.
+//!
+//! REFUSED (D11): `remove_file`, `remove_dir`, `trash` and a moving `rename`.
+//! The cell fs has no namespace-removal primitive (a removal would be a
+//! tombstone turn, not built), so none of these can do what the caller asks. They
+//! used to return `Ok(())` and do nothing: Zed dropped the file from its tree,
+//! the cell and its content stayed on the ledger and came back on the next scan,
+//! and a rename was silently a copy. They now return an error naming why.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -337,27 +343,51 @@ impl Fs for FirmamentZedFs {
     }
 
     async fn rename(&self, source: &Path, target: &Path, _options: RenameOptions) -> Result<()> {
-        // Rename = read the source cell's content, save it at the target path (a
-        // new cell + a turn), then the source becomes unreferenced. (A true
-        // in-place re-key of the namespace entry is the follow-on; this preserves
-        // content + produces a receipt for the move.)
-        let content = self.cell.load(source)?;
-        self.cell.save(target, &content)?;
-        Ok(())
+        // A rename onto itself moves nothing and leaves nothing behind.
+        if source == target {
+            return Ok(());
+        }
+        // Anything else would save the content at `target` and leave the source
+        // cell in the namespace (no removal primitive): a copy reported as a
+        // move. Refuse before writing anything.
+        bail!(
+            "FirmamentZedFs: cannot rename {} to {}: the cell namespace has no removal \
+             primitive, so the source would remain (use copy, then delete when \
+             removal lands)",
+            source.display(),
+            target.display()
+        )
     }
 
-    async fn remove_dir(&self, _path: &Path, _options: RemoveOptions) -> Result<()> {
-        Ok(())
+    async fn remove_dir(&self, path: &Path, options: RemoveOptions) -> Result<()> {
+        // Nothing there and the caller said that is fine: nothing to remove, and
+        // Ok is the truth.
+        if options.ignore_if_not_exists && self.cell_metadata(path).is_none() {
+            return Ok(());
+        }
+        bail!(
+            "FirmamentZedFs: cannot remove directory {}: removal is not modeled over \
+             cells (this slice); its cells remain on the ledger",
+            path.display()
+        )
     }
 
-    async fn trash(&self, _path: &Path, _options: RemoveOptions) -> Result<TrashedEntry> {
-        bail!("FirmamentZedFs: trash is not modeled over cells (this slice)")
+    async fn trash(&self, path: &Path, _options: RemoveOptions) -> Result<TrashedEntry> {
+        bail!(
+            "FirmamentZedFs: cannot trash {}: removal is not modeled over cells (this slice)",
+            path.display()
+        )
     }
 
-    async fn remove_file(&self, _path: &Path, _options: RemoveOptions) -> Result<()> {
-        // No namespace-removal primitive on the cell fs yet; the cell persists.
-        // (A true removal = a tombstone turn — follow-on.)
-        Ok(())
+    async fn remove_file(&self, path: &Path, options: RemoveOptions) -> Result<()> {
+        if options.ignore_if_not_exists && self.cell_metadata(path).is_none() {
+            return Ok(());
+        }
+        bail!(
+            "FirmamentZedFs: cannot remove {}: removal is not modeled over cells (this \
+             slice); the cell remains on the ledger",
+            path.display()
+        )
     }
 
     async fn open_handle(&self, path: &Path) -> Result<Arc<dyn FileHandle>> {
