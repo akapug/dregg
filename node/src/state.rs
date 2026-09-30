@@ -1190,13 +1190,33 @@ impl NodeState {
         // only ever refuse a programmed-cell turn. See [`crate::install_verified_executor_oracles`].
         crate::install_verified_executor_oracles();
         let db_path = data_dir.join("dregg.redb");
-        let store = Arc::new(
-            match poa_compact_trust {
-                Some(policy) => PersistentStore::open_with_poa_compact_trust_v1(&db_path, policy),
-                None => PersistentStore::open(&db_path),
+        let mut store = match poa_compact_trust {
+            Some(policy) => PersistentStore::open_with_poa_compact_trust_v1(&db_path, policy),
+            None => PersistentStore::open(&db_path),
+        }
+        .map_err(|e| format!("failed to open store: {e}"))?;
+        // Issue #97: redb reuses freed pages but never shrinks its file, and nothing else calls
+        // `compact()`, so a long-running node's dregg.redb only grows. Boot is the one moment the
+        // node owns the store exclusively (before it is shared behind the Arc), so an operator can
+        // opt in to reclaiming the space here. Opt-in because a large file takes a while to rewrite;
+        // a failure is logged and boot continues on the uncompacted store.
+        if std::env::var_os("DREGG_COMPACT_ON_BOOT").is_some() {
+            let size = |p: &Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+            let before = size(&db_path);
+            match store.compact() {
+                Ok(_) => tracing::info!(
+                    path = %db_path.display(),
+                    before,
+                    after = size(&db_path),
+                    "DREGG_COMPACT_ON_BOOT: compacted the store"
+                ),
+                Err(e) => tracing::warn!(
+                    path = %db_path.display(),
+                    "DREGG_COMPACT_ON_BOOT: compaction failed, booting on the uncompacted store: {e}"
+                ),
             }
-            .map_err(|e| format!("failed to open store: {e}"))?,
-        );
+        }
+        let store = Arc::new(store);
         // Boot crash-recovery: a torn/poisoned commit-log tail (e.g. a process
         // killed between the input-turn config write and the commit-record txn, or
         // an unclean power-cycle) leaves the log's head inconsistent with its
