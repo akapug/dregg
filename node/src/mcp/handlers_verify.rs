@@ -748,9 +748,10 @@ pub(super) async fn tool_sign_sovereign_witness(
         fee: 0,
         memo: None,
         // This is the exact turn the tool tells the caller to submit
-        // (`witnessed_turn_postcard_hex`, below) — `None` would skip the executor's
-        // expiration check entirely (`turn/src/executor/execute.rs:426`) on it.
-        valid_until: crate::api::default_valid_until(),
+        // (`witnessed_turn_postcard_hex`, below), so its deadline is counted from this
+        // node's attested height: the caller has DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS
+        // heights to submit it.
+        valid_until: crate::executor_setup::default_valid_until(&s),
         previous_receipt_hash: None,
         depends_on: Vec::new(),
         conservation_proof: None,

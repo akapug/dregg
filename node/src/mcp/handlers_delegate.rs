@@ -100,10 +100,8 @@ pub(super) async fn tool_grant_capability(params: &Value, state: &NodeState) -> 
         // GrantCapability effect (~100 + 50 computrons by default; round up).
         fee: 10_000,
         memo: Some(format!("grant capability: {permissions}")),
-        // `None` skips the executor's expiration check entirely
-        // (`turn/src/executor/execute.rs:426`) — bound it instead
-        // (`api::default_valid_until`).
-        valid_until: crate::api::default_valid_until(),
+        // A block-height deadline: the attested height plus the default horizon.
+        valid_until: crate::executor_setup::default_valid_until(&s),
         // Use a signed action so the cell's `delegate: Signature` permission
         // accepts it. (Hosted-cell grants require the cell owner's signature.)
         call_forest: build_signed_forest(
@@ -138,7 +136,15 @@ pub(super) async fn tool_grant_capability(params: &Value, state: &NodeState) -> 
     // Execute locally. ⚑ THE COMMIT IS NOT GATED ON AN ATTESTATION. This used to call
     // `require_effect_vm_proof` HERE, before executing, and return its refusal — and
     // that helper had no reachable `Ok`, so this tool could not commit at all.
-    let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    let mut executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    // The node's executor shape: attested + 1 height (the clock `valid_until` is checked
+    // against), timestamp, restored receipt heads and side state, registries, fee cells.
+    // The handler's own setters below still apply on top of it.
+    crate::executor_setup::configure_turn_executor(
+        &mut executor,
+        &s,
+        crate::executor_setup::BlockHeightMode::Next,
+    );
     if let Some(head) = previous_receipt_hash {
         executor.set_last_receipt_hash(agent_cell_id, head);
     }
@@ -247,10 +253,8 @@ pub(super) async fn tool_revoke_capability(params: &Value, state: &NodeState) ->
         nonce,
         fee: 0,
         memo: Some(format!("revoke capability slot {cap_slot}")),
-        // `None` skips the executor's expiration check entirely
-        // (`turn/src/executor/execute.rs:426`) — bound it instead
-        // (`api::default_valid_until`).
-        valid_until: crate::api::default_valid_until(),
+        // A block-height deadline: the attested height plus the default horizon.
+        valid_until: crate::executor_setup::default_valid_until(&s),
         call_forest: build_forest_with_effects(agent_cell_id, vec![effect]),
         depends_on: vec![],
         previous_receipt_hash,
@@ -269,7 +273,15 @@ pub(super) async fn tool_revoke_capability(params: &Value, state: &NodeState) ->
     let turn_hash = hex_encode(&turn.hash());
 
     // Execute locally.
-    let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    let mut executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    // The node's executor shape: attested + 1 height (the clock `valid_until` is checked
+    // against), timestamp, restored receipt heads and side state, registries, fee cells.
+    // The handler's own setters below still apply on top of it.
+    crate::executor_setup::configure_turn_executor(
+        &mut executor,
+        &s,
+        crate::executor_setup::BlockHeightMode::Next,
+    );
     if let Some(head) = previous_receipt_hash {
         executor.set_last_receipt_hash(agent_cell_id, head);
     }
@@ -412,10 +424,8 @@ pub(super) async fn tool_delegate(params: &Value, state: &NodeState) -> McpToolR
             "delegate capability slot {} to {}",
             capability, to_agent_hex
         )),
-        // `None` skips the executor's expiration check entirely
-        // (`turn/src/executor/execute.rs:426`) — bound it instead
-        // (`api::default_valid_until`).
-        valid_until: crate::api::default_valid_until(),
+        // A block-height deadline: the attested height plus the default horizon.
+        valid_until: crate::executor_setup::default_valid_until(&s),
         call_forest: build_forest_with_effects(agent_cell_id, vec![effect]),
         depends_on: vec![],
         previous_receipt_hash,
@@ -434,7 +444,15 @@ pub(super) async fn tool_delegate(params: &Value, state: &NodeState) -> McpToolR
     let turn_hash = hex_encode(&turn.hash());
 
     // Execute locally.
-    let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    let mut executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    // The node's executor shape: attested + 1 height (the clock `valid_until` is checked
+    // against), timestamp, restored receipt heads and side state, registries, fee cells.
+    // The handler's own setters below still apply on top of it.
+    crate::executor_setup::configure_turn_executor(
+        &mut executor,
+        &s,
+        crate::executor_setup::BlockHeightMode::Next,
+    );
     if let Some(head) = previous_receipt_hash {
         executor.set_last_receipt_hash(agent_cell_id, head);
     }
@@ -766,10 +784,8 @@ pub(super) async fn tool_exercise_bearer_cap(params: &Value, state: &NodeState) 
         // Cover Action-base + per-effect cost for the parsed effects.
         fee: 10_000,
         memo: Some(format!("bearer cap exercise: {method}")),
-        // `None` skips the executor's expiration check entirely
-        // (`turn/src/executor/execute.rs:426`) — bound it instead
-        // (`api::default_valid_until`).
-        valid_until: crate::api::default_valid_until(),
+        // A block-height deadline: the attested height plus the default horizon.
+        valid_until: crate::executor_setup::default_valid_until(&s),
         call_forest: forest,
         depends_on: vec![],
         previous_receipt_hash,
@@ -797,6 +813,14 @@ pub(super) async fn tool_exercise_bearer_cap(params: &Value, state: &NodeState) 
     // commit, while one carrying NO effects sailed through (the `vm_effects.is_empty()`
     // arm). The gate fired on exactly the calls that did something.
     let mut executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    // The node's executor shape: attested + 1 height (the clock `valid_until` is checked
+    // against), timestamp, restored receipt heads and side state, registries, fee cells.
+    // The handler's own setters below still apply on top of it.
+    crate::executor_setup::configure_turn_executor(
+        &mut executor,
+        &s,
+        crate::executor_setup::BlockHeightMode::Next,
+    );
     executor.set_local_federation_id(federation_id);
     executor.set_executor_signing_key(s.cclerk.gossip_signing_key().to_bytes());
     if let Some(head) = previous_receipt_hash {
@@ -1234,10 +1258,8 @@ pub(super) async fn tool_exercise_handoff_cert(params: &Value, state: &NodeState
         nonce: turn_nonce,
         fee: 10_000,
         memo: Some("captp.handoff-cert-exercise (mcp)".to_string()),
-        // `None` skips the executor's expiration check entirely
-        // (`turn/src/executor/execute.rs:426`) — bound it instead
-        // (`api::default_valid_until`).
-        valid_until: crate::api::default_valid_until(),
+        // A block-height deadline: the attested height plus the default horizon.
+        valid_until: crate::executor_setup::default_valid_until(&s),
         call_forest: forest,
         depends_on: vec![],
         previous_receipt_hash,
@@ -1254,6 +1276,14 @@ pub(super) async fn tool_exercise_handoff_cert(params: &Value, state: &NodeState
     let turn_hash = hex_encode(&turn.hash());
 
     let mut executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    // The node's executor shape: attested + 1 height (the clock `valid_until` is checked
+    // against), timestamp, restored receipt heads and side state, registries, fee cells.
+    // The handler's own setters below still apply on top of it.
+    crate::executor_setup::configure_turn_executor(
+        &mut executor,
+        &s,
+        crate::executor_setup::BlockHeightMode::Next,
+    );
     executor.set_local_federation_id(federation_id);
     executor.set_executor_signing_key(s.cclerk.gossip_signing_key().to_bytes());
     if let Some(head) = previous_receipt_hash {

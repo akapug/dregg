@@ -866,6 +866,46 @@ mod tests {
         }
     }
 
+    /// The node's one stamp (`default_valid_until`) and the executors it builds agree on the
+    /// unit: a node-built deadline is admissible on the submit executor (attested + 1) and at
+    /// every height up to it, refused one height later, and an MCP-shaped executor (a default
+    /// executor through `configure_turn_executor`, as every MCP handler now builds it) has
+    /// the same nonzero height instead of 0.
+    #[tokio::test]
+    async fn default_valid_until_is_a_height_the_node_executors_admit() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = crate::state::NodeState::new(dir.path(), vec![]).expect("node state");
+        let s = state.read().await;
+
+        let attested = attested_block_height(&s);
+        let deadline = default_valid_until(&s);
+        assert_eq!(
+            deadline,
+            Some(attested as i64 + dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS as i64)
+        );
+
+        let submit = new_submit_executor(&s);
+        let mut mcp_shaped = TurnExecutor::new(dregg_turn::ComputronCosts::default());
+        configure_turn_executor(&mut mcp_shaped, &s, BlockHeightMode::Next);
+        for executor in [&submit, &mcp_shaped] {
+            assert_eq!(executor.block_height, attested + 1);
+            assert_eq!(
+                dregg_turn::check_deadline(executor.block_height, deadline),
+                Ok(())
+            );
+        }
+
+        let last = deadline.unwrap() as u64;
+        assert_eq!(dregg_turn::check_deadline(last, deadline), Ok(()));
+        assert_eq!(
+            dregg_turn::check_deadline(last + 1, deadline),
+            Err(dregg_turn::TurnError::Expired {
+                valid_until: deadline.unwrap(),
+                height: last + 1,
+            })
+        );
+    }
+
     #[test]
     fn native_pq_never_downgrades_without_double_explicit_unaudited_test_mode() {
         assert!(pq_admission_required(None, None));

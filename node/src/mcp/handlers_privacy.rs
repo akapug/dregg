@@ -271,10 +271,8 @@ pub(super) async fn tool_private_transfer(params: &Value, state: &NodeState) -> 
         nonce,
         fee: 0,
         memo: Some("private transfer".to_string()),
-        // `None` skips the executor's expiration check entirely
-        // (`turn/src/executor/execute.rs:426`) — bound it instead
-        // (`api::default_valid_until`).
-        valid_until: crate::api::default_valid_until(),
+        // A block-height deadline: the attested height plus the default horizon.
+        valid_until: crate::executor_setup::default_valid_until(&s),
         call_forest: build_forest_with_effects(from_cell_id, effects),
         depends_on: vec![],
         previous_receipt_hash,
@@ -291,7 +289,15 @@ pub(super) async fn tool_private_transfer(params: &Value, state: &NodeState) -> 
 
     let turn_hash = hex_encode(&turn.hash());
 
-    let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    let mut executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    // The node's executor shape: attested + 1 height (the clock `valid_until` is checked
+    // against), timestamp, restored receipt heads and side state, registries, fee cells.
+    // The handler's own setters below still apply on top of it.
+    crate::executor_setup::configure_turn_executor(
+        &mut executor,
+        &s,
+        crate::executor_setup::BlockHeightMode::Next,
+    );
     if let Some(head) = previous_receipt_hash {
         executor.set_last_receipt_hash(agent_cell_id, head);
     }

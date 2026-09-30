@@ -249,10 +249,8 @@ pub(super) async fn tool_create_cell_from_factory_effect(
         nonce,
         fee: 10_000,
         memo: Some("create cell from factory (mcp)".to_string()),
-        // `None` skips the executor's expiration check entirely
-        // (`turn/src/executor/execute.rs:426`) — bound it instead
-        // (`api::default_valid_until`).
-        valid_until: crate::api::default_valid_until(),
+        // A block-height deadline: the attested height plus the default horizon.
+        valid_until: crate::executor_setup::default_valid_until(&s),
         call_forest: build_signed_forest(
             agent_cell_id,
             vec![effect],
@@ -274,7 +272,15 @@ pub(super) async fn tool_create_cell_from_factory_effect(
     };
     let turn_hash = hex_encode(&turn.hash());
 
-    let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    let mut executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    // The node's executor shape: attested + 1 height (the clock `valid_until` is checked
+    // against), timestamp, restored receipt heads and side state, registries, fee cells.
+    // The handler's own setters below still apply on top of it.
+    crate::executor_setup::configure_turn_executor(
+        &mut executor,
+        &s,
+        crate::executor_setup::BlockHeightMode::Next,
+    );
     if let Some(head) = previous_receipt_hash {
         executor.set_last_receipt_hash(agent_cell_id, head);
     }
@@ -429,10 +435,8 @@ pub(super) async fn run_starbridge_action(
         nonce,
         fee: 10_000,
         memo: Some(memo),
-        // `None` skips the executor's expiration check entirely
-        // (`turn/src/executor/execute.rs:426`) — bound it instead
-        // (`api::default_valid_until`).
-        valid_until: crate::api::default_valid_until(),
+        // A block-height deadline: the attested height plus the default horizon.
+        valid_until: crate::executor_setup::default_valid_until(&s),
         call_forest: forest,
         depends_on: vec![],
         previous_receipt_hash,
@@ -454,7 +458,15 @@ pub(super) async fn run_starbridge_action(
     let before_cell = s.ledger.get(&agent_cell_id).cloned();
 
     // Execute locally.
-    let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    let mut executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    // The node's executor shape: attested + 1 height (the clock `valid_until` is checked
+    // against), timestamp, restored receipt heads and side state, registries, fee cells.
+    // The handler's own setters below still apply on top of it.
+    crate::executor_setup::configure_turn_executor(
+        &mut executor,
+        &s,
+        crate::executor_setup::BlockHeightMode::Next,
+    );
     if let Some(head) = previous_receipt_hash {
         executor.set_last_receipt_hash(agent_cell_id, head);
     }
