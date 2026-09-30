@@ -1203,11 +1203,23 @@ impl NodeState {
         if std::env::var_os("DREGG_COMPACT_ON_BOOT").is_some() {
             let size = |p: &Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
             let before = size(&db_path);
-            match store.compact() {
-                Ok(_) => tracing::info!(
+            // redb returns true while a further pass can still shrink the file; a few passes
+            // reach the floor. It refuses (rather than waits) while a read transaction or a
+            // savepoint is live, which boot never has.
+            let mut passes = 0;
+            let outcome = loop {
+                match store.compact() {
+                    Ok(true) if passes < 8 => passes += 1,
+                    Ok(_) => break Ok(passes),
+                    Err(e) => break Err(e),
+                }
+            };
+            match outcome {
+                Ok(passes) => tracing::info!(
                     path = %db_path.display(),
                     before,
                     after = size(&db_path),
+                    passes,
                     "DREGG_COMPACT_ON_BOOT: compacted the store"
                 ),
                 Err(e) => tracing::warn!(
