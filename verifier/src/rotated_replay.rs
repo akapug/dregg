@@ -143,8 +143,10 @@ pub struct RotatedReplayLeg {
     /// Postcard-serialized `Ir2BatchProof<DreggStarkConfig>` (the multi-table
     /// rotated batch proof).
     pub proof_bytes: Vec<u8>,
-    /// The rotated public-input vector as canonical `u32` BabyBear values. At least
-    /// [`V1_PI_COUNT`] (35) elements: `OLD_COMMIT` at 0, `NEW_COMMIT` at 8, the v1
+    /// The rotated public-input vector as canonical `u32` BabyBear values. EXACTLY the
+    /// accepting descriptor's `public_input_count` elements (a longer or shorter vector is
+    /// refused by [`resolve_rotated_descriptor`]), and never fewer than
+    /// [`V1_PI_COUNT`] (35): `OLD_COMMIT` at 0, `NEW_COMMIT` at 8, the v1
     /// prefix `[0..35)`, then the 4 appended rotated pins (`ROT_PI_COUNT` = 39; 40
     /// with the note-spend nullifier pin). A WIDE leg runs to `WIDE_PI_COUNT` = 59
     /// and publishes the 8-felt before/after commits as its LAST 16 elements.
@@ -166,6 +168,10 @@ impl RotatedReplayLeg {
     }
 
     /// This leg's `(before8, after8)` commit anchors AT THE LEG'S TRUE WIDTH.
+    ///
+    /// Only meaningful for a leg [`verify_rotated_leg`] accepted: that resolution pins
+    /// `public_inputs.len()` to the accepting descriptor's `public_input_count`, which is
+    /// what places the wide tail read below inside the proven window.
     ///
     /// A WIDE / welded leg publishes the full 8-felt commits as its LAST 16 PIs (the
     /// ~124-bit anchor the wide descriptor's carrier pi_bindings tie to the proof's
@@ -247,6 +253,17 @@ pub struct RotatedChainOutput {
 /// member(s) of the accepted registries it verifies under.
 ///
 /// Returns the uniquely-accepting member's `(registry key, identity fingerprint)`.
+///
+/// **The shipped vector IS the descriptor's window.** A member is a candidate only when
+/// `public_inputs.len() == desc.public_input_count`, and the proof is verified against the
+/// WHOLE vector. This used to verify a prefix (`public_inputs[..public_input_count]`,
+/// guarded by `>=`) while [`RotatedReplayLeg::commit_anchors`] read the wide anchors from
+/// the vector's own last 16 felts — so 16 felts appended to a genuine leg sat outside the
+/// verified window and were read as its before/after commitments (synthesis 2026-09-30
+/// item 1). The anchors are the last 16 PIs of the WINDOW, each carrier-`PiBinding`-bound
+/// (`verifier/tests/rotated_leg_pi_tail_forge.rs` checks that for every accepted wide
+/// member); the equality makes "last 16 of the vector" and "last 16 of the window" the
+/// same slots. A vector of any other length binds no member and is refused.
 /// Zero accepting members ⇒ not a rotated cohort proof (reject); more than one ⇒
 /// ambiguous (reject rather than launder a wrong-descriptor acceptance).
 ///
@@ -271,12 +288,10 @@ pub fn resolve_rotated_descriptor(
             let _display = it.next();
             let Some(json) = it.next() else { continue };
             if let Ok(desc) = parse_vm_descriptor2(json)
-                && public_inputs.len() >= desc.public_input_count
+                && public_inputs.len() == desc.public_input_count
+                && verify_vm_descriptor2(&desc, &proof, public_inputs).is_ok()
             {
-                let dpis = &public_inputs[..desc.public_input_count];
-                if verify_vm_descriptor2(&desc, &proof, dpis).is_ok() {
-                    bound.push((name.to_string(), *blake3::hash(json.as_bytes()).as_bytes()));
-                }
+                bound.push((name.to_string(), *blake3::hash(json.as_bytes()).as_bytes()));
             }
         }
     };
@@ -287,23 +302,21 @@ pub fn resolve_rotated_descriptor(
     // its fingerprint is the canonical-bytes one the producer pinned.
     let welded: Vec<(&'static str, EffectVmDescriptor2)> = welded_wide_members();
     for (key, desc) in &welded {
-        if public_inputs.len() >= desc.public_input_count {
-            let dpis = &public_inputs[..desc.public_input_count];
-            if verify_vm_descriptor2(desc, &proof, dpis).is_ok()
-                && let Some(fp) = welded_descriptor_fingerprint(desc)
-            {
-                bound.push((key.to_string(), fp));
-            }
+        if public_inputs.len() == desc.public_input_count
+            && verify_vm_descriptor2(desc, &proof, public_inputs).is_ok()
+            && let Some(fp) = welded_descriptor_fingerprint(desc)
+        {
+            bound.push((key.to_string(), fp));
         }
     }
 
     match bound.len() {
         1 => Ok(bound.remove(0)),
-        0 => Err(
+        0 => Err(format!(
             "rotated effect-vm proof verified under NO cohort descriptor (wide, welded-wide, or \
-             bare V3)"
-                .to_string(),
-        ),
+             bare V3) whose public_input_count equals the shipped vector's {} PIs",
+            public_inputs.len()
+        )),
         _ => Err(format!(
             "rotated effect-vm proof verified under MULTIPLE cohort descriptors {:?} — selector \
              binding ambiguous, rejecting",

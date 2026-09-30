@@ -662,3 +662,62 @@ fn flagday_rejects_one_felt_v3_full_turn_leg() {
     );
     eprintln!("FLAG-DAY REJECT TOOTH BITES: a 1-felt V3 full-turn leg is REJECTED post-cutover.");
 }
+
+/// **THE APPENDED-TAIL FORGE (synthesis 2026-09-30 item 1).** `verify_full_turn_bound` reads a
+/// wide leg's 8-felt anchors from the LAST 16 felts of `sub_public_inputs`. Those are the proven
+/// anchors only when the vector IS the accepting descriptor's `public_input_count` window;
+/// `verify_effect_vm_rotated_inner` used to verify a prefix (`>=` + `[..public_input_count]`), so
+/// 16 chosen felts appended to an honest leg were read as the turn's commitments. Built
+/// constructively: the mutation is asserted before the verdict is read.
+#[test]
+fn flagday_rotated_leg_with_appended_pi_tail_is_refused() {
+    use dregg_sdk::full_turn_proof::{
+        prove_full_turn, verify_effect_vm_rotated_with_cutover, verify_full_turn,
+    };
+    let (witness, rot, initial, effects) = flagday_transfer_witness(100_000, 100);
+    let (old8, new8) = rot
+        .wide_commit_anchors(&initial, &effects, None)
+        .expect("wide_commit_anchors");
+    let turn_hash = *blake3::hash(b"flagday-turn").as_bytes();
+    let proof = prove_full_turn(&witness).expect("the honest WIDE full-turn must prove");
+    verify_full_turn(&proof, turn_hash, old8, new8).expect("control: the honest proof verifies");
+
+    let x: [BabyBear; 8] = std::array::from_fn(|i| BabyBear::new(0x1000 + i as u32));
+    let y: [BabyBear; 8] = std::array::from_fn(|i| BabyBear::new(0x2000 + i as u32));
+    assert_ne!(x, old8);
+    assert_ne!(y, new8);
+
+    let mut forged = proof.clone();
+    let leg = forged
+        .composed
+        .sub_proofs
+        .iter_mut()
+        .find(|sp| sp.label == "effect-vm-rotated")
+        .expect("rotated effect-vm leg present");
+    let genuine: Vec<BabyBear> = leg.sub_public_inputs.clone();
+    leg.sub_public_inputs
+        .extend(x.iter().chain(y.iter()).copied());
+    let n = leg.sub_public_inputs.len();
+    assert_eq!(n, genuine.len() + 16, "the mutation appended 16 felts");
+    assert_eq!(leg.sub_public_inputs[..genuine.len()], genuine[..]);
+    assert_eq!(leg.sub_public_inputs[n - 16..n - 8], x[..]);
+    assert_eq!(leg.sub_public_inputs[n - 8..n], y[..]);
+    let (leg_bytes, leg_pis, leg_vk) = (
+        leg.proof_bytes.clone(),
+        leg.sub_public_inputs.clone(),
+        leg.vk_hash,
+    );
+
+    assert!(
+        verify_full_turn(&forged, turn_hash, x, y).is_err(),
+        "an honest proof of old->new was accepted as attesting X->Y"
+    );
+    assert!(
+        verify_effect_vm_rotated_with_cutover(&leg_bytes, &leg_pis, &leg_vk).is_err(),
+        "the rotated leg verify accepted a vector 16 PIs past its window"
+    );
+    assert!(
+        verify_full_turn(&forged, turn_hash, old8, new8).is_err(),
+        "a leg vector longer than its window verified against the genuine anchors"
+    );
+}
