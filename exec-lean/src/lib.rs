@@ -48,6 +48,56 @@ use dregg_turn::turn::{Turn, TurnResult};
 
 pub use nullifier::{NullifierDoubleSpend, ShadowNullifierAccumulator};
 
+/// What one `register_*_oracle` call found. The question a caller asks is "is the verified oracle
+/// deciding in this process?", not "did THIS call install it?", and the two differ as soon as a
+/// process registers twice: `dregg-node` installs both oracles at boot, and an SDK `AgentRuntime`
+/// in the same process asks again. Returning a bool made that second call read `false`, which the
+/// SDK reported as "the archive does NOT export" the decision (#89).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OracleRegistration {
+    /// This call installed the verified Lean oracle.
+    Installed,
+    /// The verified Lean oracle was installed by an earlier registration in this process.
+    AlreadyInstalled,
+    /// The linked archive does not export the decision, so no verified oracle can be installed.
+    Unavailable,
+    /// The slot is held by an oracle that did NOT come from this crate's registration (only a test
+    /// double installs one directly). The verified decision is not what runs, so this is not armed.
+    Foreign,
+}
+
+impl OracleRegistration {
+    /// The verified Lean oracle decides in this process.
+    pub fn is_armed(self) -> bool {
+        matches!(self, Self::Installed | Self::AlreadyInstalled)
+    }
+}
+
+/// The shared registration rule. `registered` records that THIS crate installed the verified
+/// oracle, so a refused install is told apart as ours-already (`AlreadyInstalled`) or someone
+/// else's (`Foreign`); the lock makes the install and the record one step, so a concurrent second
+/// registration cannot read the slot as foreign in between.
+pub(crate) fn register_lean_oracle(
+    available: bool,
+    registered: &Mutex<bool>,
+    install: impl FnOnce() -> Result<(), &'static str>,
+) -> OracleRegistration {
+    if !available {
+        return OracleRegistration::Unavailable;
+    }
+    let mut registered = registered.lock().unwrap_or_else(|p| p.into_inner());
+    if *registered {
+        return OracleRegistration::AlreadyInstalled;
+    }
+    match install() {
+        Ok(()) => {
+            *registered = true;
+            OracleRegistration::Installed
+        }
+        Err(_) => OracleRegistration::Foreign,
+    }
+}
+
 pub use conservation_oracle::{LeanConservationOracle, register_conservation_oracle};
 pub use constraint_oracle::{LeanConstraintOracle, register_constraint_oracle};
 pub use distributed_gates::{LeanDistributedGate, register_distributed_gates};

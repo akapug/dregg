@@ -66,7 +66,7 @@ fn ensure_oracle() -> bool {
         return false;
     }
     // `register` may have already run in an earlier test fn of this binary; either way the oracle is
-    // installed afterward. (`OnceLock::set` returns false on the second call — still installed.)
+    // installed afterward (a second call reports `AlreadyInstalled`).
     let _ = register_constraint_oracle();
     dregg_lean_ffi::demand_lean(
         dregg_cell::program::constraint_oracle_installed(),

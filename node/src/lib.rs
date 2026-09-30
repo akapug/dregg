@@ -1195,14 +1195,14 @@ pub fn install_verified_executor_oracles() {
     // `DREGG_REQUIRE_LEAN=0` build) this is a no-op — and on a release build every programmed-cell
     // turn then refuses. Such a build cannot boot a node anyway: the SAME missing archive leaves the
     // conservation oracle absent, and `assert_conservation_oracle_installed()` in `run` panics on it.
-    if dregg_exec_lean::register_constraint_oracle() {
+    if dregg_exec_lean::register_constraint_oracle().is_armed() {
         tracing::debug!("constraint oracle: verified Lean deployed-constraint evaluator installed");
     }
     // Per-asset `Σδ=0` via `Dregg2.Circuit.CrossCellConserveDecision.conservesFFI`, proved EQUAL to
     // the committed `CrossCellConservation` AIR boundary by
     // `CrossCellConserveRefine.decision_conserves_iff_air_boundary`, replacing the hand-written
     // `dregg_circuit::block_conservation::BlockConservation` twin.
-    if dregg_exec_lean::register_conservation_oracle() {
+    if dregg_exec_lean::register_conservation_oracle().is_armed() {
         tracing::debug!(
             "conservation oracle: verified Lean cross-cell per-asset Σδ=0 decision installed"
         );

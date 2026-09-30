@@ -114,9 +114,13 @@ fn install_and_probe() -> Result<(), String> {
     // handed over. Registering it here rather than in the server bin arms every embedding of
     // `dreggnet-web` (the bin, the tailnet funnel, the catalog tests) from the one place that is
     // already contractually "installed and PROVED before a listener exists".
+    // Armed means the verified oracle decides, whichever registration installed it: an SDK
+    // `AgentRuntime` earlier in this process reports `AlreadyInstalled` here, not a missing export
+    // (#89).
     let constraint_oracle = dregg_exec_lean::register_constraint_oracle();
     tracing::info!(
-        installed = constraint_oracle,
+        registration = ?constraint_oracle,
+        installed = constraint_oracle.is_armed(),
         "constraint oracle: the deployed executor's Lean-subset StateConstraint/HeapAtom admission \
          is decided by the verified `dregg_constraint_admits`"
     );
@@ -129,14 +133,15 @@ fn install_and_probe() -> Result<(), String> {
     // (`dregg_sdk::constraint_subset_fails_closed_without_oracle()`, re-exported from `dregg-cell` —
     // the same `const fn` `eval.rs` branches on) instead of hand-repeating its `cfg`. A copied
     // predicate is a claim that the gate may have moved, and this file carried two copies of it.
-    if dregg_sdk::constraint_subset_fails_closed_without_oracle() && !constraint_oracle {
-        return Err(
-            "the verified deployed-constraint oracle did not register (the linked archive does \
-             not export `dregg_constraint_admits`). On a native RELEASE build `dregg-cell` fails \
-             CLOSED for the whole Lean-evaluated constraint subset, so every programmed-cell turn \
-             (the Descent, the dungeon, the campaign) would refuse"
-                .to_string(),
-        );
+    if dregg_sdk::constraint_subset_fails_closed_without_oracle() && !constraint_oracle.is_armed()
+    {
+        return Err(format!(
+            "the verified deployed-constraint oracle is not installed ({constraint_oracle:?}: \
+             `Unavailable` is a linked archive that does not export `dregg_constraint_admits`, \
+             `Foreign` is another oracle holding the slot). On a native RELEASE build \
+             `dregg-cell` fails CLOSED for the whole Lean-evaluated constraint subset, so every \
+             programmed-cell turn (the Descent, the dungeon, the campaign) would refuse"
+        ));
     }
 
     // ── THE CONSERVATION ORACLE (House Law #1) ────────────────────────────────────────────────
@@ -147,7 +152,8 @@ fn install_and_probe() -> Result<(), String> {
     // A server that settles a market must hold the same line.
     let conservation_oracle = dregg_exec_lean::register_conservation_oracle();
     tracing::info!(
-        installed = conservation_oracle,
+        registration = ?conservation_oracle,
+        installed = conservation_oracle.is_armed(),
         "conservation oracle: per-asset Σδ=0 is decided by the verified `dregg_cross_cell_conserves`"
     );
     // The SAME predicate, read here as "is this the deployed native-release configuration" rather
@@ -157,14 +163,16 @@ fn install_and_probe() -> Result<(), String> {
     // `dregg_turn::executor::native_build_requires_oracle()` is `any(unix, windows)` with no profile
     // clause, which is why `dregg-node` panics on a missing conservation oracle in debug too. This
     // surface deliberately keeps the narrower release-only refusal it shipped with.)
-    if dregg_sdk::constraint_subset_fails_closed_without_oracle() && !conservation_oracle {
-        return Err(
-            "the verified cross-cell conservation oracle did not register (the linked archive \
-             does not export `dregg_cross_cell_conserves`). The executor would silently decide \
-             per-asset Σδ=0 with the UNVERIFIED Rust twin that already drifted into an inflation \
-             bug; refusing to serve a market on it"
-                .to_string(),
-        );
+    if dregg_sdk::constraint_subset_fails_closed_without_oracle()
+        && !conservation_oracle.is_armed()
+    {
+        return Err(format!(
+            "the verified cross-cell conservation oracle is not installed \
+             ({conservation_oracle:?}: `Unavailable` is a linked archive that does not export \
+             `dregg_cross_cell_conserves`, `Foreign` is another oracle holding the slot). The \
+             executor would silently decide per-asset Σδ=0 with the UNVERIFIED Rust twin that \
+             already drifted into an inflation bug; refusing to serve a market on it"
+        ));
     }
 
     // POLE 1 — a leg that MUST commit, with the exact post-column checked.

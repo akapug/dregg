@@ -1022,12 +1022,15 @@ impl ConstraintOracle for LeanConstraintOracle {
 
 /// Install the Lean-backed constraint oracle into `dregg_cell` (call once at native node startup,
 /// only when the archive exports `dregg_constraint_admits`). After this, the deployed executor's
-/// admission for the Lean-evaluated subset is computed by the PROVEN Lean `admitsTop`.
-pub fn register_constraint_oracle() -> bool {
-    if !dregg_lean_ffi::constraint_admits_available() {
-        return false;
-    }
-    dregg_cell::program::install_constraint_oracle(Box::new(LeanConstraintOracle)).is_ok()
+/// admission for the Lean-evaluated subset is computed by the PROVEN Lean `admitsTop`. A second
+/// call reports [`crate::OracleRegistration::AlreadyInstalled`], not a missing export.
+pub fn register_constraint_oracle() -> crate::OracleRegistration {
+    static REGISTERED: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
+    crate::register_lean_oracle(
+        dregg_lean_ffi::constraint_admits_available(),
+        &REGISTERED,
+        || dregg_cell::program::install_constraint_oracle(Box::new(LeanConstraintOracle)),
+    )
 }
 
 /// ⚑ THE DECODER'S HALF OF THE MALFORMED/VIOLATED SEPARATION.

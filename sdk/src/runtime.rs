@@ -496,13 +496,23 @@ fn ensure_deployed_executor_oracles_installed() {
     if !dregg_cell::program::constraint_subset_fails_closed_without_oracle() {
         return;
     }
+    use dregg_exec_lean::OracleRegistration;
+    // A node installs both oracles at boot, before any `AgentRuntime` in its process asks again, so
+    // `AlreadyInstalled` is the ordinary answer there and is as armed as `Installed` (#89).
     let constraint = dregg_exec_lean::register_constraint_oracle();
     let conservation = dregg_exec_lean::register_conservation_oracle();
     LOGGED.call_once(|| {
-        if constraint {
+        if constraint.is_armed() {
             tracing::info!(
+                registration = ?constraint,
                 "constraint oracle: the deployed executor's Lean-subset StateConstraint/HeapAtom \
                  admission is decided by the verified `dregg_constraint_admits` for this process"
+            );
+        } else if constraint == OracleRegistration::Foreign {
+            tracing::warn!(
+                "constraint oracle: the slot is held by an oracle that did not come from the \
+                 verified registration, so the verified `dregg_constraint_admits` does NOT decide \
+                 the Lean-evaluated constraint subset in this process"
             );
         } else {
             tracing::warn!(
@@ -513,10 +523,17 @@ fn ensure_deployed_executor_oracles_installed() {
                  Rebuild against a HEAD-matching archive."
             );
         }
-        if conservation {
+        if conservation.is_armed() {
             tracing::info!(
+                registration = ?conservation,
                 "conservation oracle: per-asset Σδ=0 is decided by the verified \
                  `dregg_cross_cell_conserves` for this process"
+            );
+        } else if conservation == OracleRegistration::Foreign {
+            tracing::warn!(
+                "conservation oracle: the slot is held by an oracle that did not come from the \
+                 verified registration, so the verified `dregg_cross_cell_conserves` does NOT \
+                 decide per-asset Σδ=0 in this process"
             );
         } else {
             // ⚑ This branch is only reachable INSIDE the release-native guard above, i.e.

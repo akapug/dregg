@@ -36,10 +36,13 @@ impl ConservationOracle for LeanConservationOracle {
 /// Install the Lean-backed conservation oracle into `dregg_turn` (call once at native node startup, only
 /// when the archive exports `dregg_cross_cell_conserves`). After this, the deployed executor's per-asset
 /// `Σδ=0` decision is computed by the PROVEN Lean `conservesFFI` — the executor no longer decides
-/// conservation in Rust on a full node. Returns `true` when installed.
-pub fn register_conservation_oracle() -> bool {
-    if !dregg_lean_ffi::cross_cell_conserves_available() {
-        return false;
-    }
-    dregg_turn::executor::install_conservation_oracle(Box::new(LeanConservationOracle)).is_ok()
+/// conservation in Rust on a full node. A second call reports
+/// [`crate::OracleRegistration::AlreadyInstalled`], not a missing export.
+pub fn register_conservation_oracle() -> crate::OracleRegistration {
+    static REGISTERED: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
+    crate::register_lean_oracle(
+        dregg_lean_ffi::cross_cell_conserves_available(),
+        &REGISTERED,
+        || dregg_turn::executor::install_conservation_oracle(Box::new(LeanConservationOracle)),
+    )
 }
