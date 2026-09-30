@@ -1870,12 +1870,13 @@ structure WHostCtx where
   budget      : Nat
 deriving Repr
 
-/-- The default host context for diagnostics / Lean-side round-trips ONLY (a generous clock so the
-expiry gate does not spuriously fire, no frozen cells, genesis head, large budget). The PRODUCTION
+/-- The default host context for diagnostics / Lean-side round-trips ONLY (clock 1 — a wired clock,
+since `Admission.expiryOk` refuses every deadline at clock 0 — so a demo `valid_until` inside the
+horizon admits; no frozen cells, genesis head, large budget). Mirrors Rust `WireHostCtx::diag()`. The PRODUCTION
 node MUST override every field from its own state — the security of bug-1 is that these come from the
 node, not the wire. Distinguished by being explicitly named `diag`. -/
 def diagHostCtx : WHostCtx :=
-  { now := 0, blockHeight := 0, frozen := [], storedHead := 0, budget := 1000000000 }
+  { now := 1, blockHeight := 0, frozen := [], storedHead := 0, budget := 1000000000 }
 
 /-- Encode the host context `{"now":N,"block_height":N,"frozen":[N,…],"stored_head":N,"budget":N}`. -/
 def encodeWHostCtx (hc : WHostCtx) : String :=
@@ -3119,26 +3120,27 @@ def execHandlerTurnStep (input : String) : String :=
 The expiry gate is NOT vacuous: the host supplies `now`, checked against the turn's CLAIMED
 `valid_until`. The SAME genuine turn (`gatedDemoTurn`, `valid_until = 1000`) over a host whose clock
 is AFTER expiry (`now = 2000`) is REJECTED (status:0, no edit), while over a host clock BEFORE expiry
-(`now = 0`) it COMMITS — the ONLY difference is the HOST-fed `now`, which the turn cannot set. -/
+(`now = 1`) it COMMITS — the ONLY difference is the HOST-fed `now`, which the turn cannot set. (A clock
+of `0` is no clock: `Admission.expiryOk` refuses every deadline there.) -/
 
 /-- The genuine demo turn over a host whose clock is PAST the turn's claimed `valid_until` (1000). -/
 def expiredHostInput : String :=
   encodeWWire { host := { diagHostCtx with now := 2000 }, state := wideDemoState, turn := gatedDemoTurn }
 /-- The SAME turn over a host whose clock is BEFORE expiry. -/
 def liveHostInput : String :=
-  encodeWWire { host := { diagHostCtx with now := 0 }, state := wideDemoState, turn := gatedDemoTurn }
+  encodeWWire { host := { diagHostCtx with now := 1 }, state := wideDemoState, turn := gatedDemoTurn }
 
 -- host clock 2000 > claimed valid_until 1000 ⇒ REJECTED (status:0, no state edit): the gate has TEETH:
 #guard (wireOk0 (execFullForestAuthStep expiredHostInput))
 #guard (wireStatusIs 0 (execFullForestAuthStep expiredHostInput))  --  rejected (no edit)
--- the IDENTICAL turn over a host clock 0 ≤ 1000 COMMITS — the discriminator is the HOST `now`:
+-- the IDENTICAL turn over a host clock 1 ≤ 1000 COMMITS — the discriminator is the HOST `now`:
 #guard (wireOk1 (execFullForestAuthStep liveHostInput))
 #guard (wireStatusIs 2 (execFullForestAuthStep liveHostInput))  --  body-committed
 
 /-- **`host_clock_rejects_past_expiry` — THE BUG-1 THEOREM (non-vacuous).** Over the SAME
 header (claimed `validUntil = some 1000`), an admission context whose host clock is PAST expiry
 (`now = 2000`, no block-height) makes the turn INADMISSIBLE, while a context whose clock is before
-expiry (`now = 0`) leaves the expiry gate passable. The clock is the HOST'S — the turn cannot make
+expiry (`now = 1`) leaves the expiry gate passable. The clock is the HOST'S — the turn cannot make
 its own expiry vacuous. -/
 theorem host_clock_rejects_past_expiry (h : TurnHdr) (s : RecChainedState)
     (hvu : h.validUntil = some 1000) :

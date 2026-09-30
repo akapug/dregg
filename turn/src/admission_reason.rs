@@ -29,7 +29,9 @@ pub enum AdmissionReason {
     /// Sealed cell is NOT terminal (reversible quiescence) and IS admitted, so
     /// it can author its own unseal (`cellLifecycleCanAuthor`, fix `9e2c0e70`).
     DeadAgent,
-    /// Code 4: the turn's `valid_until` has passed relative to the host clock.
+    /// Code 4: the turn's `valid_until` block height is outside the admission window
+    /// (`Dregg2.Exec.Admission.expiryOk`): below the host height, more than
+    /// `MAX_TURN_VALIDITY_HORIZON_BLOCKS` above it, or the host has no height.
     Expired,
     /// Code 5: the turn's nonce does not match the agent's stored nonce (replay / stale).
     NonceMismatch,
@@ -102,7 +104,9 @@ impl AdmissionReason {
             Self::DeadAgent => {
                 "refused: the agent cell is in a terminal lifecycle state (destroyed or migrated) and cannot author a turn"
             }
-            Self::Expired => "refused: the turn's valid-until deadline has already passed",
+            Self::Expired => {
+                "refused: the turn's valid-until block height is outside the admission window (already passed, more than the maximum validity horizon ahead, or no chain height)"
+            }
             Self::NonceMismatch => {
                 "refused: the turn's nonce does not match the agent's next nonce (replay or stale turn)"
             }

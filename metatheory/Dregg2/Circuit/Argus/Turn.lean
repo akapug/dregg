@@ -487,7 +487,7 @@ section ValueUnify
 
 open Dregg2.Exec (CellId AssetId RecChainedState recBalCreditCell recBalCreditCell_recTotalAsset
   recTotalAsset ExactConservation)
-open Dregg2.Exec.Admission (isFrozen admissionClock)
+open Dregg2.Exec.Admission (isFrozen admissionClock expiryOk)
 
 /-- Credit `amt` of asset `fa` to cell `c` on the PER-ASSET ledger (`recBalCreditCell`); negative
 `amt` is the debit. Touches ONLY `kernel.bal` — cells/log/accounts/escrows are untouched. -/
@@ -526,8 +526,10 @@ def admissibleV (ctx : AdmCtx) (h : TurnHdr) (s : RecChainedState) (fa : AssetId
   h.forestNonEmpty &&
   -- 2. AgentLive
   decide (h.agent ∈ s.kernel.accounts) &&
-  -- 3. Expiry
-  (match h.validUntil with | none => true | some vu => decide (admissionClock ctx ≤ vu)) &&
+  -- 3. Expiry — the SAME leg as `Admission.admissible` (`expiryOk`: `validUntil` is a block
+  -- height, bounded by `maxTurnValidityHorizon`, refused with no clock). This predicate is a
+  -- hand-copied twin of `admissible`'s gates, not a reuse of them.
+  expiryOk (admissionClock ctx) h.validUntil &&
   -- 4. NonceMatch
   decide (h.nonce = storedNonce s h.agent) &&
   -- 5. FeeCoverage — on the PER-ASSET ledger (E5)

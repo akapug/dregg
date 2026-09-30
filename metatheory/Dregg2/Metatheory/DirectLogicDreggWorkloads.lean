@@ -78,7 +78,7 @@ def common : Formula 12 :=
                 (.and (a9) (.and (a10) (a11)))))))))
 
 /-- Naive branch expansion of
-`common && (validUntil = none || validUntil = some vu && clock <= vu)`. -/
+`common && (validUntil = none || validUntil = some vu && expiryOk clock (some vu))`. -/
 def source : Formula 12 :=
   .or (.and common (a3)) (.and common (a4))
 
@@ -89,7 +89,7 @@ def truth (ctx : AdmCtx) (h : TurnHdr) (s : RecChainedState) : Fin 12 → Prop
   | ⟨1, _⟩ => h.agent ∈ s.kernel.accounts
   | ⟨2, _⟩ => cellLifecycleCanAuthor s.kernel h.agent = true
   | ⟨3, _⟩ => h.validUntil = none
-  | ⟨4, _⟩ => ∃ vu, h.validUntil = some vu ∧ admissionClock ctx ≤ vu
+  | ⟨4, _⟩ => ∃ vu, h.validUntil = some vu ∧ expiryOk (admissionClock ctx) (some vu) = true
   | ⟨5, _⟩ => h.nonce = storedNonce s h.agent
   | ⟨6, _⟩ => 0 ≤ h.fee
   | ⟨7, _⟩ => h.fee ≤ storedBalance s h.agent

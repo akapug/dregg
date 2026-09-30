@@ -126,11 +126,14 @@ pub struct ShadowHostCtx {
 }
 
 impl ShadowHostCtx {
-    /// The DIAGNOSTIC host context — never spuriously rejects. The PRODUCTION executor MUST
-    /// override every field from its own state (that override is what makes bug-1 real).
+    /// The DIAGNOSTIC host context — never spuriously rejects a deadline inside
+    /// `[1, 1 + MAX_TURN_VALIDITY_HORIZON_BLOCKS]`. Height 1, not 0: a height of 0 is "no height"
+    /// and refuses every deadline (`crate::turn::check_deadline`, kernel `expiryOk`). The
+    /// PRODUCTION executor MUST override every field from its own state (that override is what
+    /// makes bug-1 real).
     pub fn diag() -> Self {
         ShadowHostCtx {
-            block_height: 0,
+            block_height: 1,
             frozen: vec![],
             stored_head: None,
             budget: 1_000_000_000,

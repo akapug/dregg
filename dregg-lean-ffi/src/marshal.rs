@@ -869,12 +869,15 @@ pub struct WireHostCtx {
 }
 
 impl WireHostCtx {
-    /// A diagnostic host context (clock 0 ⇒ no spurious expiry, no frozen cells, genesis head,
-    /// large budget) for round-trips/tests. The PRODUCTION node MUST override every field from
-    /// its own state — the security of bug-1 is that these come from the node, not the wire.
+    /// A diagnostic host context (clock 1, no frozen cells, genesis head, large budget) for
+    /// round-trips/tests. Clock 1, not 0: `valid_until` is a block height and the kernel's
+    /// `expiryOk` refuses every deadline at clock 0 (no height wired), so a diagnostic turn whose
+    /// deadline sits inside `[1, 1 + maxTurnValidityHorizon]` admits. Mirrors Lean
+    /// `FFI.diagHostCtx`. The PRODUCTION node MUST override every field from its own state — the
+    /// security of bug-1 is that these come from the node, not the wire.
     pub fn diag() -> Self {
         WireHostCtx {
-            now: 0,
+            now: 1,
             block_height: 0,
             frozen: vec![],
             stored_head: [0u8; 32],
@@ -935,14 +938,15 @@ pub fn marshal_turn(state: &WireState, turn: &WireTurn) -> Result<String, Marsha
 
 /// Build a minimal gated turn with `action` as the root, compatible with `wide_demo_state`.
 ///
-/// Uses `.unchecked` auth and agent/nonce aligned with the wide-demo cell-0 snapshot so admission
-/// succeeds; we only need Lean to PARSE the action arm (commit is not required).
+/// Uses `.unchecked` auth, agent/nonce aligned with the wide-demo cell-0 snapshot, and a deadline
+/// inside the diagnostic clock's window so admission succeeds; we only need Lean to PARSE the
+/// action arm (commit is not required).
 pub fn demo_turn_for_action(action: WireAction) -> WireTurn {
     WireTurn {
         agent: 0,
         nonce: 7,
         fee: 0,
-        valid_until: 0,
+        valid_until: 1000,
         block_height: 0,
         prev_hash: Digest::default(),
         root: WForest {
@@ -2610,7 +2614,9 @@ impl AdmissionReason {
             Self::DeadAgent => {
                 "refused: the agent cell is destroyed or sealed and cannot author a turn"
             }
-            Self::Expired => "refused: the turn's valid-until deadline has already passed",
+            Self::Expired => {
+                "refused: the turn's valid-until block height is outside the admission window (already passed, more than the maximum validity horizon ahead, or no chain height)"
+            }
             Self::NonceMismatch => {
                 "refused: the turn's nonce does not match the agent's next nonce (replay or stale turn)"
             }

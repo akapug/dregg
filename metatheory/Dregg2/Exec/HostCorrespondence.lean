@@ -124,9 +124,8 @@ theorem admissionClock_factsCtx (H : HostFacts) : admissionClock (factsCtx H) = 
 /-- The Expiry leg agrees: both contexts resolve the same clock against `validUntil`. -/
 theorem expiry_leg_agrees (ctx : AdmCtx) (H : HostFacts) (h : TurnHdr)
     (hclock : admissionClock ctx = H.trueClock) :
-    (match h.validUntil with | none => true | some vu => decide (admissionClock ctx ≤ vu))
-      = (match h.validUntil with
-          | none => true | some vu => decide (admissionClock (factsCtx H) ≤ vu)) := by
+    expiryOk (admissionClock ctx) h.validUntil
+      = expiryOk (admissionClock (factsCtx H)) h.validUntil := by
   rw [admissionClock_factsCtx, hclock]
 
 /-- The NotFrozen agent leg agrees on the read cells (the agent is a read cell). -/
@@ -299,8 +298,10 @@ def hLateClock : HostFacts := { trueClock := 100, trueFrozen := [], trueStoredHe
 /-- The expiring turn header (valid only until 50). -/
 def hExp : TurnHdr := { h0 with validUntil := some 50 }
 
-/-- A LYING context reporting a stale clock 0 (so `0 ≤ 50` passes). Not a faithful reflection. -/
-def ctxStaleClock : AdmCtx := { now := 0, frozen := [], storedHead := some 42, budget := 1000 }
+/-- A LYING context reporting a stale clock 10 (so `10 ≤ 50` passes). Not a faithful reflection.
+(Stale, not absent: a clock of `0` is refused outright by `expiryOk`, so the lie that admits is a
+retarded nonzero clock.) -/
+def ctxStaleClock : AdmCtx := { now := 10, frozen := [], storedHead := some 42, budget := 1000 }
 
 /-- **The clock tooth.** The true-facts gate rejects the expired turn (true clock 100 > validUntil 50);
 the stale-clock context admits it — `Reflects.clock` is the obligation that closes it. -/

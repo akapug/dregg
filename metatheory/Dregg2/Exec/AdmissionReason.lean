@@ -45,7 +45,10 @@ inductive AdmissionReason where
   (Destroyed or Migrated) — a terminal cell cannot author a turn. A Sealed cell is NOT terminal
   (reversible quiescence) and IS admitted, so it can author its own unseal. -/
   | deadAgent (agent : CellId)
-  /-- Gate 4 (Expiry): the turn's `validUntil` has passed relative to the host clock. -/
+  /-- Gate 4 (Expiry, `Admission.expiryOk`): the turn's `validUntil` block height is outside the
+  admission window — below the clock (passed), more than `maxTurnValidityHorizon` above it (a
+  Unix-seconds value lands here), or the clock is `0` (no height wired). The carried
+  `(clock, validUntil)` says which. -/
   | expired (clock validUntil : Nat)
   /-- Gate 5 (NonceMatch): the turn's nonce does not match the agent's stored nonce (replay). -/
   | nonceMismatch (got stored : Int)
@@ -81,7 +84,7 @@ def admissionReason (ctx : AdmCtx) (h : TurnHdr) (s : RecChainedState) : Admissi
   -- 3. AgentLive (lifecycle)
   else if cellLifecycleCanAuthor s.kernel h.agent = false then .deadAgent h.agent
   -- 4. Expiry
-  else if (match h.validUntil with | none => false | some vu => decide (admissionClock ctx > vu)) = true then
+  else if expiryOk (admissionClock ctx) h.validUntil = false then
     .expired (admissionClock ctx) (h.validUntil.getD 0)
   -- 5. NonceMatch
   else if h.nonce ≠ storedNonce s h.agent then .nonceMismatch h.nonce (storedNonce s h.agent)
@@ -108,10 +111,10 @@ passed (the turn GENUINELY admits). Completeness: a passing turn reports `admitt
 reject). Both directions matter — a reason that said `admitted` on a rejected turn would launder a
 refusal; a reason that invented a reject on an admitted turn would block a good turn. -/
 
-/-- The expiry-guard's reason-side form (`some vu ⇒ now > vu`) as a `Prop`. The reason's gate-4
-`if` branches on exactly this. -/
+/-- The expiry-guard's reason-side form (the `expiryOk` leg is `false`) as a `Prop`. The reason's
+gate-4 `if` branches on exactly this. -/
 def expiryGuardFails (ctx : AdmCtx) (h : TurnHdr) : Prop :=
-  (match h.validUntil with | none => false | some vu => decide (admissionClock ctx > vu)) = true
+  expiryOk (admissionClock ctx) h.validUntil = false
 
 instance (ctx : AdmCtx) (h : TurnHdr) : Decidable (expiryGuardFails ctx h) := by
   unfold expiryGuardFails; infer_instance
@@ -143,25 +146,16 @@ theorem admissible_iff_gates (ctx : AdmCtx) (h : TurnHdr) (s : RecChainedState) 
   constructor
   · rintro ⟨h1, h2, h3, hexp, h5, h6a, h6b, h7a, hwf, h8, h9⟩
     refine ⟨h1, h2, h3, ?_, h5, ?_, ?_, ?_, hwfeq.mp (by simpa using hwf), h8, ?_⟩
-    · -- ¬ expiryGuardFails : the `≤`-leg is true ⇒ the `>`-guard is false.
-      cases hv : h.validUntil with
-      | none => simp [hv]
-      | some vu =>
-        simp only [hv] at hexp ⊢
-        intro hcon; simp only [decide_eq_true_eq] at hcon hexp; omega
+    · -- ¬ expiryGuardFails : the leg is `true`, so it is not `false`.
+      simp [hexp]
     · simp only [Int.not_lt]; omega
     · simp only [Int.not_lt]; omega
     · simpa using h7a
     · simp only [gt_iff_lt, Int.not_lt]; omega
   · rintro ⟨h1, h2, h3, h4, h5, h6a, h6b, h7a, h7b, h8, h9⟩
     refine ⟨h1, h2, h3, ?_, h5, ?_, ?_, ?_, by simpa using hwfeq.mpr h7b, h8, ?_⟩
-    · -- the `≤`-leg is true (¬ the `>`-guard).
-      cases hv : h.validUntil with
-      | none => simp [hv]
-      | some vu =>
-        simp only [hv, expiryGuardFails] at h4 ⊢
-        simp only [decide_eq_true_eq]
-        by_contra hcon; exact h4 (by simp [Nat.lt_of_not_le (by omega)])
+    · -- the leg is not `false`, so it is `true`.
+      simpa using h4
     · simp only [Int.not_lt] at h6a; omega
     · simp only [Int.not_lt] at h6b; omega
     · simpa using h7a
@@ -183,7 +177,7 @@ theorem admissionReason_eq_admitted_iff (ctx : AdmCtx) (h : TurnHdr) (s : RecCha
     · rw [if_neg g1, if_pos g2] at hr; exact absurd hr (by simp)
     by_cases g3 : cellLifecycleCanAuthor s.kernel h.agent = false
     · rw [if_neg g1, if_neg g2, if_pos g3] at hr; exact absurd hr (by simp)
-    by_cases g4 : (match h.validUntil with | none => false | some vu => decide (admissionClock ctx > vu)) = true
+    by_cases g4 : expiryOk (admissionClock ctx) h.validUntil = false
     · rw [if_neg g1, if_neg g2, if_neg g3, if_pos g4] at hr; exact absurd hr (by simp)
     by_cases g5 : h.nonce ≠ storedNonce s h.agent
     · rw [if_neg g1, if_neg g2, if_neg g3, if_neg g4, if_pos g5] at hr; exact absurd hr (by simp)

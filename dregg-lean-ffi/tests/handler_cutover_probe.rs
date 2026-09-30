@@ -5,7 +5,7 @@
 //! otherwise-identical forged one with a prologue-only status.
 #![cfg(feature = "lean-lib")]
 
-const GENUINE_WIRE: &str = r#"{"host":{"now":0,"block_height":0,"frozen":[],"stored_head":0,"budget":1000000000},"state":{"cells":[[0,{"rec":[["balance",{"int":100}],["nonce",{"int":7}]]}],[1,{"rec":[["balance",{"int":5}]]}]],"caps":[[9,[{"node":0}]]],"bal":[[0,0,100],[1,0,5]],"escrows":[[1,0,1,7,0,0,0,{"none":0},{"none":0}]],"nullifiers":[111],"commitments":[222],"queues":[[1,0,4,[333,444]]],"swiss":[[5,0,1,[0,1],1,{"some":99}]],"revoked":[],"lifecycle":[],"deathCert":[],"delegate":[]},"turn":{"agent":0,"nonce":7,"fee":10,"valid_until":1000,"prev":"0000000000000000000000000000000000000000000000000000000000000000","root":{"auth":{"sig":["0000000000000000000000000000000000000000000000000000000000000007",7]},"caveats":[],"action":{"bal":[0,0,1,30,0]},"children":[]}}}"#;
+const GENUINE_WIRE: &str = r#"{"host":{"now":1,"block_height":0,"frozen":[],"stored_head":0,"budget":1000000000},"state":{"cells":[[0,{"rec":[["balance",{"int":100}],["nonce",{"int":7}]]}],[1,{"rec":[["balance",{"int":5}]]}]],"caps":[[9,[{"node":0}]]],"bal":[[0,0,100],[1,0,5]],"escrows":[[1,0,1,7,0,0,0,{"none":0},{"none":0}]],"nullifiers":[111],"commitments":[222],"queues":[[1,0,4,[333,444]]],"swiss":[[5,0,1,[0,1],1,{"some":99}]],"revoked":[],"lifecycle":[],"deathCert":[],"delegate":[]},"turn":{"agent":0,"nonce":7,"fee":10,"valid_until":1000,"prev":"0000000000000000000000000000000000000000000000000000000000000000","root":{"auth":{"sig":["0000000000000000000000000000000000000000000000000000000000000007",7]},"caveats":[],"action":{"bal":[0,0,1,30,0]},"children":[]}}}"#;
 
 #[test]
 fn handler_export_preserves_the_credential_gate() {

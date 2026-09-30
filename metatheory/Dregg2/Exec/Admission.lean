@@ -37,9 +37,11 @@ explicit `AdmCtx` keeps the prologue a pure function of (turn-fields, host-conte
 exactly the seam the FFI marshaller crosses. -/
 
 /-- The host-fed admission context (the bits of `self` that `execute.rs:54-177` reads):
-  * `now`         — the executor clock (`self.current_timestamp`), checked against `validUntil`;
-  * `blockHeight` — the chain clock dimension (`self.block_height`); preferred over `now` for expiry
-                    when wired (defaults to `0` = fall back to `now`);
+  * `now`         — the fallback clock for `validUntil` when `blockHeight` is `0`. The Rust wire
+                    marshal (`lean_shadow::run_shadow_state`) sets it to the block height too, so
+                    on the wire the two agree;
+  * `blockHeight` — the chain clock (`self.block_height`). `validUntil` is a BLOCK HEIGHT, compared
+                    with `admissionClock` (`blockHeight` when wired, else `now`);
   * `frozen`      — the migration freeze-set (`self.frozen_cells`); a turn touching any frozen cell
                     is rejected;
   * `storedHead`  — the agent's stored receipt-chain head (`self.receipt_heads[agent]`), the P0-3
@@ -67,6 +69,76 @@ deriving Repr
 /-- The clock dimension used for `validUntil` expiry: prefer `blockHeight` when wired, else `now`. -/
 def admissionClock (ctx : AdmCtx) : Nat :=
   if ctx.blockHeight > 0 then ctx.blockHeight else ctx.now
+
+/-- The furthest past the admitting height a `validUntil` may reach, in heights (2^20). Mirrors
+Rust `dregg_turn::MAX_TURN_VALIDITY_HORIZON_BLOCKS`; the exec-lean differential
+`deadline_window_parity` drives both executors across both edges of the window, so the two
+constants cannot drift apart silently. Chosen so that a Unix-seconds deadline (≥ 1.7e9) is refused
+at every height below 1.7e9 − 2^20, instead of being read as a far-future height. -/
+def maxTurnValidityHorizon : Nat := 1048576
+
+/-- **The expiry leg.** `validUntil` is a block height and `clock` is `admissionClock ctx`:
+  * `none` never expires;
+  * a clock of `0` (no height wired) cannot decide a deadline, so a `some` is refused — the Rust
+    executor refuses the same case (`TurnError::DeadlineWithoutHeight`), and since this kernel's
+    verdict is authoritative on a covered turn, admitting here would override that refusal;
+  * otherwise `clock ≤ vu ≤ clock + maxTurnValidityHorizon` (`TurnError::Expired` below the window,
+    `TurnError::DeadlineBeyondHorizon` above it, on the Rust side). -/
+def expiryOk (clock : Nat) : Option Nat → Bool
+  | none => true
+  | some vu => decide (0 < clock ∧ clock ≤ vu ∧ vu ≤ clock + maxTurnValidityHorizon)
+
+@[simp] theorem expiryOk_none (clock : Nat) : expiryOk clock none = true := rfl
+
+/-- The expiry leg on a deadline, as the three facts it decides. The general form every corollary
+below instantiates. -/
+theorem expiryOk_some_iff (clock vu : Nat) :
+    expiryOk clock (some vu) = true ↔
+      0 < clock ∧ clock ≤ vu ∧ vu ≤ clock + maxTurnValidityHorizon := by
+  simp [expiryOk]
+
+/-- A deadline further past the clock than the horizon is refused. This is what a Unix-seconds
+`validUntil` meets. -/
+theorem expiryOk_refuses_beyond_horizon (clock vu : Nat)
+    (hfar : clock + maxTurnValidityHorizon < vu) : expiryOk clock (some vu) = false := by
+  cases hb : expiryOk clock (some vu) with
+  | false => rfl
+  | true => have := (expiryOk_some_iff clock vu).mp hb; omega
+
+/-- A deadline below the clock has passed and is refused. -/
+theorem expiryOk_refuses_expired (clock vu : Nat) (hexp : vu < clock) :
+    expiryOk clock (some vu) = false := by
+  cases hb : expiryOk clock (some vu) with
+  | false => rfl
+  | true => have := (expiryOk_some_iff clock vu).mp hb; omega
+
+/-- With no clock wired, every deadline is refused (fail-closed). -/
+theorem expiryOk_refuses_without_clock (vu : Nat) : expiryOk 0 (some vu) = false := by
+  cases hb : expiryOk 0 (some vu) with
+  | false => rfl
+  | true => have := (expiryOk_some_iff 0 vu).mp hb; omega
+
+/-- A deadline inside the window `[clock, clock + maxTurnValidityHorizon]` on a wired clock is
+admitted. -/
+theorem expiryOk_admits_within (clock vu : Nat) (hpos : 0 < clock) (hlo : clock ≤ vu)
+    (hhi : vu ≤ clock + maxTurnValidityHorizon) : expiryOk clock (some vu) = true :=
+  (expiryOk_some_iff clock vu).mpr ⟨hpos, hlo, hhi⟩
+
+/-- Instance: at height 500000 a Unix-seconds deadline (1760000000) is refused. -/
+theorem expiryOk_refuses_a_seconds_deadline : expiryOk 500000 (some 1760000000) = false :=
+  expiryOk_refuses_beyond_horizon _ _ (by unfold maxTurnValidityHorizon; omega)
+
+/-- Instance: at height 500000 a deadline 1800 heights ahead (the Rust default horizon) and one
+exactly at the horizon's edge are both admitted. -/
+theorem expiryOk_admits_the_default_horizon : expiryOk 500000 (some 501800) = true :=
+  expiryOk_admits_within _ _ (by omega) (by omega) (by unfold maxTurnValidityHorizon; omega)
+
+theorem expiryOk_admits_the_horizon_edge : expiryOk 500000 (some 1548576) = true :=
+  expiryOk_admits_within _ _ (by omega) (by omega) (by unfold maxTurnValidityHorizon; omega)
+
+/-- Instance: one height past the horizon's edge is refused. -/
+theorem expiryOk_refuses_one_past_the_edge : expiryOk 500000 (some 1548577) = false :=
+  expiryOk_refuses_beyond_horizon _ _ (by unfold maxTurnValidityHorizon; omega)
 
 /-- The turn-level fields the prologue gates against: `agent`, `nonce`, `fee`, `valid_until`,
 `previous_receipt_hash`, and the write-set extracted from the call-forest. The forest itself is the
@@ -101,7 +173,8 @@ def isFrozen (ctx : AdmCtx) (c : CellId) : Bool := ctx.frozen.contains c
 /-- The fail-closed admission predicate. True iff every gate passes:
   1. **EmptyForest** — `h.forestNonEmpty` (empty turn is inadmissible);
   2. **AgentLive**   — `agent ∈ accounts`;
-  3. **Expiry**      — `validUntil = none ∨ now ≤ validUntil`;
+  3. **Expiry**      — `expiryOk (admissionClock ctx) validUntil`: `none`, or a wired clock with
+                        `clock ≤ validUntil ≤ clock + maxTurnValidityHorizon`;
   4. **NonceMatch**  — `nonce = storedNonce` (replay check);
   5. **FeeCoverage** — `0 ≤ fee ∧ fee ≤ storedBalance`;
   6. **NotFrozen**   — `agent` and every write-set cell ∉ freeze-set;
@@ -117,8 +190,8 @@ def admissible (ctx : AdmCtx) (h : TurnHdr) (s : RecChainedState) : Bool :=
   -- (Live-ONLY) on the TARGET, so a Sealed agent's ordinary effects still fail the body.
   decide (h.agent ∈ s.kernel.accounts) &&
   cellLifecycleCanAuthor s.kernel h.agent &&
-  -- 3. Expiry
-  (match h.validUntil with | none => true | some vu => decide (admissionClock ctx ≤ vu)) &&
+  -- 3. Expiry (`validUntil` is a block height; bounded above by the horizon; no clock ⇒ refused)
+  expiryOk (admissionClock ctx) h.validUntil &&
   -- 4. NonceMatch
   decide (h.nonce = storedNonce s h.agent) &&
   -- 5. FeeCoverage
@@ -145,22 +218,27 @@ theorem admissible_rejects_empty (ctx : AdmCtx) (h : TurnHdr) (s : RecChainedSta
 theorem admissible_rejects_expired (ctx : AdmCtx) (h : TurnHdr) (s : RecChainedState)
     (vu : Nat) (hvu : h.validUntil = some vu) (hexp : admissionClock ctx > vu) :
     admissible ctx h s = false := by
-  simp only [admissible, hvu]
-  have hdec : decide (admissionClock ctx ≤ vu) = false := by
-    by_cases hzero : ctx.blockHeight = 0
-    · have hnow : admissionClock ctx = ctx.now := by simp [admissionClock, hzero]
-      have : decide (ctx.now ≤ vu) = false := by
-        have : ctx.now > vu := by simpa [hnow] using hexp
-        simp; omega
-      simpa [hnow] using this
-    · have hbpos : 0 < ctx.blockHeight := Nat.pos_of_ne_zero hzero
-      have hbh : admissionClock ctx = ctx.blockHeight := by
-        simp [admissionClock, hzero, if_neg (Nat.ne_of_gt hbpos)]
-      have : decide (ctx.blockHeight ≤ vu) = false := by
-        have : ctx.blockHeight > vu := by simpa [hbh] using hexp
-        simp; omega
-      simpa [hbh] using this
-  simp [hdec]
+  have hleg : expiryOk (admissionClock ctx) h.validUntil = false := by
+    rw [hvu]; exact expiryOk_refuses_expired _ _ hexp
+  simp [admissible, hleg]
+
+/-- A deadline further than `maxTurnValidityHorizon` past `admissionClock` implies inadmissible —
+the refusal a Unix-seconds `validUntil` gets. -/
+theorem admissible_rejects_beyond_horizon (ctx : AdmCtx) (h : TurnHdr) (s : RecChainedState)
+    (vu : Nat) (hvu : h.validUntil = some vu)
+    (hfar : admissionClock ctx + maxTurnValidityHorizon < vu) :
+    admissible ctx h s = false := by
+  have hleg : expiryOk (admissionClock ctx) h.validUntil = false := by
+    rw [hvu]; exact expiryOk_refuses_beyond_horizon _ _ hfar
+  simp [admissible, hleg]
+
+/-- A deadline with no clock wired (`admissionClock ctx = 0`) implies inadmissible. -/
+theorem admissible_rejects_deadline_without_clock (ctx : AdmCtx) (h : TurnHdr)
+    (s : RecChainedState) (vu : Nat) (hvu : h.validUntil = some vu)
+    (hzero : admissionClock ctx = 0) : admissible ctx h s = false := by
+  have hleg : expiryOk (admissionClock ctx) h.validUntil = false := by
+    rw [hvu, hzero]; exact expiryOk_refuses_without_clock _
+  simp [admissible, hleg]
 
 /-- A turn whose `nonce` does not match the agent's stored nonce is inadmissible (replay gate). -/
 theorem admissible_rejects_replay (ctx : AdmCtx) (h : TurnHdr) (s : RecChainedState)
@@ -577,6 +655,17 @@ theorem admissible_append_wellLinked (H : Receipt → Nat) (ctx : AdmCtx) (h : T
 
 #assert_axioms admissible_rejects_empty
 #assert_axioms admissible_rejects_expired
+#assert_axioms admissible_rejects_beyond_horizon
+#assert_axioms admissible_rejects_deadline_without_clock
+#assert_axioms expiryOk_some_iff
+#assert_axioms expiryOk_refuses_beyond_horizon
+#assert_axioms expiryOk_refuses_expired
+#assert_axioms expiryOk_refuses_without_clock
+#assert_axioms expiryOk_admits_within
+#assert_axioms expiryOk_refuses_a_seconds_deadline
+#assert_axioms expiryOk_admits_the_default_horizon
+#assert_axioms expiryOk_admits_the_horizon_edge
+#assert_axioms expiryOk_refuses_one_past_the_edge
 #assert_axioms admissible_rejects_replay
 #assert_axioms admissible_rejects_underfunded
 #assert_axioms admissible_rejects_frozen
