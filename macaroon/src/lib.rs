@@ -65,10 +65,12 @@ pub use caveat::{Caveat, CaveatSet, CaveatType, WireCaveat};
 pub use caveat_3p::ThirdPartyCaveat;
 #[cfg(feature = "crypto")]
 pub use discharge_gateway::{
-    AllOfEvaluator, AllowlistEvaluator, AlwaysAllow, AnyOfEvaluator, ConditionEvaluator,
-    DischargeError, DischargeGateway, DischargeRequest, DischargeResponse, PaymentEvaluator,
-    ProofRequiredEvaluator, ProofVerifierFn, RateLimitEvaluator, ReplaySetLoadError,
-    TimeWindowEvaluator, VerifyingProofEvaluator,
+    AllOfEvaluator, AllowlistEvaluator, AnyOfEvaluator, CAV_DISCHARGE_HOLDER,
+    CAV_DISCHARGE_PAYMENT, CAV_DISCHARGE_PROOF, ConditionEvaluator, DischargeContext,
+    DischargeError, DischargeGateway, DischargeRequest, DischargeResponse, PaymentAttestation,
+    PaymentEvaluator, PaymentVerifierFn, ProofAttestation, ProofVerifierFn, RateLimitEvaluator,
+    ReplaySetLoadError, TicketCondition, TimeWindowEvaluator, VerifyingProofEvaluator,
+    ticket_caveats, ticket_digest,
 };
 pub use error::{CaveatError, MacaroonError, MacaroonResult};
 #[cfg(feature = "crypto")]

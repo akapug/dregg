@@ -100,7 +100,7 @@ The map:
 | Renter attestation (R2 ladder) | `grain-verify::GrainAttestation::verify_r2_for_renter` |
 | Fork the runner (matrix / fan-out jobs) | `grain-fork::ConfinedSession::fork_two` (egress+budget attenuated) |
 | CI-fan-out orchestration (N runners, one budget, audited) | `swarm-orchestration` (+ `agent-orchestration::audit_run`) |
-| Pay to trigger / entitlement | `discharge-gateway` `PaymentEvaluator`/`ProofRequiredEvaluator` |
+| Pay to trigger / entitlement | `discharge-gateway` `PaymentEvaluator` (attested payment) / `VerifyingProofEvaluator` |
 | **PR-as-a-bounty** (post→claim→submit→payout, no-double-pay) | `bounty-board` `BountyTreasury::payout` (conserving) |
 | **CI-as-a-market-job** (post/bid/settle, conservation) | `compute-exchange` |
 | Branch-protection (who changes the required-check set) | `governed-namespace` threshold-committee swap |

@@ -64,7 +64,7 @@ The third party decrypts the ticket (`decrypt_ticket`, `:117`), recovers `r`, an
 
 ### Discharge gateway
 
-`discharge_gateway` turns the 3P flow into a usable service without federation/ZK (`macaroon/src/discharge_gateway.rs:1`). A `DischargeGateway` evaluates a `ConditionEvaluator` against a `DischargeRequest { ticket, client_id, proof, payment, metadata }` and issues a `DischargeResponse` on success. Built-in evaluators: `AlwaysAllow`, `TimeWindowEvaluator`, `AllowlistEvaluator`, `RateLimitEvaluator`, `PaymentEvaluator`, `ProofRequiredEvaluator`, `VerifyingProofEvaluator`, and the combinators `AllOfEvaluator`/`AnyOfEvaluator` (`macaroon/src/lib.rs:67`).
+`discharge_gateway` turns the 3P flow into a usable service without federation/ZK (`macaroon/src/discharge_gateway.rs:1`). The ticket seals the conditions the issuer wants enforced as `TicketCondition` caveats (types 16–18): exactly one `Holder` Ed25519 key, plus optional `Payment { min_amount }` and `Proof { verifier, statement }`; any other caveat in a ticket is refused. A `DischargeRequest { ticket, issued_at, holder_signature, proof, payment_evidence }` must be signed by the holder key (`DischargeRequest::sign`), and evaluators see only a `DischargeContext` of authenticated facts. Payment is discharged only by a `PaymentVerifierFn` (the shipped one checks a `PaymentAttestation` signed by a trusted attestor and bound to the ticket and holder), proof only by a `ProofVerifierFn` through `VerifyingProofEvaluator` (the shipped one checks a `ProofAttestation`). `AllowlistEvaluator` and `RateLimitEvaluator` key on the holder key. The ticket is burned only when the discharge is issued. Other evaluators: `TimeWindowEvaluator`, `AllOfEvaluator`/`AnyOfEvaluator`.
 
 ### Wire format
 

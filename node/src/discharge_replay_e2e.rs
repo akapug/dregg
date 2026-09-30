@@ -18,9 +18,9 @@
 //!       The discharge went out over a burn that was never made durable.
 //!
 //!   [2b] and the burn was only persisted on the SUCCESS arm, while
-//!        `DischargeGateway::process_request` burns a ticket on PRESENTATION —
-//!        before any condition is evaluated. A ticket denied for a bad proof was
-//!        burned in RAM and not on disk, so a restart resurrected it.
+//!        `DischargeGateway::process_request` burned a ticket on PRESENTATION.
+//!        Since 2026-09-30 (F12) the gateway burns only on issue, so a denied
+//!        request changes nothing; the test now pins that.
 //!
 //! A third sat one layer down: `load_issued_set` returned `()` and, per its own
 //! docstring, "silently ignored" a blob whose length was not a multiple of 32 —
@@ -82,13 +82,18 @@ async fn discharge_node() -> (
     (app, gateway_key, location, store, tmp)
 }
 
-/// Mint a fresh third-party ticket addressed to this node's gateway. Each call
-/// uses a fresh root key, so each ticket is a DISTINCT entry in the replay set.
-fn fresh_ticket(shared_key: &[u8; 32], location: &str) -> String {
+/// The holder key every test ticket is sealed to.
+fn holder() -> ed25519_dalek::SigningKey {
+    ed25519_dalek::SigningKey::from_bytes(&[0x11u8; 32])
+}
+
+/// Mint a fresh third-party ticket addressed to this node's gateway and sealed to
+/// [`holder`]. Each call uses a fresh kid, so each ticket is a DISTINCT entry in
+/// the replay set.
+fn fresh_ticket(shared_key: &[u8; 32], location: &str) -> Vec<u8> {
     let root_key = [7u8; 32];
     let mut mac = dregg_macaroon::Macaroon::new(
         &root_key,
-        // The kid varies per call so the derived ticket does too.
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("clock")
@@ -97,27 +102,54 @@ fn fresh_ticket(shared_key: &[u8; 32], location: &str) -> String {
             .to_vec(),
         "https://issuer.test".into(),
     );
-    mac.add_third_party(location, shared_key, dregg_macaroon::CaveatSet::new())
-        .expect("add 3P caveat");
+    mac.add_third_party(
+        location,
+        shared_key,
+        dregg_macaroon::ticket_caveats(&holder().verifying_key(), []),
+    )
+    .expect("add 3P caveat");
     let tp_caveats = mac.caveats.third_party_caveats();
-    let tp = dregg_macaroon::ThirdPartyCaveat::decode_body(&tp_caveats[0].body).expect("3P body");
-    base64::engine::general_purpose::STANDARD.encode(&tp.ticket)
+    dregg_macaroon::ThirdPartyCaveat::decode_body(&tp_caveats[0].body)
+        .expect("3P body")
+        .ticket
 }
 
-/// `POST /api/discharge` through the real router; returns (status, parsed body).
-/// The body is `None` for a non-200 (the refusals carry no JSON).
-async fn post_discharge(
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_secs() as i64
+}
+
+/// The JSON body of a discharge request for `ticket`, signed by `signer`.
+fn signed_body(
+    ticket: &[u8],
+    location: &str,
+    signer: &ed25519_dalek::SigningKey,
+) -> serde_json::Value {
+    let req = dregg_macaroon::DischargeRequest::sign(
+        ticket.to_vec(),
+        now_secs(),
+        None,
+        None,
+        location,
+        signer,
+    );
+    let b64 = base64::engine::general_purpose::STANDARD;
+    serde_json::json!({
+        "ticket": b64.encode(&req.ticket),
+        "issued_at": req.issued_at,
+        "holder_signature": b64.encode(&req.holder_signature),
+    })
+}
+
+/// `POST /api/discharge` through the real router with an arbitrary body;
+/// returns (status, parsed body). The body is `None` for a non-200.
+async fn post_body(
     app: &axum::Router,
-    ticket_b64: &str,
+    body: serde_json::Value,
 ) -> (StatusCode, Option<serde_json::Value>) {
     let addr: std::net::SocketAddr = "127.0.0.1:4545".parse().unwrap();
-    let body = serde_json::json!({
-        "ticket": ticket_b64,
-        // The default evaluator is `ProofRequiredEvaluator`: a non-empty proof
-        // blob is what makes the HONEST path succeed, so every one of these
-        // requests is one that WOULD be served if the store were healthy.
-        "proof": base64::engine::general_purpose::STANDARD.encode([0xABu8; 96]),
-    });
     let response = app
         .clone()
         .oneshot(
@@ -144,6 +176,16 @@ async fn post_discharge(
     (status, Some(serde_json::from_slice(&bytes).expect("json")))
 }
 
+/// The honest request: `ticket` signed by its holder. Every one of these WOULD
+/// be served if the store were healthy.
+async fn post_discharge(
+    app: &axum::Router,
+    ticket: &[u8],
+    location: &str,
+) -> (StatusCode, Option<serde_json::Value>) {
+    post_body(app, signed_body(ticket, location, &holder())).await
+}
+
 /// [1] An UNREADABLE replay set must refuse, not start from empty.
 ///
 /// This is the one with the named, reachable consequence. The gateway is
@@ -156,7 +198,7 @@ async fn unreadable_replay_set_refuses_instead_of_discharging_on_an_empty_one() 
 
     // ── THE REFUSAL FIRES: the store cannot answer, so the node does not serve.
     store.set_fail_config_io(true);
-    let (status, body) = post_discharge(&app, &fresh_ticket(&key, &location)).await;
+    let (status, body) = post_discharge(&app, &fresh_ticket(&key, &location), &location).await;
     assert_eq!(
         status,
         StatusCode::SERVICE_UNAVAILABLE,
@@ -165,7 +207,7 @@ async fn unreadable_replay_set_refuses_instead_of_discharging_on_an_empty_one() 
 
     // ── COMPLETENESS: with the store healthy, the same request is served.
     store.set_fail_config_io(false);
-    let (status, body) = post_discharge(&app, &fresh_ticket(&key, &location)).await;
+    let (status, body) = post_discharge(&app, &fresh_ticket(&key, &location), &location).await;
     assert_eq!(status, StatusCode::OK, "the honest path must still work");
     let body = body.expect("200 carries a body");
     assert_eq!(
@@ -193,7 +235,7 @@ async fn malformed_persisted_replay_set_refuses_instead_of_loading_nothing() {
         .set_config("discharge_issued_set", &[0x5Au8; 33])
         .expect("seed a malformed replay set");
 
-    let (status, body) = post_discharge(&app, &fresh_ticket(&key, &location)).await;
+    let (status, body) = post_discharge(&app, &fresh_ticket(&key, &location), &location).await;
     assert_eq!(
         status,
         StatusCode::SERVICE_UNAVAILABLE,
@@ -204,7 +246,7 @@ async fn malformed_persisted_replay_set_refuses_instead_of_loading_nothing() {
     store
         .set_config("discharge_issued_set", &[0x5Au8; 32])
         .expect("seed a well-formed replay set");
-    let (status, body) = post_discharge(&app, &fresh_ticket(&key, &location)).await;
+    let (status, body) = post_discharge(&app, &fresh_ticket(&key, &location), &location).await;
     assert_eq!(status, StatusCode::OK, "a valid replay set must load");
     assert_eq!(
         body.expect("200 carries a body")["success"],
@@ -223,7 +265,7 @@ async fn unpersistable_burn_refuses_instead_of_issuing_an_unrecorded_discharge()
     let (app, key, location, store, _tmp) = discharge_node().await;
 
     // Build + cache the gateway on a healthy store, and prove the honest path.
-    let (status, body) = post_discharge(&app, &fresh_ticket(&key, &location)).await;
+    let (status, body) = post_discharge(&app, &fresh_ticket(&key, &location), &location).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body.expect("body")["success"], true);
     let after_first = store
@@ -234,7 +276,7 @@ async fn unpersistable_burn_refuses_instead_of_issuing_an_unrecorded_discharge()
 
     // ── THE REFUSAL FIRES: the burn cannot be made durable, so nothing is issued.
     store.set_fail_config_io(true);
-    let (status, body) = post_discharge(&app, &fresh_ticket(&key, &location)).await;
+    let (status, body) = post_discharge(&app, &fresh_ticket(&key, &location), &location).await;
     assert_eq!(
         status,
         StatusCode::SERVICE_UNAVAILABLE,
@@ -243,7 +285,7 @@ async fn unpersistable_burn_refuses_instead_of_issuing_an_unrecorded_discharge()
 
     // ── COMPLETENESS: the store recovers and issuance resumes, still recorded.
     store.set_fail_config_io(false);
-    let (status, body) = post_discharge(&app, &fresh_ticket(&key, &location)).await;
+    let (status, body) = post_discharge(&app, &fresh_ticket(&key, &location), &location).await;
     assert_eq!(
         status,
         StatusCode::OK,
@@ -267,61 +309,64 @@ async fn unpersistable_burn_refuses_instead_of_issuing_an_unrecorded_discharge()
     );
 }
 
-/// [2b] A DENIED request burns the ticket too, so it must be persisted too.
+/// [2b] A DENIED request burns nothing, in RAM or on disk.
 ///
-/// `process_request` inserts the ticket hash before evaluating conditions, so a
-/// request denied for a missing proof still mutates the replay set. Persisting
-/// only the success arm meant a restart resurrected every denied ticket — the
-/// durable set was strictly weaker than the in-RAM one it is supposed to mirror.
+/// `process_request` used to insert the ticket hash before evaluating
+/// conditions, so anyone who had seen a token (tickets ride in it) could spend
+/// its third-party caveat with one failing request. Now the burn happens only
+/// when a discharge is issued, so a denied request leaves nothing to persist and
+/// the holder can still discharge the ticket afterwards.
 #[tokio::test]
-async fn a_denied_request_persists_its_burn_so_a_restart_cannot_resurrect_the_ticket() {
+async fn a_denied_request_does_not_burn_the_ticket() {
     let (app, key, location, store, _tmp) = discharge_node().await;
     let ticket = fresh_ticket(&key, &location);
 
-    // Present the ticket WITHOUT a proof: `ProofRequiredEvaluator` denies it,
-    // but the gateway has already burned it.
-    let addr: std::net::SocketAddr = "127.0.0.1:4546".parse().unwrap();
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/discharge")
-                .header("content-type", "application/json")
-                .extension(ConnectInfo(addr))
-                .body(Body::from(
-                    serde_json::to_vec(&serde_json::json!({ "ticket": ticket })).unwrap(),
-                ))
-                .expect("discharge request"),
-        )
-        .await
-        .expect("discharge response");
-    assert_eq!(response.status(), StatusCode::OK);
-    let bytes = response.into_body().collect().await.expect("b").to_bytes();
-    let body: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
-    assert_eq!(body["success"], false, "no proof ⇒ denied: {body}");
+    // Someone who is not the holder presents the ticket.
+    let stranger = ed25519_dalek::SigningKey::from_bytes(&[0x22u8; 32]);
+    let (status, body) = post_body(&app, signed_body(&ticket, &location, &stranger)).await;
+    assert_eq!(status, StatusCode::OK);
+    let body = body.expect("body");
+    assert_eq!(body["success"], false, "a stranger is denied: {body}");
+    assert!(
+        store
+            .get_config("discharge_issued_set")
+            .expect("read")
+            .is_none(),
+        "a denied presentation must not burn the ticket"
+    );
 
+    // The retired self-asserted request shape is refused at parse.
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let (status, _) = post_body(
+        &app,
+        serde_json::json!({
+            "ticket": b64.encode(&ticket),
+            "proof": b64.encode([0xABu8; 96]),
+        }),
+    )
+    .await;
+    assert!(status.is_client_error(), "old request shape: {status}");
+
+    // The holder still discharges it; that burn is durable.
+    let (status, body) = post_discharge(&app, &ticket, &location).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.expect("body")["success"], true);
     let persisted = store
         .get_config("discharge_issued_set")
         .expect("read")
-        .expect("a DENIED presentation must still persist its burn");
-    assert_eq!(
-        persisted.len(),
-        32,
-        "the denied ticket's hash is durable, so a restart still refuses it"
-    );
+        .expect("the issued discharge persisted its burn");
+    assert_eq!(persisted.len(), 32);
 
-    // And the burn is real: the same ticket, now WITH a valid proof, is refused
-    // as a replay rather than discharged.
-    let (status, body) = post_discharge(&app, &ticket).await;
+    // And the burn is real: presenting it again is a replay.
+    let (status, body) = post_discharge(&app, &ticket, &location).await;
     assert_eq!(status, StatusCode::OK);
     let body = body.expect("body");
     assert_eq!(
         body["success"], false,
-        "a presented ticket is spent: {body}"
+        "a discharged ticket is spent: {body}"
     );
     assert!(
         body["error"].as_str().is_some_and(|e| e.contains("replay")),
-        "the refusal names replay, not the condition: {body}"
+        "the refusal names replay: {body}"
     );
 }

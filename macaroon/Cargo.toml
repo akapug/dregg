@@ -10,7 +10,7 @@ license = { workspace = true }
 
 [features]
 default = ["crypto"]
-crypto = ["dep:base64", "dep:chacha20poly1305", "dep:getrandom", "dep:hmac", "dep:sha2", "dep:subtle", "dep:zeroize"]
+crypto = ["dep:base64", "dep:chacha20poly1305", "dep:ed25519-dalek", "dep:getrandom", "dep:hmac", "dep:sha2", "dep:subtle", "dep:zeroize"]
 # `zkvm` IS GONE. It was `zkvm = []` with no `#[cfg(feature = "zkvm")]` anywhere in this
 # crate, while the feature ledger described it as "the proof-carrying macaroon helpers" —
 # a name making a claim the code did not keep. `dregg-token/zkvm`, its only enabler, still
@@ -19,6 +19,8 @@ crypto = ["dep:base64", "dep:chacha20poly1305", "dep:getrandom", "dep:hmac", "de
 [dependencies]
 base64 = { workspace = true, optional = true }
 chacha20poly1305 = { workspace = true, optional = true }
+# Discharge gateway: the holder signs its request, attestors sign payment/proof evidence.
+ed25519-dalek = { version = "2", optional = true }
 getrandom = { workspace = true, optional = true }
 hmac = { workspace = true, optional = true }
 rmp-serde = { workspace = true }
