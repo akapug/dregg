@@ -44,7 +44,6 @@ D1:dregg-circuit:circuit/tests/fields_root_gentian_weld.rs:fields_leaves  # D1/D
 D1:dregg-exec-lean:exec-lean/tests/faucet_fee_well_divergence.rs:run_faucet  # D1/D1-self-declared-mirror
 D1:dregg-exec-lean:exec-lean/tests/faucet_fee_well_divergence.rs:run_faucet_at  # D1/D1-self-declared-mirror
 D2-reads:deos-view:from_prop  # D2/D2-cited-consumer-absent
-D2-reads:dregg-sdk:agent_receipt_head  # D2/D2-cited-consumer-absent
 D2-reads:dreggnet-asset:trait_root_of  # D2/D2-cited-consumer-absent
 D2-roster:dreggnet-wechat:dreggnet-web:18  # D2/D2-uncited-producer
 D3:dregg-circuit:EffectVmDescriptor:cap_delegation_nonamp_descriptor|parse_vm_descriptor  # D3/D3-tested-twin-is-not-the-deployed-one
