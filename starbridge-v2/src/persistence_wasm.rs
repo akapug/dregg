@@ -80,6 +80,14 @@ impl WorldPersist {
         match *self {}
     }
 
+    pub(crate) fn record_factory_deployment(
+        &mut self,
+        _deployment: &dregg_turn::reversible::FactoryDeployment,
+        _ledger: &dregg_cell::Ledger,
+    ) -> Result<(), StoreError> {
+        match *self {}
+    }
+
     pub fn checkpoint(&self, _ledger: &dregg_cell::Ledger, _height: u64) -> Result<(), StoreError> {
         match *self {}
     }
