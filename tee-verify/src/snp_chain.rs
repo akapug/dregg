@@ -82,14 +82,200 @@ pub fn verify_cert_link(
     }
 }
 
-/// The operator-pinned AMD roots. `ark_der` is the self-signed AMD Root Key; `ask_der`
-/// is the AMD SEV Signing Key (intermediate, signed by ARK). These are chip-family
-/// constants fetched once from the AMD KDS and pinned — the per-chip VCEK is presented
-/// alongside each report.
+/// A parsed AMD SEV-SNP `TCB_VERSION`: the four security patch levels every product
+/// carries, plus Turin's `FMC` level (always 0 on Milan/Genoa, which have no FMC).
+///
+/// The 8-byte wire layout differs by product (SEV-SNP ABI spec, `TCB_VERSION`; read
+/// against virtee `sev` 8.0.0 `firmware/host/types/snp.rs`):
+///
+/// | byte | Milan / Genoa | Turin      |
+/// |------|---------------|------------|
+/// | 0    | BOOT_LOADER   | FMC        |
+/// | 1    | TEE           | BOOT_LOADER|
+/// | 2    | reserved      | TEE        |
+/// | 3    | reserved      | SNP        |
+/// | 4–5  | reserved      | reserved   |
+/// | 6    | SNP           | reserved   |
+/// | 7    | MICROCODE     | MICROCODE  |
+///
+/// so it is only ever decoded against a known [`SnpProduct`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TcbVersion {
+    pub fmc: u8,
+    pub bootloader: u8,
+    pub tee: u8,
+    pub snp: u8,
+    pub microcode: u8,
+}
+
+impl TcbVersion {
+    /// Decode a report's 8-byte little-endian `TCB_VERSION` under `product`'s layout.
+    pub fn from_report_bytes(b: [u8; 8], product: SnpProduct) -> TcbVersion {
+        match product {
+            SnpProduct::Milan | SnpProduct::Genoa => TcbVersion {
+                fmc: 0,
+                bootloader: b[0],
+                tee: b[1],
+                snp: b[6],
+                microcode: b[7],
+            },
+            SnpProduct::Turin => TcbVersion {
+                fmc: b[0],
+                bootloader: b[1],
+                tee: b[2],
+                snp: b[3],
+                microcode: b[7],
+            },
+        }
+    }
+
+    /// Encode under `product`'s layout (reserved bytes zero). The inverse of
+    /// [`TcbVersion::from_report_bytes`] on every value that product can represent.
+    pub fn to_report_bytes(&self, product: SnpProduct) -> [u8; 8] {
+        let mut b = [0u8; 8];
+        match product {
+            SnpProduct::Milan | SnpProduct::Genoa => {
+                b[0] = self.bootloader;
+                b[1] = self.tee;
+                b[6] = self.snp;
+                b[7] = self.microcode;
+            }
+            SnpProduct::Turin => {
+                b[0] = self.fmc;
+                b[1] = self.bootloader;
+                b[2] = self.tee;
+                b[3] = self.snp;
+                b[7] = self.microcode;
+            }
+        }
+        b
+    }
+
+    /// Every component is at least the pinned minimum (a down-level rung fails).
+    pub fn meets(&self, min: &TcbVersion) -> bool {
+        self.fmc >= min.fmc
+            && self.bootloader >= min.bootloader
+            && self.tee >= min.tee
+            && self.snp >= min.snp
+            && self.microcode >= min.microcode
+    }
+}
+
+// VCEK X.509 extensions, under AMD's private-enterprise arc 1.3.6.1.4.1.3704. Source: AMD
+// "Versioned Chip Endorsement Key (VCEK) Certificate and KDS Interface Specification"
+// (pub. 57230), the VCEK extensions table; the OID values and the value encodings below
+// were read against virtee `snpguest` 0.10.0 `src/verify.rs` (`SnpOid`, `check_cert_bytes`)
+// rather than recalled. Each SPL is a DER INTEGER; hwID is a DER OCTET STRING of 64 bytes
+// (also on Turin), and very old VCEKs carry the 64 raw bytes without the OCTET STRING
+// wrapper.
+/// `blSPL` — the BOOT_LOADER security patch level the VCEK was derived at.
+pub const OID_VCEK_BL_SPL: &str = "1.3.6.1.4.1.3704.1.3.1";
+/// `teeSPL` — the TEE (PSP OS) security patch level.
+pub const OID_VCEK_TEE_SPL: &str = "1.3.6.1.4.1.3704.1.3.2";
+/// `snpSPL` — the SNP firmware security patch level.
+pub const OID_VCEK_SNP_SPL: &str = "1.3.6.1.4.1.3704.1.3.3";
+/// `ucodeSPL` — the microcode security patch level.
+pub const OID_VCEK_UCODE_SPL: &str = "1.3.6.1.4.1.3704.1.3.8";
+/// `fmcSPL` — Turin's FMC security patch level (absent on Milan/Genoa).
+pub const OID_VCEK_FMC_SPL: &str = "1.3.6.1.4.1.3704.1.3.9";
+/// `hwID` — the 64-byte chip identifier; equals the report's `CHIP_ID` for the chip
+/// whose VCEK this is.
+pub const OID_VCEK_HW_ID: &str = "1.3.6.1.4.1.3704.1.4";
+
+/// Length of the `hwID` extension value and of the report's `CHIP_ID`.
+pub const HW_ID_LEN: usize = 64;
+
+/// Why the VCEK ← ASK ← ARK trust path refused. Every variant is a refusal; each names a
+/// distinct gate so a caller (and a test) can tell which one fired.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SnpChainError {
+    /// No VCEK DER followed the 1184-byte report.
+    NoVcek,
+    /// A certificate or CRL did not parse.
+    Parse { what: &'static str, detail: String },
+    /// A certificate is outside its validity window at wall-clock now.
+    NotValidNow { cert: &'static str },
+    /// A chain link's signature did not verify.
+    LinkSignature { link: &'static str, detail: String },
+    /// The VCEK's subject key is not a P-384 point.
+    VcekKey(String),
+    /// A required AMD VCEK extension is absent — the certificate does not say which TCB
+    /// or chip it endorses, so it corroborates nothing (F1).
+    VcekExtensionMissing { name: &'static str },
+    /// An AMD VCEK extension occurs more than once.
+    VcekExtensionDuplicate { name: &'static str },
+    /// An AMD VCEK extension value is not the encoding the AMD spec gives it.
+    VcekExtensionMalformed { name: &'static str, detail: String },
+    /// A configured CRL is issued by neither the pinned ARK nor the pinned ASK.
+    CrlIssuerUnknown,
+    /// A configured CRL's signature does not verify under its issuer (F3).
+    CrlSignature(String),
+    /// A configured CRL is not current: `thisUpdate` in the future, or `nextUpdate`
+    /// absent or past. A stale revocation list cannot vouch that nothing was revoked since.
+    CrlNotCurrent(String),
+    /// A certificate on the path appears on a configured, verified, current CRL (F3).
+    Revoked { cert: &'static str },
+}
+
+impl std::fmt::Display for SnpChainError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SnpChainError::NoVcek => {
+                write!(f, "no VCEK certificate appended to the SNP report bytes")
+            }
+            SnpChainError::Parse { what, detail } => write!(f, "{what} parse: {detail}"),
+            SnpChainError::NotValidNow { cert } => {
+                write!(f, "{cert} certificate is not valid now")
+            }
+            SnpChainError::LinkSignature { link, detail } => {
+                write!(f, "{link} signature: {detail}")
+            }
+            SnpChainError::VcekKey(e) => write!(f, "VCEK P-384 key: {e}"),
+            SnpChainError::VcekExtensionMissing { name } => {
+                write!(f, "VCEK certificate lacks the AMD {name} extension")
+            }
+            SnpChainError::VcekExtensionDuplicate { name } => {
+                write!(f, "VCEK certificate carries the AMD {name} extension twice")
+            }
+            SnpChainError::VcekExtensionMalformed { name, detail } => {
+                write!(f, "VCEK AMD {name} extension malformed: {detail}")
+            }
+            SnpChainError::CrlIssuerUnknown => {
+                write!(
+                    f,
+                    "SNP CRL issuer is neither the pinned ARK nor the pinned ASK"
+                )
+            }
+            SnpChainError::CrlSignature(e) => write!(f, "SNP CRL signature: {e}"),
+            SnpChainError::CrlNotCurrent(e) => write!(f, "SNP CRL not current: {e}"),
+            SnpChainError::Revoked { cert } => {
+                write!(f, "{cert} certificate is REVOKED by a configured AMD CRL")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SnpChainError {}
+
+/// The operator-pinned AMD roots for ONE product line, plus any revocation lists the
+/// operator supplies. `ark_der` is the self-signed AMD Root Key; `ask_der` is the AMD SEV
+/// Signing Key (intermediate, signed by ARK). These are chip-family constants fetched once
+/// from the AMD KDS and pinned — the per-chip VCEK is presented alongside each report.
+///
+/// `product` is part of the trust, not a hint: it fixes how a report's `TCB_VERSION` bytes
+/// decode (Turin moved the fields) and which VCEK extensions must be present.
+///
+/// `crls` are DER X.509 CRLs (AMD KDS serves the ARK-issued one at
+/// `https://kdsintf.amd.com/vcek/v1/<Product>/crl`; see [`amd_kds_crl_url`]). Nothing here
+/// fetches: the operator supplies them. When any is configured, every one must be issued by
+/// the pinned ARK or ASK, verify under it, and be current, or the chain refuses; the ASK
+/// is refused if an ARK-issued CRL lists its serial, and the VCEK if an ASK-issued one does.
 #[derive(Debug, Clone)]
 pub struct SnpTrust {
     pub ark_der: Vec<u8>,
     pub ask_der: Vec<u8>,
+    pub product: SnpProduct,
+    pub crls: Vec<Vec<u8>>,
 }
 
 /// Decode a single PEM `CERTIFICATE` block to its DER bytes. Only the first block is
@@ -119,6 +305,12 @@ pub fn amd_kds_cert_chain_url(product: &str) -> String {
     format!("https://kdsintf.amd.com/vcek/v1/{product}/cert_chain")
 }
 
+/// The AMD KDS endpoint serving the ARK-issued DER CRL for a product line. No fetch
+/// happens here; install the bytes with [`SnpTrust::with_crl`].
+pub fn amd_kds_crl_url(product: &str) -> String {
+    format!("https://kdsintf.amd.com/vcek/v1/{product}/crl")
+}
+
 /// A pinned AMD SEV-SNP product line. Each variant carries the KDS `cert_chain` embedded
 /// below (fetched 2026-07-13 — see the module docs for provenance + fingerprints).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,6 +334,15 @@ const AMD_GENOA_CERT_CHAIN_PEM: &str = include_str!("amd_genoa_cert_chain.pem");
 const AMD_TURIN_CERT_CHAIN_PEM: &str = include_str!("amd_turin_cert_chain.pem");
 
 impl SnpProduct {
+    /// The product name as AMD KDS spells it in URLs.
+    pub fn name(self) -> &'static str {
+        match self {
+            SnpProduct::Milan => "Milan",
+            SnpProduct::Genoa => "Genoa",
+            SnpProduct::Turin => "Turin",
+        }
+    }
+
     /// The embedded KDS `cert_chain` PEM (ASK then ARK) for this product.
     pub fn cert_chain_pem(self) -> &'static str {
         match self {
@@ -153,27 +354,31 @@ impl SnpProduct {
 
     /// The KDS `cert_chain` URL this product's roots were pinned from.
     pub fn cert_chain_url(self) -> String {
-        amd_kds_cert_chain_url(match self {
-            SnpProduct::Milan => "Milan",
-            SnpProduct::Genoa => "Genoa",
-            SnpProduct::Turin => "Turin",
-        })
+        amd_kds_cert_chain_url(self.name())
+    }
+
+    /// Whether this product's TCB carries an FMC level (and its VCEK an `fmcSPL`).
+    pub fn has_fmc(self) -> bool {
+        matches!(self, SnpProduct::Turin)
     }
 }
 
 impl SnpTrust {
     /// Build pinned roots from operator-provided PEM: the self-signed AMD **ARK** (SEV
-    /// root) and the **ASK** (SEV intermediate). Each argument must contain a single PEM
-    /// `CERTIFICATE` block; the DER is extracted and stored for chain verification.
+    /// root) and the **ASK** (SEV intermediate) for `product`. Each argument must contain a
+    /// single PEM `CERTIFICATE` block; the DER is extracted and stored for chain
+    /// verification.
     ///
     /// The real certificates come from the AMD KDS — see [`amd_kds_cert_chain_url`]. The
     /// `cert_chain` endpoint returns ASK then ARK; split the two blocks and pass the ARK
     /// block as `ark_pem` and the ASK block as `ask_pem`. Prefer
     /// [`SnpTrust::from_kds_cert_chain`] to avoid splitting by hand.
-    pub fn from_pem(ark_pem: &str, ask_pem: &str) -> Result<SnpTrust, String> {
+    pub fn from_pem(ark_pem: &str, ask_pem: &str, product: SnpProduct) -> Result<SnpTrust, String> {
         Ok(SnpTrust {
             ark_der: pem_cert_to_der(ark_pem, "ARK")?,
             ask_der: pem_cert_to_der(ask_pem, "ASK")?,
+            product,
+            crls: Vec::new(),
         })
     }
 
@@ -181,7 +386,7 @@ impl SnpTrust {
     /// **ASK then ARK** (the order AMD's `/vcek/v1/<Product>/cert_chain` returns). Exactly
     /// two `CERTIFICATE` blocks are required; the first is the ASK, the second the ARK.
     /// Fail-closed: a wrong block count or a non-`CERTIFICATE` label is an `Err`.
-    pub fn from_kds_cert_chain(chain_pem: &str) -> Result<SnpTrust, String> {
+    pub fn from_kds_cert_chain(chain_pem: &str, product: SnpProduct) -> Result<SnpTrust, String> {
         let mut ders: Vec<Vec<u8>> = Vec::new();
         for block in x509_parser::pem::Pem::iter_from_buffer(chain_pem.as_bytes()) {
             let block = block.map_err(|e| format!("KDS cert_chain PEM parse: {e}"))?;
@@ -201,18 +406,227 @@ impl SnpTrust {
         }
         let ark_der = ders.pop().expect("len==2"); // second block = ARK (self-signed root)
         let ask_der = ders.pop().expect("len==2"); // first block  = ASK (SEV intermediate)
-        Ok(SnpTrust { ark_der, ask_der })
+        Ok(SnpTrust {
+            ark_der,
+            ask_der,
+            product,
+            crls: Vec::new(),
+        })
     }
 
     /// The pinned AMD roots for a SEV-SNP product line — the real ARK/ASK embedded from
     /// the AMD KDS (see the module docs for provenance). This is the anchored trust the
     /// verifier is built with in production.
     pub fn for_product(product: SnpProduct) -> Result<SnpTrust, String> {
-        SnpTrust::from_kds_cert_chain(product.cert_chain_pem())
+        SnpTrust::from_kds_cert_chain(product.cert_chain_pem(), product)
+    }
+
+    /// Add an operator-supplied DER CRL (e.g. the KDS response at [`amd_kds_crl_url`]).
+    /// Once any CRL is configured, the chain verify refuses unless every configured CRL
+    /// is issued by the pinned ARK/ASK, verifies, and is current.
+    pub fn with_crl(mut self, crl_der: Vec<u8>) -> SnpTrust {
+        self.crls.push(crl_der);
+        self
     }
 }
 
-/// Verify VCEK ← ASK ← pinned-ARK and return the VCEK's P-384 public key.
+/// What a verified VCEK certificate endorses: its P-384 key, and — from the AMD
+/// extensions — the TCB it was derived at and the chip it belongs to. A report signed by
+/// this key is only as trustworthy as these values; the report's own `REPORTED_TCB` and
+/// `CHIP_ID` are claims the key-holder chose, so the caller must require they equal these.
+#[derive(Debug, Clone)]
+pub struct VcekEndorsement {
+    pub key: VerifyingKey,
+    pub tcb: TcbVersion,
+    pub hw_id: [u8; HW_ID_LEN],
+}
+
+/// Read one DER TLV with a single-byte tag: `(tag, contents, rest)`. Definite lengths only
+/// (DER), minimal long-form lengths up to 4 bytes.
+fn der_tlv(i: &[u8]) -> Result<(u8, &[u8], &[u8]), String> {
+    if i.len() < 2 {
+        return Err("truncated DER header".into());
+    }
+    let tag = i[0];
+    let (len, hdr) = match i[1] {
+        n if n < 0x80 => (n as usize, 2usize),
+        0x80 => return Err("indefinite length is not DER".into()),
+        n => {
+            let k = (n & 0x7f) as usize;
+            if k > 4 || i.len() < 2 + k {
+                return Err("bad DER long-form length".into());
+            }
+            let mut len = 0usize;
+            for &b in &i[2..2 + k] {
+                len = (len << 8) | b as usize;
+            }
+            if len < 0x80 || i[2] == 0 {
+                return Err("non-minimal DER length".into());
+            }
+            (len, 2 + k)
+        }
+    };
+    let end = hdr.checked_add(len).ok_or("DER length overflow")?;
+    if i.len() < end {
+        return Err("DER contents truncated".into());
+    }
+    Ok((tag, &i[hdr..end], &i[end..]))
+}
+
+/// Decode an SPL extension value: exactly one DER INTEGER, non-negative, minimal, ≤ 255.
+fn decode_spl(name: &'static str, v: &[u8]) -> Result<u8, SnpChainError> {
+    let bad = |detail: String| SnpChainError::VcekExtensionMalformed { name, detail };
+    let (tag, c, rest) = der_tlv(v).map_err(bad)?;
+    if tag != 0x02 || !rest.is_empty() {
+        return Err(bad(format!("expected a lone DER INTEGER, tag {tag:#04x}")));
+    }
+    match c {
+        [x] if *x < 0x80 => Ok(*x),
+        [0x00, x] if *x >= 0x80 => Ok(*x),
+        _ => Err(bad(format!(
+            "INTEGER is not a minimal 0..=255 value: {c:02x?}"
+        ))),
+    }
+}
+
+/// Decode the hwID value: a DER OCTET STRING of 64 bytes, or (legacy VCEKs) the 64 raw
+/// bytes. The two are told apart by total length (66 vs 64), never by guessing at a tag.
+fn decode_hw_id(v: &[u8]) -> Result<[u8; HW_ID_LEN], SnpChainError> {
+    let name = "hwID";
+    let bad = |detail: String| SnpChainError::VcekExtensionMalformed { name, detail };
+    let raw: &[u8] = if v.len() == HW_ID_LEN {
+        v
+    } else {
+        let (tag, c, rest) = der_tlv(v).map_err(bad)?;
+        if tag != 0x04 || !rest.is_empty() {
+            return Err(bad(format!("expected a lone OCTET STRING, tag {tag:#04x}")));
+        }
+        c
+    };
+    raw.try_into()
+        .map_err(|_| bad(format!("hwID is {} bytes, want {HW_ID_LEN}", raw.len())))
+}
+
+/// Parse the AMD extensions off a VCEK certificate. Every extension the product defines is
+/// REQUIRED: a VCEK that does not name its TCB and chip corroborates nothing, so absence
+/// refuses (the reference tool `snpguest` skips a missing extension; this does not).
+fn vcek_extensions(
+    vcek: &X509Certificate<'_>,
+    product: SnpProduct,
+) -> Result<(TcbVersion, [u8; HW_ID_LEN]), SnpChainError> {
+    let wanted: &[(&'static str, &'static str)] = &[
+        ("blSPL", OID_VCEK_BL_SPL),
+        ("teeSPL", OID_VCEK_TEE_SPL),
+        ("snpSPL", OID_VCEK_SNP_SPL),
+        ("ucodeSPL", OID_VCEK_UCODE_SPL),
+        ("fmcSPL", OID_VCEK_FMC_SPL),
+        ("hwID", OID_VCEK_HW_ID),
+    ];
+    let mut found: [Option<&[u8]>; 6] = [None; 6];
+    for ext in vcek.extensions() {
+        let oid = ext.oid.to_id_string();
+        if let Some(k) = wanted.iter().position(|(_, o)| *o == oid) {
+            if found[k].is_some() {
+                return Err(SnpChainError::VcekExtensionDuplicate { name: wanted[k].0 });
+            }
+            found[k] = Some(ext.value);
+        }
+    }
+    let get = |k: usize| found[k].ok_or(SnpChainError::VcekExtensionMissing { name: wanted[k].0 });
+    let tcb = TcbVersion {
+        bootloader: decode_spl("blSPL", get(0)?)?,
+        tee: decode_spl("teeSPL", get(1)?)?,
+        snp: decode_spl("snpSPL", get(2)?)?,
+        microcode: decode_spl("ucodeSPL", get(3)?)?,
+        fmc: if product.has_fmc() {
+            decode_spl("fmcSPL", get(4)?)?
+        } else {
+            0
+        },
+    };
+    Ok((tcb, decode_hw_id(get(5)?)?))
+}
+
+/// The signed-TBS bytes of a DER `CertificateList` (its first inner element). x509-parser
+/// keeps them `pub(crate)`, and the RSA-PSS arm needs them.
+fn crl_tbs_der(crl_der: &[u8]) -> Result<&[u8], String> {
+    let (tag, outer, _) = der_tlv(crl_der)?;
+    if tag != 0x30 {
+        return Err("CRL is not a SEQUENCE".into());
+    }
+    let (tag, _, rest) = der_tlv(outer)?;
+    if tag != 0x30 {
+        return Err("CRL tbsCertList is not a SEQUENCE".into());
+    }
+    Ok(&outer[..outer.len() - rest.len()])
+}
+
+/// Verify one configured CRL against the pinned ARK/ASK and refuse if it revokes the ASK
+/// (ARK-issued CRL) or the VCEK (ASK-issued CRL).
+fn check_crl(
+    crl_der: &[u8],
+    ark: &X509Certificate<'_>,
+    ask: &X509Certificate<'_>,
+    vcek: &X509Certificate<'_>,
+    now: ASN1Time,
+) -> Result<(), SnpChainError> {
+    let (_, crl) =
+        CertificateRevocationList::from_der(crl_der).map_err(|e| SnpChainError::Parse {
+            what: "SNP CRL",
+            detail: e.to_string(),
+        })?;
+    let (issuer, subject, subject_name): (
+        &X509Certificate<'_>,
+        &X509Certificate<'_>,
+        &'static str,
+    ) = if crl.issuer() == ark.subject() {
+        (ark, ask, "ASK")
+    } else if crl.issuer() == ask.subject() {
+        (ask, vcek, "VCEK")
+    } else {
+        return Err(SnpChainError::CrlIssuerUnknown);
+    };
+
+    if crl.signature_algorithm.algorithm.to_id_string() == RSASSA_PSS_OID {
+        let tbs = crl_tbs_der(crl_der).map_err(SnpChainError::CrlSignature)?;
+        verify_rsa_pss_sha384(
+            issuer.public_key().subject_public_key.data.as_ref(),
+            tbs,
+            crl.signature_value.data.as_ref(),
+        )
+        .map_err(SnpChainError::CrlSignature)?;
+    } else {
+        crl.verify_signature(issuer.public_key())
+            .map_err(|e| SnpChainError::CrlSignature(format!("{e:?}")))?;
+    }
+
+    if crl.last_update() > now {
+        return Err(SnpChainError::CrlNotCurrent(
+            "thisUpdate is in the future".into(),
+        ));
+    }
+    match crl.next_update() {
+        None => return Err(SnpChainError::CrlNotCurrent("no nextUpdate".into())),
+        Some(n) if n < now => {
+            return Err(SnpChainError::CrlNotCurrent(format!(
+                "nextUpdate {n} has passed"
+            )))
+        }
+        Some(_) => {}
+    }
+
+    let serial = subject.serial.clone();
+    if crl
+        .iter_revoked_certificates()
+        .any(|r| r.user_certificate == serial)
+    {
+        return Err(SnpChainError::Revoked { cert: subject_name });
+    }
+    Ok(())
+}
+
+/// Verify VCEK ← ASK ← pinned-ARK, apply any configured CRLs, and return what the VCEK
+/// endorses: its P-384 key plus the TCB and chip id from its AMD extensions.
 ///
 /// Structured like [`crate::verify_cert_chain`]: each link's signature is checked
 /// against its issuer's key (via [`verify_cert_link`]) and every cert's validity window is
@@ -221,31 +635,50 @@ impl SnpTrust {
 /// those links to [`verify_rsa_pss_sha384`] (the `rsa` crate); the ECDSA-P384 VCEK link
 /// stays on `x509-parser`. Either way this path fails **closed** (an unsupported signature
 /// or a bad one is an `Err`, never a silent accept).
-pub fn verify_snp_cert_chain(vcek_der: &[u8], trust: &SnpTrust) -> Result<VerifyingKey, String> {
+pub fn verify_snp_cert_chain(
+    vcek_der: &[u8],
+    trust: &SnpTrust,
+) -> Result<VcekEndorsement, SnpChainError> {
     if vcek_der.is_empty() {
-        return Err("no VCEK certificate appended to the SNP report bytes".into());
+        return Err(SnpChainError::NoVcek);
     }
-    let (_, ark) =
-        X509Certificate::from_der(&trust.ark_der).map_err(|e| format!("pinned ARK parse: {e}"))?;
-    let (_, ask) =
-        X509Certificate::from_der(&trust.ask_der).map_err(|e| format!("pinned ASK parse: {e}"))?;
-    let (_, vcek) = X509Certificate::from_der(vcek_der).map_err(|e| format!("VCEK parse: {e}"))?;
+    let parse = |what: &'static str, der| {
+        X509Certificate::from_der(der)
+            .map(|(_, c)| c)
+            .map_err(|e| SnpChainError::Parse {
+                what,
+                detail: e.to_string(),
+            })
+    };
+    let ark = parse("pinned ARK", &trust.ark_der)?;
+    let ask = parse("pinned ASK", &trust.ask_der)?;
+    let vcek = parse("VCEK", vcek_der)?;
 
     let now = ASN1Time::now();
     for (name, cert) in [("ARK", &ark), ("ASK", &ask), ("VCEK", &vcek)] {
         if !cert.validity().is_valid_at(now) {
-            return Err(format!("{name} certificate is not valid now"));
+            return Err(SnpChainError::NotValidNow { cert: name });
         }
     }
 
     // ARK is self-signed (the trust anchor); ASK is signed by ARK; VCEK by ASK. Each link
     // dispatches by signature algorithm (RSA-PSS for the real AMD ARK/ASK, ECDSA otherwise).
-    verify_cert_link(&ark, &ark).map_err(|e| format!("ARK self-signature: {e}"))?;
-    verify_cert_link(&ask, &ark).map_err(|e| format!("ASK←ARK signature: {e}"))?;
-    verify_cert_link(&vcek, &ask).map_err(|e| format!("VCEK←ASK signature: {e}"))?;
+    let link = |link: &'static str, r: Result<(), String>| {
+        r.map_err(|detail| SnpChainError::LinkSignature { link, detail })
+    };
+    link("ARK self", verify_cert_link(&ark, &ark))?;
+    link("ASK←ARK", verify_cert_link(&ask, &ark))?;
+    link("VCEK←ASK", verify_cert_link(&vcek, &ask))?;
 
+    for crl in &trust.crls {
+        check_crl(crl, &ark, &ask, &vcek, now)?;
+    }
+
+    let (tcb, hw_id) = vcek_extensions(&vcek, trust.product)?;
     let point = vcek.public_key().subject_public_key.data.as_ref();
-    VerifyingKey::from_sec1_bytes(point).map_err(|e| format!("VCEK P-384 key: {e}"))
+    let key =
+        VerifyingKey::from_sec1_bytes(point).map_err(|e| SnpChainError::VcekKey(e.to_string()))?;
+    Ok(VcekEndorsement { key, tcb, hw_id })
 }
 
 #[cfg(test)]
@@ -359,7 +792,8 @@ mod tests {
     /// ASK=first (KDS order). Round-trips against the embedded Milan chain.
     #[test]
     fn kds_cert_chain_splits_ask_then_ark() {
-        let trust = SnpTrust::from_kds_cert_chain(AMD_MILAN_CERT_CHAIN_PEM).expect("split");
+        let trust = SnpTrust::from_kds_cert_chain(AMD_MILAN_CERT_CHAIN_PEM, SnpProduct::Milan)
+            .expect("split");
         let (_, ark) = X509Certificate::from_der(&trust.ark_der).expect("ARK");
         let (_, ask) = X509Certificate::from_der(&trust.ask_der).expect("ASK");
         assert!(ark
@@ -380,7 +814,8 @@ mod tests {
             .starts_with("SEV-"));
         // A single-block PEM is rejected (fail-closed on wrong count).
         assert!(SnpTrust::from_kds_cert_chain(
-            "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+            "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
+            SnpProduct::Milan
         )
         .is_err());
     }
@@ -450,5 +885,162 @@ mod tests {
             SnpProduct::Genoa.cert_chain_url(),
             "https://kdsintf.amd.com/vcek/v1/Genoa/cert_chain"
         );
+    }
+
+    // Real AMD KDS CRLs, fetched verbatim 2026-09-30 from
+    // `https://kdsintf.amd.com/vcek/v1/<Product>/crl` (DER, ARK-issued, RSASSA-PSS/SHA-384).
+    // SHA-256: Milan dd68e9e3…d5e6a525, Genoa f242adeb…8ba0cc16, Turin 0699382a…5d4f604b.
+    // thisUpdate 2026-09-22, nextUpdate 2026-11-09. The Genoa CRL revokes serial 0x020001
+    // (a retired Genoa ASK); the pinned Genoa ASK is 0x020002.
+    const AMD_MILAN_CRL_DER: &[u8] = include_bytes!("amd_milan_crl.der");
+    const AMD_GENOA_CRL_DER: &[u8] = include_bytes!("amd_genoa_crl.der");
+    const AMD_TURIN_CRL_DER: &[u8] = include_bytes!("amd_turin_crl.der");
+
+    /// The real AMD CRLs verify under the real ARKs through the RSA-PSS arm, and none of
+    /// them revokes the pinned ASK. The freshness window is deliberately NOT asserted here
+    /// (it lapses 2026-11-09); this pins the signature path and the issuer match, which is
+    /// what a PSS-only CRL could get wrong.
+    #[test]
+    fn real_amd_crls_verify_under_real_arks_and_do_not_revoke_pinned_asks() {
+        for (product, der) in [
+            (SnpProduct::Milan, AMD_MILAN_CRL_DER),
+            (SnpProduct::Genoa, AMD_GENOA_CRL_DER),
+            (SnpProduct::Turin, AMD_TURIN_CRL_DER),
+        ] {
+            let trust = SnpTrust::for_product(product).expect("roots");
+            let (_, ark) = X509Certificate::from_der(&trust.ark_der).unwrap();
+            let (_, ask) = X509Certificate::from_der(&trust.ask_der).unwrap();
+            let (_, crl) = CertificateRevocationList::from_der(der).expect("CRL parse");
+            assert_eq!(crl.issuer(), ark.subject(), "{product:?} CRL is ARK-issued");
+            assert_eq!(
+                crl.signature_algorithm.algorithm.to_id_string(),
+                RSASSA_PSS_OID
+            );
+            verify_rsa_pss_sha384(
+                ark.public_key().subject_public_key.data.as_ref(),
+                crl_tbs_der(der).unwrap(),
+                crl.signature_value.data.as_ref(),
+            )
+            .unwrap_or_else(|e| panic!("{product:?} CRL signature: {e}"));
+            assert!(!crl
+                .iter_revoked_certificates()
+                .any(|r| r.user_certificate == ask.serial));
+            // A CRL from another product's ARK does not verify here (wrong key).
+            let other = if product == SnpProduct::Milan {
+                AMD_GENOA_CRL_DER
+            } else {
+                AMD_MILAN_CRL_DER
+            };
+            let (_, ocrl) = CertificateRevocationList::from_der(other).unwrap();
+            assert!(verify_rsa_pss_sha384(
+                ark.public_key().subject_public_key.data.as_ref(),
+                crl_tbs_der(other).unwrap(),
+                ocrl.signature_value.data.as_ref(),
+            )
+            .is_err());
+        }
+        // The Genoa CRL genuinely lists a revoked ASK serial (0x020001).
+        let (_, g) = CertificateRevocationList::from_der(AMD_GENOA_CRL_DER).unwrap();
+        let revoked: Vec<_> = g
+            .iter_revoked_certificates()
+            .map(|r| r.raw_serial().to_vec())
+            .collect();
+        assert_eq!(revoked, vec![vec![0x02, 0x00, 0x01]]);
+    }
+
+    /// A CRL whose TBS byte is flipped no longer verifies under the real ARK.
+    #[test]
+    fn tampered_real_crl_refuses() {
+        let trust = SnpTrust::for_product(SnpProduct::Genoa).expect("roots");
+        let (_, ark) = X509Certificate::from_der(&trust.ark_der).unwrap();
+        let mut bad = AMD_GENOA_CRL_DER.to_vec();
+        let tbs_len = crl_tbs_der(&bad).unwrap().len();
+        // Flip a byte inside the TBS (after the outer header, well inside the TBS).
+        bad[tbs_len / 2] ^= 0x01;
+        assert_ne!(bad.as_slice(), AMD_GENOA_CRL_DER);
+        let ok = match CertificateRevocationList::from_der(&bad) {
+            Ok((_, crl)) => crl_tbs_der(&bad)
+                .map(|tbs| {
+                    verify_rsa_pss_sha384(
+                        ark.public_key().subject_public_key.data.as_ref(),
+                        tbs,
+                        crl.signature_value.data.as_ref(),
+                    )
+                    .is_ok()
+                })
+                .unwrap_or(false),
+            Err(_) => false,
+        };
+        assert!(!ok, "a tampered CRL must not verify");
+    }
+
+    #[test]
+    fn spl_and_hwid_decoding_is_strict() {
+        assert_eq!(decode_spl("blSPL", &[0x02, 0x01, 0x07]), Ok(7));
+        assert_eq!(decode_spl("blSPL", &[0x02, 0x02, 0x00, 0xC8]), Ok(200));
+        // Non-minimal, negative, wrong tag, trailing bytes, too wide: all refused.
+        for bad in [
+            &[0x02, 0x02, 0x00, 0x07][..],
+            &[0x02, 0x01, 0x80][..],
+            &[0x04, 0x01, 0x07][..],
+            &[0x02, 0x01, 0x07, 0x00][..],
+            &[0x02, 0x02, 0x01, 0x00][..],
+            &[][..],
+        ] {
+            assert!(
+                matches!(
+                    decode_spl("blSPL", bad),
+                    Err(SnpChainError::VcekExtensionMalformed { name: "blSPL", .. })
+                ),
+                "{bad:02x?}"
+            );
+        }
+        let id = [0x5Au8; HW_ID_LEN];
+        let mut wrapped = vec![0x04, 0x40];
+        wrapped.extend_from_slice(&id);
+        assert_eq!(decode_hw_id(&wrapped), Ok(id));
+        assert_eq!(decode_hw_id(&id), Ok(id)); // legacy raw form
+        assert!(decode_hw_id(&wrapped[..40]).is_err());
+        let mut short = vec![0x04, 0x08];
+        short.extend_from_slice(&id[..8]);
+        assert!(decode_hw_id(&short).is_err(), "an 8-byte hwID is refused");
+    }
+
+    /// Turin moved the TCB fields; the two layouts round-trip and differ on the same bytes.
+    #[test]
+    fn tcb_layout_is_per_product() {
+        let b = [1u8, 2, 3, 4, 0, 0, 5, 6];
+        let mg = TcbVersion::from_report_bytes(b, SnpProduct::Genoa);
+        let tu = TcbVersion::from_report_bytes(b, SnpProduct::Turin);
+        assert_eq!(
+            mg,
+            TcbVersion {
+                fmc: 0,
+                bootloader: 1,
+                tee: 2,
+                snp: 5,
+                microcode: 6
+            }
+        );
+        assert_eq!(
+            tu,
+            TcbVersion {
+                fmc: 1,
+                bootloader: 2,
+                tee: 3,
+                snp: 4,
+                microcode: 6
+            }
+        );
+        for p in [SnpProduct::Milan, SnpProduct::Genoa, SnpProduct::Turin] {
+            let t = TcbVersion {
+                fmc: if p.has_fmc() { 9 } else { 0 },
+                bootloader: 1,
+                tee: 2,
+                snp: 3,
+                microcode: 4,
+            };
+            assert_eq!(TcbVersion::from_report_bytes(t.to_report_bytes(p), p), t);
+        }
     }
 }
