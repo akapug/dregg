@@ -389,7 +389,7 @@ unanswerable under a shallow checkout rather than as a small number that looks l
 
 **Class Q4 + Q2. (a)+(b).** MEASURED.
 
-`turn/src/fast_path.rs`. `FastPathError::NonceMismatch { cell_id, expected, got }` (:54) is
+`fast_path.rs` in `turn/src` (deleted by `a9f75d8a4`, which removed the fast path). `FastPathError::NonceMismatch { cell_id, expected, got }` (:54) is
 defined, `Display`-formatted (:94-106), and **constructed zero times**. Three docblocks say
 otherwise:
 
