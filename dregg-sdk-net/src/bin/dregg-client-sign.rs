@@ -1727,7 +1727,11 @@ mod tests {
         let turn = real_chat_turn(recipient, payload);
         assert!(turn.fee > 90 && turn.fee < 9_060);
         let mut depleted = spawned.lock().await.ledger().clone();
-        let pre = TurnExecutor::new(ComputronCosts::default()).execute(&turn, &mut depleted);
+        // At height 1: the turn's deadline is a block height, and an executor without one refuses
+        // it as `DeadlineWithoutHeight`, which would make this pre-check pass for the wrong reason.
+        let pre = TurnExecutor::new(ComputronCosts::default())
+            .at_block_height(1)
+            .execute(&turn, &mut depleted);
         assert!(
             !pre.is_committed(),
             "must-fail-pre: the depleted real ledger must reject this exact chat turn: {pre:?}"
@@ -1751,7 +1755,9 @@ mod tests {
             "the HTTP top-up must raise the real ledger balance"
         );
         let mut funded = node.ledger().clone();
-        let result = TurnExecutor::new(ComputronCosts::default()).execute(&turn, &mut funded);
+        let result = TurnExecutor::new(ComputronCosts::default())
+            .at_block_height(1)
+            .execute(&turn, &mut funded);
         assert!(
             result.is_committed(),
             "the exact next metered chat turn must commit: {result:?}"
