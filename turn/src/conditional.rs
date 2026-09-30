@@ -762,9 +762,12 @@ fn verify_effect_vm_turn_proof(
             Some(j) => j,
             None => continue,
         };
+        // The shipped vector IS the window (`==`, whole vector): a prefix verify would leave
+        // felts past `public_input_count` unproven on the wire object (synthesis 2026-09-30
+        // item 1; the anchors below were already read inside the window).
         if let Ok(desc) = parse_vm_descriptor2(json)
-            && pi_felts.len() >= desc.public_input_count
-            && verify_vm_descriptor2(&desc, &proof, &pi_felts[..desc.public_input_count]).is_ok()
+            && pi_felts.len() == desc.public_input_count
+            && verify_vm_descriptor2(&desc, &proof, &pi_felts).is_ok()
         {
             accepting.push(key);
             accepted_pi_count = desc.public_input_count;

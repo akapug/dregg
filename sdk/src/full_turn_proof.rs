@@ -4508,13 +4508,15 @@ fn verify_effect_vm_rotated_inner(
                 Some(j) => j,
                 None => continue,
             };
+            // The shipped vector IS the window: `==`, whole vector, no prefix slice. A `>=` +
+            // `[..public_input_count]` here verified a prefix while `verify_full_turn_bound`
+            // reads a wide leg's anchors from the vector's own last 16 felts, so an appended
+            // tail was read as the turn's commitments (synthesis 2026-09-30 item 1).
             if let Ok(desc) = parse_vm_descriptor2(json)
-                && public_inputs.len() >= desc.public_input_count
+                && public_inputs.len() == desc.public_input_count
+                && verify_vm_descriptor2(&desc, &proof, public_inputs).is_ok()
             {
-                let dpis = &public_inputs[..desc.public_input_count];
-                if verify_vm_descriptor2(&desc, &proof, dpis).is_ok() {
-                    found.push((name, *blake3::hash(json.as_bytes()).as_bytes()));
-                }
+                found.push((name, *blake3::hash(json.as_bytes()).as_bytes()));
             }
         }
         found
@@ -4539,14 +4541,13 @@ fn verify_effect_vm_rotated_inner(
     // producer already composed it this way and the 10 MB TSV only handed the verifier a
     // pre-materialized copy of it.
     for (key, desc) in welded_wide_members() {
-        if public_inputs.len() >= desc.public_input_count {
-            let dpis = &public_inputs[..desc.public_input_count];
-            if verify_vm_descriptor2(&desc, &proof, dpis).is_ok() {
-                bound.push((
-                    key,
-                    welded_descriptor_vk_hash(&desc).map_err(|e| e.to_string())?,
-                ));
-            }
+        if public_inputs.len() == desc.public_input_count
+            && verify_vm_descriptor2(&desc, &proof, public_inputs).is_ok()
+        {
+            bound.push((
+                key,
+                welded_descriptor_vk_hash(&desc).map_err(|e| e.to_string())?,
+            ));
         }
     }
     match bound.as_slice() {
@@ -4603,7 +4604,11 @@ fn verify_effect_vm_rotated_inner(
             }
             Ok(())
         }
-        [] => Err("rotated effect-vm proof verified under NO cohort descriptor".to_string()),
+        [] => Err(format!(
+            "rotated effect-vm proof verified under NO cohort descriptor whose \
+             public_input_count equals the shipped vector's {} PIs",
+            public_inputs.len()
+        )),
         multi => Err(format!(
             "rotated effect-vm proof verified under MULTIPLE cohort descriptors {:?} — \
              selector binding ambiguous, rejecting",
@@ -5277,7 +5282,9 @@ pub fn verify_full_turn_bound(
     }
 
     // Extract a leg's (before8, after8) commit anchors at the leg's true width. For a wide leg the
-    // 8-felt commits are the LAST 16 PIs (~124-bit). For a narrow cap-open leg (the residual) the
+    // 8-felt commits are the LAST 16 PIs (~124-bit) — inside the proven window because every leg
+    // passed `verify_effect_vm_rotated_with_cutover` above, which pins
+    // `sub_public_inputs.len() == public_input_count` of the accepting descriptor. For a narrow cap-open leg (the residual) the
     // 1-felt commit at `pi::OLD_COMMIT`/`pi::NEW_COMMIT` is widened into slot 0 (its faithful width).
     let leg_commit = |leg: &AttachedSubProof,
                       which: &'static str|
@@ -5674,18 +5681,17 @@ pub fn verify_full_turn_bound_with_escrow_weld(
                     reason: format!("rotated leg deserialize: {e}"),
                 }
             })?;
-        if rotated_leg.sub_public_inputs.len() < desc.public_input_count {
+        if rotated_leg.sub_public_inputs.len() != desc.public_input_count {
             return Err(FullTurnVerifyError::EscrowWeldNotForced {
                 reason: format!(
-                    "rotated leg carries {} PIs (< the welded descriptor's {}) — not a welded \
+                    "rotated leg carries {} PIs (!= the welded descriptor's {}) — not a welded \
                      escrow proof (non-welded route, rejected)",
                     rotated_leg.sub_public_inputs.len(),
                     desc.public_input_count
                 ),
             });
         }
-        let dpis = &rotated_leg.sub_public_inputs[..desc.public_input_count];
-        verify_vm_descriptor2(&desc, &proof_obj, dpis).map_err(|e| {
+        verify_vm_descriptor2(&desc, &proof_obj, &rotated_leg.sub_public_inputs).map_err(|e| {
             FullTurnVerifyError::EscrowWeldNotForced {
                 reason: format!(
                     "rotated leg does NOT verify under the welded descriptor \
