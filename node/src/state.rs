@@ -514,11 +514,21 @@ pub struct NodeStateInner {
     /// committee node agrees — admission is consensus-relevant. Wired onto
     /// every executor via
     /// [`crate::executor_setup::configure_turn_executor`] as
-    /// `costs.coordination_exempt`: EmitEvent-only turns with no
-    /// `balance_change` may then carry `fee = 0` ("leash, not ledger" — the
-    /// computron is an oversight budget, and coordination turns ARE the
-    /// oversight traffic). Economic turns charge exactly as before; receipts
-    /// keep the true `computrons_used`.
+    /// `costs.coordination_exempt`: a turn whose every action emits events on
+    /// the agent's own cell and nothing else (`Turn::is_coordination`) may then
+    /// carry `fee = 0` ("leash, not ledger"). Economic turns charge exactly as
+    /// before; receipts keep the true `computrons_used`.
+    ///
+    /// What bounds the exempt class. A fee-0 turn debits nothing, so the three
+    /// leashes a fee-bearing turn has do not bind it: not the fee debit, not
+    /// the budget gate (`try_debit(turn.fee)` debits 0), and not the faucet's
+    /// per-cell rate limit (the turn needs no funding). What does bind it:
+    /// - the per-turn ceiling `ComputronCosts::coordination_exempt_ceiling`
+    ///   (over it a fee-0 turn is refused `BudgetExceeded`);
+    /// - the own-cell rule: the events land only on `turn.agent`, which the
+    ///   signed envelope must claim under the signer's key;
+    /// - the bearer token on `/turns/submit`, the per-IP limiter on that route,
+    ///   and the 1 MiB body limit on the router.
     pub coordination_fee_exempt: bool,
     /// THE EPOCH §5 ("burn as issuer-move"): (token_id → issuer well cell)
     /// registrations from genesis (`genesis.json` `issuer_well`, registered

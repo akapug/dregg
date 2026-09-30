@@ -690,33 +690,44 @@ impl Turn {
         self.call_forest.action_count()
     }
 
-    /// Is this a COORDINATION turn — observable, append-only, non-state-mutating?
+    /// Is this a COORDINATION turn: the agent posting events on its own cell and
+    /// nothing else?
     ///
     /// True iff the call forest is non-empty AND every action in it (recursing
-    /// through children) declares no `balance_change` and produces ONLY
-    /// [`Effect::EmitEvent`](crate::action::Effect::EmitEvent) effects. Such
-    /// turns are oversight traffic (status posts, gate verdicts, chat): they
-    /// move no value and mutate no cell state beyond the append-only event log.
+    /// through children) declares no `balance_change`, carries AT LEAST ONE
+    /// effect, and every effect is an
+    /// [`Effect::EmitEvent`](crate::action::Effect::EmitEvent) whose `cell` is
+    /// `self.agent`. Such turns are oversight traffic (status posts, gate
+    /// verdicts, chat): they move no value and append only to the agent's own
+    /// event log.
     ///
-    /// Consumed by the opt-in
-    /// [`ComputronCosts::coordination_exempt`](crate::executor::ComputronCosts)
-    /// class ("leash, not ledger" — the computron is an oversight budget, not an
-    /// economic cost): when a deployment opts in, the executor waives the CHARGE
-    /// for this class (a `fee = 0` coordination turn admits) while metering
-    /// stays honest — receipts still report the true `computrons_used`. Any
-    /// non-`EmitEvent` effect or any `balance_change` disqualifies the whole
-    /// turn, so the class cannot leak to value moves.
+    /// Both narrowings are load-bearing for the fee exemption that consumes this
+    /// ([`ComputronCosts::coordination_exempt`](crate::executor::ComputronCosts)):
+    /// - `EmitEvent` has no authority leg (the Lean emit arm has none either), so
+    ///   an emit on a foreign cell would make the free class a free path for
+    ///   attributing events to any cell in the ledger.
+    /// - An effect-less action would classify under `all()` over an empty list,
+    ///   and the metered cost of an action is dominated by its authorization
+    ///   (`Authorization::Proof` is charged `proof_verify`), so an effect-less
+    ///   action would get proof verification for free.
     pub fn is_coordination(&self) -> bool {
-        fn tree_is_coordination(tree: &crate::forest::CallTree) -> bool {
+        fn tree_is_coordination(tree: &crate::forest::CallTree, agent: &CellId) -> bool {
             tree.action.balance_change.is_none()
+                && !tree.action.effects.is_empty()
+                && tree.action.effects.iter().all(|e| {
+                    matches!(e, crate::action::Effect::EmitEvent { cell, .. } if cell == agent)
+                })
                 && tree
-                    .action
-                    .effects
+                    .children
                     .iter()
-                    .all(|e| matches!(e, crate::action::Effect::EmitEvent { .. }))
-                && tree.children.iter().all(tree_is_coordination)
+                    .all(|child| tree_is_coordination(child, agent))
         }
-        !self.call_forest.is_empty() && self.call_forest.roots.iter().all(tree_is_coordination)
+        !self.call_forest.is_empty()
+            && self
+                .call_forest
+                .roots
+                .iter()
+                .all(|root| tree_is_coordination(root, &self.agent))
     }
 
     /// Every effect this turn will apply, paired with the target of the action

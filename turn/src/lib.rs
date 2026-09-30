@@ -182,8 +182,9 @@ pub use execution_path::{ExecutionPath, compute_execution_path};
 pub use executor::{
     AtomicProofEntry, AtomicSovereignTurn, AtomicTurnError, BridgeEscrowReceipt,
     BridgeEscrowRecord, BridgeMintError, BridgeMintReceipt, BridgeMintRequest,
-    CellMigrationManager, ComputronCosts, MigrationCancelReason, MigrationError, MigrationState,
-    MixedAtomicResult, MixedAtomicTurn, ProofVerifier, ResolutionTable, TurnExecutor,
+    COORDINATION_EXEMPT_CEILING, CellMigrationManager, ComputronCosts, MigrationCancelReason,
+    MigrationError, MigrationState, MixedAtomicResult, MixedAtomicTurn, ProofVerifier,
+    ResolutionTable, TurnExecutor,
     escrow_nullifier_for, execute_pipeline, new_mirror_ledger_cell, read_supply,
     resolve_eventual_ref,
 };

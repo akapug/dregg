@@ -256,6 +256,7 @@ fn main() {
         proof_verify: 2000,
         signature_verify: 200,
         per_byte: 1,
+        ..ComputronCosts::default_costs()
     };
     let executor = TurnExecutor::new(costs);
 

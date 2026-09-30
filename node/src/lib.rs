@@ -2423,11 +2423,10 @@ async fn run_node(
                             }
                         }
                         // COORDINATION-TURN CLASS ("leash, not ledger"):
-                        // genesis-declared opt-in. EmitEvent-only turns (no
-                        // balance_change) may carry fee = 0 — the charge is
-                        // waived at admission, the receipt's computrons_used
-                        // stays honest. Genesis-declared so every committee
-                        // node agrees; default off = exact legacy behavior.
+                        // genesis-declared opt-in. Own-cell EmitEvent-only
+                        // turns may carry fee = 0 up to the per-turn ceiling;
+                        // the receipt's computrons_used stays honest.
+                        // Genesis-declared so every committee node agrees.
                         if let Some(exempt) = genesis["coordination_fee_exempt"].as_bool() {
                             s.coordination_fee_exempt = exempt;
                             if exempt {

@@ -1,8 +1,9 @@
 //! COORDINATION-TURN CLASS regression lock ("leash, not ledger").
 //!
 //! `ComputronCosts::coordination_exempt` (opt-in, default off) waives the
-//! CHARGE for turns that are pure oversight traffic — EmitEvent-only, no
-//! `balance_change` anywhere in the forest (`Turn::is_coordination`). The
+//! CHARGE for turns that are pure oversight traffic: every action carries at
+//! least one effect, every effect is an EmitEvent on the turn's own agent cell,
+//! no `balance_change` anywhere in the forest (`Turn::is_coordination`). The
 //! computron stays a LEASH (metering is honest: receipts report the true
 //! `computrons_used`) but stops being a LEDGER for the class (a `fee = 0`
 //! coordination turn admits and commits, even from an UNFUNDED cell).
@@ -15,13 +16,19 @@
 //!   exempt=true — the class cannot leak to value moves;
 //! - honest leash: the exempted turn's receipt reports NONZERO
 //!   `computrons_used`;
+//! - ceiling     : a fee=0 coordination turn metering more than
+//!   `coordination_exempt_ceiling` REJECTS; the same turn paying its cost
+//!   commits;
+//! - own cell    : an EmitEvent on a FOREIGN cell is not coordination;
+//! - effect-less : an action with no effects is not coordination, whatever its
+//!   authorization (an `Authorization::Proof` action is charged `proof_verify`);
 //! - admission mirror: `estimate_cost` / `validate_without_apply` agree with
 //!   the execution path on both sides of the flag.
 
 use dregg_cell::{AuthRequired, Cell, CellId, Ledger, Permissions};
 use dregg_turn::{
-    Action, Authorization, CallForest, ComputronCosts, DelegationMode, Effect, Event, TurnError,
-    TurnExecutor,
+    Action, Authorization, COORDINATION_EXEMPT_CEILING, CallForest, ComputronCosts,
+    DelegationMode, Effect, Event, TurnError, TurnExecutor,
     turn::{Turn, TurnResult},
 };
 
@@ -140,9 +147,17 @@ fn is_coordination_classifies() {
     let mut declared = chat_turn(agent, 0);
     declared.call_forest.roots[0].action.balance_change = Some(0);
     assert!(!declared.is_coordination());
-    // A zero-effect action is still non-mutating: coordination.
+    // A zero-effect action is NOT coordination: `all()` over no effects would
+    // be vacuously true, and the action's authorization is still metered.
     let no_effects = turn_with_effects(agent, vec![], 0);
-    assert!(no_effects.is_coordination());
+    assert!(!no_effects.is_coordination());
+    // A forest where one action emits and a child action has no effects is
+    // NOT coordination either: the rule holds at every action, not per turn.
+    let mut half_empty = chat_turn(agent, 0);
+    half_empty.call_forest.roots[0]
+        .children
+        .push(turn_with_effects(agent, vec![], 0).call_forest.roots[0].clone());
+    assert!(!half_empty.is_coordination());
     // An EMPTY forest is NOT coordination (nothing to classify; the executor
     // rejects it as EmptyForest anyway).
     let mut empty = chat_turn(agent, 0);
@@ -288,5 +303,138 @@ fn exempt_turn_with_nonzero_fee_still_commits_and_charges() {
     assert_eq!(
         balance, 9_000,
         "an attached fee is still debited (fee stays a real move when carried)"
+    );
+}
+
+/// A chat turn whose single event carries `fields` field elements. The
+/// EmitEvent arm meters `32 * per_byte` per field, so the size is chosen by
+/// field count.
+fn wide_chat_turn(agent: CellId, fields: usize, fee: u64) -> Turn {
+    turn_with_effects(
+        agent,
+        vec![Effect::EmitEvent {
+            cell: agent,
+            event: Event::new(*blake3::hash(b"helm.chat").as_bytes(), vec![[7u8; 32]; fields]),
+        }],
+        fee,
+    )
+}
+
+#[test]
+fn a_zero_fee_coordination_turn_over_the_ceiling_rejects() {
+    let agent = make_open_cell(1, 0);
+    let agent_id = agent.id();
+    let mut ledger = Ledger::new();
+    ledger.insert_cell(agent).unwrap();
+
+    let executor = exempt_executor();
+    // 400 fields meter 400 * 32 = 12,800 for the event alone.
+    let turn = wide_chat_turn(agent_id, 400, 0);
+    assert!(turn.is_coordination(), "precondition: the shape is coordination");
+    let estimated = TurnExecutor::new(ComputronCosts::default_costs()).estimate_cost(&turn);
+    assert!(
+        estimated > COORDINATION_EXEMPT_CEILING,
+        "precondition: the turn costs more than the ceiling ({estimated})"
+    );
+
+    match executor.execute(&turn, &mut ledger) {
+        TurnResult::Rejected {
+            reason: TurnError::BudgetExceeded { limit, used },
+            ..
+        } => {
+            assert_eq!(limit, COORDINATION_EXEMPT_CEILING, "the ceiling is the limit");
+            assert!(used > COORDINATION_EXEMPT_CEILING);
+        }
+        other => panic!("a fee=0 coordination turn over the ceiling must reject, got {other:?}"),
+    }
+    assert_eq!(
+        executor.estimate_cost(&turn),
+        estimated,
+        "over the ceiling the estimate is the full cost, not 0"
+    );
+    assert!(
+        matches!(
+            executor.validate_without_apply(&turn, &ledger),
+            Err(TurnError::BudgetExceeded { .. })
+        ),
+        "validation refuses the same turn"
+    );
+}
+
+#[test]
+fn a_coordination_turn_over_the_ceiling_commits_when_it_pays() {
+    let agent = make_open_cell(1, 100_000);
+    let agent_id = agent.id();
+    let mut ledger = Ledger::new();
+    ledger.insert_cell(agent).unwrap();
+
+    let executor = exempt_executor();
+    let fee = executor.estimate_cost(&wide_chat_turn(agent_id, 400, 0));
+    assert!(fee > COORDINATION_EXEMPT_CEILING);
+    let turn = wide_chat_turn(agent_id, 400, fee);
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(
+        result.is_committed(),
+        "a coordination turn over the ceiling that pays its cost commits: {result:?}"
+    );
+}
+
+#[test]
+fn an_emit_on_a_foreign_cell_is_not_exempt() {
+    let agent = make_open_cell(1, 0);
+    let foreign = make_open_cell(2, 0);
+    let agent_id = agent.id();
+    let foreign_id = foreign.id();
+    let mut ledger = Ledger::new();
+    ledger.insert_cell(agent).unwrap();
+    ledger.insert_cell(foreign).unwrap();
+
+    let turn = turn_with_effects(
+        agent_id,
+        vec![Effect::EmitEvent {
+            cell: foreign_id,
+            event: Event::new(*blake3::hash(b"helm.chat").as_bytes(), vec![[7u8; 32]]),
+        }],
+        0,
+    );
+    assert!(!turn.is_coordination(), "an emit on another cell is not coordination");
+    // One own-cell emit does not launder a foreign one in the same action.
+    let mut mixed = chat_turn(agent_id, 0);
+    mixed.call_forest.roots[0]
+        .action
+        .effects
+        .push(Effect::EmitEvent {
+            cell: foreign_id,
+            event: Event::new([1u8; 32], vec![]),
+        });
+    assert!(!mixed.is_coordination());
+
+    let executor = exempt_executor();
+    assert!(executor.estimate_cost(&turn) > 0, "a foreign emit estimates its cost");
+    match executor.execute(&turn, &mut ledger) {
+        TurnResult::Rejected {
+            reason: TurnError::BudgetExceeded { .. },
+            ..
+        } => {}
+        other => panic!("a fee=0 foreign-cell emit must reject even under exempt, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_effectless_proof_authorized_action_is_not_exempt() {
+    let agent = make_open_cell(1, 0).id();
+    let mut turn = turn_with_effects(agent, vec![], 0);
+    turn.call_forest.roots[0].action.authorization = Authorization::Proof {
+        proof_bytes: vec![0u8; 64],
+        bound_action: "helm.chat".to_string(),
+        bound_resource: "self".to_string(),
+    };
+    assert!(!turn.is_coordination(), "an effect-less action is not coordination");
+
+    let executor = exempt_executor();
+    let costs = ComputronCosts::default_costs();
+    assert!(
+        executor.estimate_cost(&turn) >= costs.proof_verify,
+        "the Proof authorization is metered at proof_verify and not waived"
     );
 }

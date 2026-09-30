@@ -733,7 +733,7 @@ pub trait ProofVerifier: Send + Sync {
 }
 
 mod costs;
-pub use costs::ComputronCosts;
+pub use costs::{COORDINATION_EXEMPT_CEILING, ComputronCosts};
 
 /// Additive, explicitly non-live exact FNSP-v3 nullifier state machine.
 ///

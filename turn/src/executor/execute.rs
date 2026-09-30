@@ -1043,16 +1043,18 @@ impl TurnExecutor {
         let mut computrons_used: u64 = 0;
         let mut all_effects_hashes: Vec<[u8; 32]> = Vec::new();
 
-        // COORDINATION EXEMPTION ("leash, not ledger") — opt-in via
-        // `ComputronCosts::coordination_exempt`. An EmitEvent-only turn with no
-        // `balance_change` anywhere in its forest (`Turn::is_coordination`) is
-        // oversight traffic, so its CHARGE is waived: the tree walk meters with
-        // an uncapped budget (so `computrons_used` stays the TRUE cost in the
-        // receipt) and the admission comparison below charges 0. Economic turns
-        // are untouched — any non-EmitEvent effect disqualifies the whole turn.
+        // COORDINATION EXEMPTION ("leash, not ledger"), opt-in via
+        // `ComputronCosts::coordination_exempt`. A turn whose every action emits
+        // events on the agent's own cell and nothing else (`Turn::is_coordination`)
+        // may meter up to `coordination_exempt_ceiling` computrons without paying
+        // for them. The budget is `max(turn.fee, ceiling)`, finite either way:
+        // under the ceiling the turn rides free, over it the turn must pay its
+        // cost, and a fee-0 turn over it is refused `BudgetExceeded` by the walk
+        // or by the check below. `computrons_used` stays the true metered cost.
+        // Economic turns are untouched.
         let coordination_exempt = self.costs.coordination_exempt && turn.is_coordination();
         let metering_budget = if coordination_exempt {
-            u64::MAX
+            turn.fee.max(self.costs.coordination_exempt_ceiling)
         } else {
             turn.fee
         };
@@ -1139,16 +1141,10 @@ impl TurnExecutor {
         }
         let _pt_post = super::turn_profile::Instant::now();
 
-        // Check total cost against fee. A coordination-exempt turn CHARGES 0
-        // (the class waiver) while `computrons_used` keeps the true metered
-        // cost for the receipt — the leash stays observable, only the toll is
-        // waived.
-        let charged = if coordination_exempt {
-            0
-        } else {
-            computrons_used
-        };
-        if charged > turn.fee {
+        // Check total cost against the budget: the fee, or for an exempt
+        // coordination turn `max(fee, ceiling)`. `computrons_used` keeps the true
+        // metered cost for the receipt either way.
+        if computrons_used > metering_budget {
             journal.rollback(
                 ledger,
                 &self.bridged_nullifiers,
@@ -1169,7 +1165,7 @@ impl TurnExecutor {
             }
             return TurnResult::Rejected {
                 reason: TurnError::BudgetExceeded {
-                    limit: turn.fee,
+                    limit: metering_budget,
                     used: computrons_used,
                 },
                 at_action: vec![],
@@ -1801,18 +1797,23 @@ impl TurnExecutor {
 
     /// Estimate the computron cost of a turn without applying it.
     ///
-    /// A COORDINATION turn (`Turn::is_coordination`) estimates 0 when the
-    /// executor opts into `ComputronCosts::coordination_exempt` — the
-    /// admission-side mirror of the execution-path charge waiver, so
-    /// `validate_without_apply` and fee-sizing clients agree that the class
-    /// rides free ("leash, not ledger").
+    /// A COORDINATION turn (`Turn::is_coordination`) whose estimate is within
+    /// `ComputronCosts::coordination_exempt_ceiling` estimates 0 when the
+    /// executor opts into `ComputronCosts::coordination_exempt`: the
+    /// admission-side mirror of the execution-path waiver, so
+    /// `validate_without_apply` and fee-sizing callers agree with `execute`. Over
+    /// the ceiling it estimates its full cost, so a caller that sizes the fee
+    /// from this pays for the turn instead of submitting one `execute` refuses.
     pub fn estimate_cost(&self, turn: &Turn) -> u64 {
-        if self.costs.coordination_exempt && turn.is_coordination() {
-            return 0;
-        }
         let mut total: u64 = 0;
         for root in &turn.call_forest.roots {
             total = total.saturating_add(self.estimate_tree_cost(root));
+        }
+        if self.costs.coordination_exempt
+            && total <= self.costs.coordination_exempt_ceiling
+            && turn.is_coordination()
+        {
+            return 0;
         }
         total
     }

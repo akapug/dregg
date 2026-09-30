@@ -232,6 +232,21 @@ pub fn enroll_known_pq_identities(executor: &TurnExecutor, s: &NodeStateInner) {
 }
 
 /// Configure `executor` with federation id, timestamp, and blocklace height.
+///
+/// This also sets `costs.coordination_exempt` from `s.coordination_fee_exempt`,
+/// so every executor built here inherits the fee-exempt coordination class, not
+/// only the one behind `/turns/submit`:
+/// - [`new_submit_executor`]: HTTP submit, [`commit_effects_as`], and the node's
+///   own drainer turns (`submit_queue_drainer.rs`) and relay slash turns
+///   (`relay_slash_submit.rs`), which size their fee with
+///   `new_submit_executor(..).estimate_cost`, so an own-cell EmitEvent-only
+///   node turn is sized at `fee = 0`;
+/// - [`new_verify_executor`]: read and proof re-execution;
+/// - finalization (`blocklace_sync::execute_finalized_turn`), which builds its
+///   executor inline and calls this, so a finalized fee-0 coordination turn
+///   commits exactly when the flag is on.
+///
+/// `configure_turn_executor_inherits_the_coordination_class` pins all three.
 pub fn configure_turn_executor(
     executor: &mut TurnExecutor,
     s: &NodeStateInner,
@@ -400,11 +415,10 @@ pub fn configure_turn_executor(
         executor.register_issuer_well(*token_id, *well);
     }
 
-    // COORDINATION-TURN CLASS ("leash, not ledger"): genesis-declared opt-in
-    // (`genesis.json` `coordination_fee_exempt` → NodeState). EmitEvent-only
-    // turns with no `balance_change` may carry `fee = 0` — the executor waives
-    // the CHARGE while the receipt's `computrons_used` stays honest. Default
-    // off: zero behavior change unless a deployment opts in at genesis.
+    // COORDINATION-TURN CLASS ("leash, not ledger"): `s.coordination_fee_exempt`
+    // (see its docblock for what bounds the class). Own-cell EmitEvent-only
+    // turns may carry `fee = 0` up to `coordination_exempt_ceiling`; the
+    // receipt's `computrons_used` stays honest. Default off.
     executor.costs.coordination_exempt = s.coordination_fee_exempt;
 
     let base = attested_block_height(s);
@@ -758,6 +772,71 @@ mod tests {
             BlockHeightMode::Current => base,
         };
         assert_eq!(next, 42);
+    }
+
+    /// F10 of the #72 review: the coordination class is node-wide. The submit
+    /// executor (HTTP, drainer, relay), the verify executor and the finalization
+    /// shape (a default executor passed through `configure_turn_executor`, as
+    /// `blocklace_sync::execute_finalized_turn` does) all carry the flag, and an
+    /// own-cell EmitEvent-only turn estimates 0 on the submit executor, which is
+    /// how the drainer and relay size their fee. With the flag off, none do.
+    #[tokio::test]
+    async fn configure_turn_executor_inherits_the_coordination_class() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = crate::state::NodeState::new(dir.path(), vec![]).expect("node state");
+        let mut s = state.write().await;
+
+        let agent = local_agent_cell(&s);
+        let mut call_forest = dregg_turn::CallForest::new();
+        call_forest.add_root(dregg_sdk::raw::unsigned_action_named(
+            agent,
+            "status",
+            vec![dregg_turn::action::Effect::EmitEvent {
+                cell: agent,
+                event: dregg_turn::action::Event::new([3u8; 32], vec![[4u8; 32]]),
+            }],
+        ));
+        let turn = dregg_turn::Turn {
+            agent,
+            nonce: 0,
+            fee: 0,
+            memo: None,
+            valid_until: None,
+            call_forest,
+            depends_on: vec![],
+            previous_receipt_hash: None,
+            conservation_proof: None,
+            sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
+            custom_program_proofs: None,
+            effect_binding_proofs: Vec::new(),
+            cross_effect_dependencies: Vec::new(),
+            effect_witness_index_map: Vec::new(),
+        };
+        assert!(turn.is_coordination(), "precondition: an own-cell status post");
+
+        for exempt in [true, false] {
+            s.coordination_fee_exempt = exempt;
+            let submit = new_submit_executor(&s);
+            let verify = new_verify_executor(&s);
+            let mut finalize = TurnExecutor::new(dregg_turn::ComputronCosts::default());
+            configure_turn_executor(&mut finalize, &s, BlockHeightMode::Next);
+            let paths = [("submit", &submit), ("verify", &verify), ("finalize", &finalize)];
+            for (path, executor) in paths {
+                assert_eq!(
+                    executor.costs.coordination_exempt, exempt,
+                    "{path} executor must inherit coordination_fee_exempt={exempt}"
+                );
+            }
+            let estimate = submit.estimate_cost(&turn);
+            if exempt {
+                assert_eq!(estimate, 0, "the drainer/relay fee for a coordination turn is 0");
+            } else {
+                assert!(estimate > 0, "with the flag off the same turn is fee-bearing");
+            }
+        }
     }
 
     #[test]
