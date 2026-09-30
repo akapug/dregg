@@ -419,7 +419,7 @@ fn run_live_mcp() {
                     "the model issued no tool-call this run (it answered in text). The dregg MCP \
                      server registration on session/new is LIVE — if hermes-acp's `mcp` SDK is \
                      present it spawns `{self_bin} mcp-server` and offers `mcp_dregg_run_js` + \
-                     `mcp_dregg_terminal` to the model (see the hermes-acp log). A model that \
+                     `mcp_dregg_confinement_probe` to the model (see the hermes-acp log). A model that \
                      SELECTS one routes its call through the dregg sandbox; the server's confined \
                      execution is proven by `tests/mcp_confined_tools.rs` + the direct stdio drive."
                 );
@@ -443,7 +443,7 @@ fn run_live_mcp() {
                             "non-dregg"
                         },
                         if dregg {
-                            "executed in the dregg sandbox (see the MCP server's stderr)"
+                            "handled by the dregg MCP server (see its stderr)"
                         } else {
                             "the model has no dregg executor for this"
                         }
@@ -456,15 +456,16 @@ fn run_live_mcp() {
 }
 
 /// THE DREGG MCP SERVER — speak standard MCP JSON-RPC over stdin/stdout, exposing
-/// ONLY dregg-confined tools (`run_js`, `terminal`). Hermes spawns this binary
+/// ONLY dregg-confined tools (`run_js`, `confinement_probe`). Hermes spawns this binary
 /// (`deos-hermes mcp-server`) when deos registers it on `session/new`'s
 /// `mcpServers`; the model's only tools are then dregg's, so every tool-call
-/// routes through the dregg sandbox (cap-gated, receipted; `terminal` execs
-/// inside a confined PD). Runs until the client closes the stream (EOF).
+/// routes through the dregg sandbox (cap-gated, receipted; `confinement_probe`
+/// reports a confined PD's sandbox verdict and runs no command — there is no
+/// shell tool). Runs until the client closes the stream (EOF).
 ///
 /// Logs go to STDERR (stdout is the MCP wire — it must carry only ndjson frames).
 fn run_mcp_server() {
-    eprintln!("deos-hermes — the dregg confined MCP server (stdio); tools = run_js, terminal");
+    eprintln!("deos-hermes — the dregg confined MCP server (stdio); tools = run_js, confinement_probe");
 
     // The dregg confinement the tools route through: a grantor runtime + the
     // standard per-kind/per-tool floors (terminal rate 5, run_js granted). Every

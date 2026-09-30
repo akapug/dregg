@@ -23,7 +23,8 @@
 //!   2. **dregg's tools are the only effective effect-path.** Inside the jail the
 //!      agent's only way to *cause* anything is to send a dregg request over the
 //!      Endpoint; the host routes it through [`crate::McpToolHost`] (cap-gated,
-//!      receipted; `run_js` → a deos-js World, `terminal` → a nested confined PD).
+//!      receipted; `run_js` → a deos-js World, `confinement_probe` → a nested
+//!      confined PD's sandbox verdict; no dregg tool runs a command).
 //!      Every effect lands in OUR container, never the host.
 //!   3. **Egress is a structured, opt-in door.** The host holds an
 //!      [`EgressPolicy`]; sealed by default (no reach outside). When it grants a

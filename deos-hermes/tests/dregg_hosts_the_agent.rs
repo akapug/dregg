@@ -9,9 +9,10 @@
 //! (and the same under `--features js-agent`).
 //!
 //! The three legs:
-//!   (a) THE DREGG TOOL EFFECT-PATH WORKS + IS RECEIPTED — `terminal` execs inside
-//!       a nested confined PD (file/net/exec denied), a cap-gated receipted turn
-//!       on the dregg verified executor. (run_js under `--features js-agent`.)
+//!   (a) THE DREGG TOOL EFFECT-PATH WORKS + IS RECEIPTED — `confinement_probe`
+//!       launches a nested confined PD (file/net/exec denied) and reports its
+//!       verdict, a cap-gated receipted turn on the dregg verified executor. It
+//!       runs no command. (run_js under `--features js-agent`.)
 //!   (b) THE BASE-TOOL ESCAPE IS NEUTRALIZED — the jailed agent reaches for an
 //!       unconfined shell, a host-FS read, and an arbitrary socket (exactly the
 //!       ambient authority hermes's leaky base tools would use); the OS jail
@@ -70,10 +71,10 @@ fn drive(server: &mut McpServer<'_>, requests: &str) -> Vec<Value> {
         .collect()
 }
 
-/// (a) THE DREGG TOOL EFFECT-PATH — the jailed agent's `terminal` tool execs
-/// INSIDE a dregg PD (every ambient authority denied) and leaves a dregg receipt.
-/// This is the agent's ONLY effective way to cause an effect, and it routes to OUR
-/// container, never the host.
+/// (a) THE DREGG TOOL EFFECT-PATH — the jailed agent's `confinement_probe` tool
+/// launches a nested dregg PD (every ambient authority denied), reports its
+/// verdict, and leaves a dregg receipt. It routes to OUR container, never the
+/// host, and runs no command.
 #[test]
 fn leg_a_dregg_tools_are_the_only_effect_path_and_are_receipted() {
     let (runtime, root) = grantor();
@@ -89,10 +90,7 @@ fn leg_a_dregg_tools_are_the_only_effect_path_and_are_receipted() {
         req(
             2,
             "tools/call",
-            json!({
-                "name": "terminal",
-                "arguments": { "command": "cat /etc/passwd && curl http://1.1.1.1" }
-            })
+            json!({ "name": "confinement_probe", "arguments": {} })
         ),
     );
     let replies = drive(&mut server, &session);
@@ -105,27 +103,27 @@ fn leg_a_dregg_tools_are_the_only_effect_path_and_are_receipted() {
     assert_eq!(
         result["isError"],
         json!(false),
-        "terminal admitted: {result}"
+        "confinement_probe admitted: {result}"
     );
     assert!(
         result["_deos"]["receipt"].is_string(),
         "the dregg-tool turn left a receipt: {result}"
     );
-    // The effect landed in OUR container — a confined PD where the model's
-    // `cat`/`curl` could not reach the host file or the network.
+    // The probe ran in OUR container — a confined PD that could not reach the
+    // host file or the network.
     let verdict = result["_deos"]["sandboxVerdict"]
         .as_i64()
         .expect("a probe verdict") as i32;
     assert_eq!(
         verdict,
         probe::ALL,
-        "the dregg tool ran in OUR container — file/net/exec denied (verdict 0x{verdict:x})"
+        "the probe PD ran in OUR container — file/net/exec denied (verdict 0x{verdict:x})"
     );
 
     // The host's tape proves the call routed through dregg (not the host's shell).
     let tape = server.into_host().tape().to_vec();
     assert_eq!(tape.len(), 1);
-    assert_eq!(tape[0].tool, "terminal");
+    assert_eq!(tape[0].tool, "confinement_probe");
     assert_eq!(tape[0].sandbox_verdict, Some(probe::ALL));
 }
 
