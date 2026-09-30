@@ -281,6 +281,11 @@ GATES=(
   "emitter-routing|120|bash scripts/check-emitter-routing.sh"
   "anchored-lc-committee|60|bash scripts/check-anchored-lc-committee.sh"
   "anchored-lc-committee-red|60|bash scripts/check-anchored-lc-committee.sh --self-test"
+  # ADDED 2026-09-29 with the `valid_until`-is-a-height cutover (issue #46): a production `Turn`
+  # literal with `valid_until: None` in sdk/node/intent/starbridge-v2/coord never expires and
+  # falls off the verified producer. Replaces the `include_str!` text ratchets of PRs #78-#84.
+  "turn-valid-until|60|bash scripts/check-turn-valid-until.sh"
+  "turn-valid-until-red|60|bash scripts/check-turn-valid-until.sh --self-test"
   "byte-to-felt|120|bash scripts/check-byte-to-felt.sh"
   "p3-rev|120|bash scripts/check-p3-rev.sh --rev HEAD"
   "drift-taxonomy|120|bash scripts/check-drift-taxonomy.sh --rev HEAD"

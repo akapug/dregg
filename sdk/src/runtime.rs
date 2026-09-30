@@ -687,6 +687,7 @@ fn ensure_verified_mlkem_decaps_core_installed() {
 /// (`registry_with_real_verifiers_full`) from here.
 fn executor_with_real_verifiers(executor_signing_seed: Option<[u8; 32]>) -> TurnExecutor {
     let mut executor = TurnExecutor::new(ComputronCosts::default_costs());
+    executor.set_block_height(LOCAL_RUNTIME_START_HEIGHT);
     // ROUTE (ii): when the HOST supplies an executor signing seed, install it so
     // every committed `TurnReceipt` carries an Ed25519 `executor_signature` over
     // `canonical_executor_signed_message` (the exact bytes
@@ -870,31 +871,23 @@ pub struct AgentRuntime {
     executor_signing_seed: Option<[u8; 32]>,
 }
 
-/// Validity horizon (wall-clock seconds) stamped onto turns this SDK constructs.
+/// The block height a freshly constructed in-process runtime's executor starts at.
 ///
-/// The Lean producer's wire marshal REQUIRES the turn envelope's `valid_until`
-/// (`dregg_turn::lean_apply::produce_via_lean` / `lean_shadow::turn_to_wire_turn`); leaving it
-/// `None` means every turn built this way falls off the verified Lean producer to the legacy
-/// Rust producer, per-turn, forever — silently, since `ProducerOutcome::Fallback` is not
-/// surfaced to the caller. Worse, on the real executor (`turn/src/executor/execute.rs:426`)
-/// `None` skips the expiration check ENTIRELY — the turn never expires, no matter how stale.
-/// Mirrors `default_valid_until` in `node/src/api.rs` (same rationale, same fix — see issue
-/// #46): wall-clock now + a generous horizon, never a block height (which would already be in
-/// the past as a timestamp and expire the turn immediately).
-///
-/// `pub(crate)` so every `Turn`-constructing site in this crate shares one horizon policy
-/// instead of re-deriving (or omitting) it — originally scoped to `AgentRuntime::execute` /
-/// `execute_on` / sub-agent submit, now also used by `cipherclerk.rs`'s sovereign/committed
-/// turn builders and `committed_turn.rs`'s `CommittedTurnBuilder`, which had the identical
-/// `None` sentinel at 7 more sites.
-const SDK_TURN_VALIDITY_HORIZON_SECS: i64 = 3600;
+/// `Turn::valid_until` is a block height and the executor checks it against its own height; an
+/// executor at height 0 has no height and refuses every turn that carries a deadline
+/// (`dregg_turn::check_deadline`). So the in-process executor starts at 1 and stays there
+/// until the host moves it with [`AgentRuntime::set_block_height`] (a node-driven host feeds it
+/// the consensus height). Every turn this runtime or its sub-agents build is stamped
+/// `valid_until_at(block_height, DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS)` at the height it
+/// executes against.
+pub const LOCAL_RUNTIME_START_HEIGHT: u64 = 1;
 
-pub(crate) fn default_valid_until() -> Option<i64> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    Some(now + SDK_TURN_VALIDITY_HORIZON_SECS)
+/// The deadline an in-process turn built at executor height `height` carries.
+fn local_valid_until(height: u64) -> Option<i64> {
+    Some(dregg_turn::valid_until_at(
+        height,
+        dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+    ))
 }
 
 impl AgentRuntime {
@@ -1193,8 +1186,10 @@ impl AgentRuntime {
     /// `EvalContext.block_height`).
     ///
     /// A node-driven executor gets this from consensus; a local runtime
-    /// defaults to 0. The settlement-cell timeout/deadline gates built by
-    /// [`crate::factories`] read this height.
+    /// starts at [`LOCAL_RUNTIME_START_HEIGHT`]. The settlement-cell
+    /// timeout/deadline gates built by [`crate::factories`] read this height,
+    /// and it is the clock every turn's `valid_until` (a block height) is
+    /// checked against.
     pub fn set_block_height(&mut self, height: u64) {
         self.executor.set_block_height(height);
     }
@@ -1346,7 +1341,7 @@ impl AgentRuntime {
             call_forest: forest,
             fee,
             memo: None,
-            valid_until: default_valid_until(),
+            valid_until: local_valid_until(self.executor.block_height),
             previous_receipt_hash,
             depends_on: Vec::new(),
             conservation_proof: None,
@@ -1409,7 +1404,7 @@ impl AgentRuntime {
             call_forest: forest,
             fee,
             memo: None,
-            valid_until: default_valid_until(),
+            valid_until: local_valid_until(self.executor.block_height),
             previous_receipt_hash: None,
             depends_on: Vec::new(),
             conservation_proof: None,
@@ -1809,6 +1804,7 @@ impl AgentRuntime {
             // WAVE A / WELD — a freshly spawned worker is NOT enveloped until the
             // gateway pins the owner key (`admit_enveloped_owned`); default `None`.
             owner_envelope_pubkey: None,
+            block_height: self.executor.block_height,
         })
     }
 }
@@ -2005,6 +2001,10 @@ pub struct SubAgent {
     /// key, still cannot forge it (safety). `None` for a non-enveloped worker
     /// (byte-unchanged).
     owner_envelope_pubkey: Option<[u8; 32]>,
+    /// The parent runtime's executor height at spawn. The fresh executor
+    /// [`Self::execute_method`] builds runs at it, and the worker turn's
+    /// `valid_until` (a block height) is counted from it.
+    block_height: u64,
 }
 
 impl SubAgent {
@@ -2158,6 +2158,9 @@ impl SubAgent {
             // of federation — but keeping the executor on the same federation
             // keeps signing/domain context consistent.
             e.set_local_federation_id(self.federation_id);
+            // The parent runtime's height at spawn: the worker turn's deadline is counted
+            // from it and checked against it.
+            e.set_block_height(self.block_height);
             // WAVE A / WELD — OWNER LIVENESS: an ENVELOPED worker's fresh executor
             // registers the owner-envelope verifier for the renter/owner key pinned
             // at rent, so a VALID owner-signed `Authorization::Custom` on a
@@ -2219,7 +2222,7 @@ impl SubAgent {
             call_forest: forest,
             fee: 5_000,
             memo: None,
-            valid_until: default_valid_until(),
+            valid_until: local_valid_until(self.block_height),
             previous_receipt_hash,
             depends_on: Vec::new(),
             conservation_proof: None,
@@ -2259,91 +2262,88 @@ impl SubAgent {
     }
 }
 
-/// Issue #46 (github.com/emberian/dregg): the SDK's turn-construction sites stamped
-/// `valid_until: None`, which the Lean producer's wire marshal rejects — silently demoting
-/// every SDK-built turn to the legacy Rust producer, forever. Pin `default_valid_until()`'s
-/// contract directly so the sentinel can never regress back to `None` unnoticed.
+/// Issue #46: the in-process runtime's turns carry a height deadline, and its executor has a
+/// height to check it against.
 #[cfg(test)]
-mod default_valid_until_tests {
+mod local_deadline_tests {
     use super::*;
 
-    /// The sentinel must be `Some` (a `None` here is exactly the bug: it silently falls the
-    /// turn off the verified Lean producer to the legacy Rust producer — see module docs on
-    /// `default_valid_until`).
-    #[test]
-    fn default_valid_until_is_some() {
-        assert!(
-            default_valid_until().is_some(),
-            "a None here silently falls every SDK-built turn off the verified Lean producer \
-             (issue #46) — the sentinel must always be Some"
-        );
+    fn runtime() -> AgentRuntime {
+        AgentRuntime::new(Arc::new(RwLock::new(AgentCipherclerk::new())), "deadline")
     }
 
-    /// The stamped deadline must be strictly in the future (wall-clock `now` at the call site,
-    /// which is always <= `now` observed here) and within the declared horizon — never a block
-    /// height (which would already be in the past as a timestamp and expire the turn on arrival).
-    #[test]
-    fn default_valid_until_is_a_future_wall_clock_horizon() {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-        let stamped =
-            default_valid_until().expect("must be Some, see default_valid_until_is_some");
-        assert!(
-            stamped > now,
-            "stamped valid_until ({stamped}) must be strictly after now ({now}), or the turn \
-             expires before it can ever be submitted"
-        );
-        assert!(
-            stamped <= now + SDK_TURN_VALIDITY_HORIZON_SECS,
-            "stamped valid_until ({stamped}) must not exceed the declared horizon (now={now} + \
-             {SDK_TURN_VALIDITY_HORIZON_SECS}s)"
-        );
-    }
-
-    /// Ratchet against the unbounded `valid_until` sentinel regrowing in a `Turn` literal
-    /// this crate builds for production use.
-    ///
-    /// `default_valid_until()` above exists precisely so every `Turn`-constructing site in
-    /// this crate can share ONE horizon policy instead of re-deriving (or omitting) it. This
-    /// test doesn't re-assert that function's own contract (the two tests above already do) —
-    /// it pins the narrower, source-level fact that regressed here twice already: `runtime.rs`
-    /// itself (issue #46) and then `cipherclerk.rs` / `committed_turn.rs` (7 more sites, found
-    /// in the same sweep that produced this test). `include_str!` reads each file at COMPILE
-    /// time, so this cannot go stale against what actually ships — it fails the moment a
-    /// `Turn { .. }` literal in any of these files spells out the sentinel again (`valid_until`
-    /// bound to a bare `None`, trailing comma), by any author, in any function added later to
-    /// these same files. This file (`runtime.rs`) is itself among the files scanned, which is
-    /// why the needle below is assembled at runtime rather than written as one literal — a
-    /// literal copy of it here would trivially match itself via `include_str!`.
-    ///
-    /// Deliberately excludes `sdk/src/tool_gateway.rs`: its one occurrence builds a `Turn`
-    /// that is only ever `.hash()`-ed for local bookkeeping (`PendingTurnRegistry`) and never
-    /// reaches a `TurnExecutor` — a real Turn-shaped value, but not an instance of this bug,
-    /// so ratcheting it here would be scanning for the wrong thing.
-    #[test]
-    fn no_sdk_turn_builder_rebuilds_the_unbounded_valid_until_sentinel() {
-        let files: &[(&str, &str)] = &[
-            ("runtime.rs", include_str!("runtime.rs")),
-            ("cipherclerk.rs", include_str!("cipherclerk.rs")),
-            ("committed_turn.rs", include_str!("committed_turn.rs")),
-        ];
-        // Assembled rather than written as one literal: this file is itself in `files`
-        // above, so a literal copy of the full needle here would match itself.
-        let sentinel_field = "valid_until";
-        let sentinel_value = "None";
-        let needle = format!("{sentinel_field}: {sentinel_value},");
-        for (name, src) in files {
-            assert!(
-                !src.contains(&needle),
-                "{name} builds a Turn with `{sentinel_field}` bound to a bare `{sentinel_value}` \
-                 — this turn will NEVER expire (the executor's expiration check is skipped \
-                 entirely when this field is `{sentinel_value}`, turn/src/executor/execute.rs:426) \
-                 and falls off the verified Lean producer (issue #46). Use \
-                 `crate::runtime::default_valid_until()` instead, as every other Turn literal in \
-                 these files now does."
-            );
+    /// An unsigned one-action turn from the runtime's agent with the given deadline. The
+    /// deadline leg runs before authorization, so the refusals below need no signature.
+    fn turn_with_deadline(rt: &AgentRuntime, valid_until: i64) -> Turn {
+        let mut forest = CallForest::new();
+        forest.add_root(raw::unsigned_action_named(
+            rt.cell_id,
+            "execute",
+            vec![Effect::SetField {
+                cell: rt.cell_id,
+                index: 0,
+                value: [1u8; 32],
+            }],
+        ));
+        Turn {
+            agent: rt.cell_id,
+            nonce: 0,
+            call_forest: forest,
+            fee: 10_000,
+            memo: None,
+            valid_until: Some(valid_until),
+            previous_receipt_hash: None,
+            depends_on: Vec::new(),
+            conservation_proof: None,
+            sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
+            custom_program_proofs: None,
+            effect_binding_proofs: Vec::new(),
+            cross_effect_dependencies: Vec::new(),
+            effect_witness_index_map: Vec::new(),
         }
+    }
+
+    fn refusal(rt: &AgentRuntime, turn: &Turn) -> dregg_turn::TurnError {
+        let mut ledger = rt.ledger.lock().unwrap();
+        match rt.run_turn(turn, &mut ledger) {
+            TurnResult::Rejected { reason, .. } => reason,
+            other => panic!("expected a rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_fresh_runtime_and_its_stamp_have_a_height() {
+        let rt = runtime();
+        assert_eq!(rt.block_height(), LOCAL_RUNTIME_START_HEIGHT);
+        assert!(
+            LOCAL_RUNTIME_START_HEIGHT > 0,
+            "height 0 refuses every deadline"
+        );
+        assert_eq!(
+            local_valid_until(rt.block_height()),
+            Some(LOCAL_RUNTIME_START_HEIGHT as i64 + 1800)
+        );
+    }
+
+    /// The in-process check is live: at runtime height 10 a deadline of 9 is refused as
+    /// expired, and a Unix-seconds deadline is refused as beyond the horizon.
+    #[test]
+    fn the_in_process_executor_checks_the_deadline_against_its_height() {
+        let mut rt = runtime();
+        rt.set_block_height(10);
+        assert_eq!(
+            refusal(&rt, &turn_with_deadline(&rt, 9)),
+            dregg_turn::TurnError::Expired {
+                valid_until: 9,
+                height: 10
+            }
+        );
+        assert!(matches!(
+            refusal(&rt, &turn_with_deadline(&rt, 1_760_000_000)),
+            dregg_turn::TurnError::DeadlineBeyondHorizon { .. }
+        ));
     }
 }

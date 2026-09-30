@@ -3598,10 +3598,13 @@ impl AgentCipherclerk {
                 forest_hash: [0u8; 32],
             },
             memo: None,
-            // `valid_until: None` skips the executor's expiration check entirely
-            // (`turn/src/executor/execute.rs:426`) and falls this turn off the verified
-            // Lean producer (issue #46) — bound it with the crate's shared horizon instead.
-            valid_until: crate::runtime::default_valid_until(),
+            // A SKELETON: this builder has no chain height, so it cannot choose a deadline.
+            // The caller stamps `valid_until = dregg_turn::valid_until_at(latest_height,
+            // horizon)` before signing (`NodeHttpClient::submit_turn` and
+            // `deos_server::fire_affordance` do); left `None`, the turn never expires and
+            // falls off the verified Lean producer.
+            // ast-grep-ignore: turn-valid-until-none
+            valid_until: None,
             previous_receipt_hash: self.agent_receipt_head_hash(&agent),
             depends_on: Vec::new(),
             conservation_proof: None,
@@ -3653,7 +3656,8 @@ impl AgentCipherclerk {
     ///     vec![Effect::Transfer { from: target, to: target, amount: 100 }],
     ///     "transfer",
     ///     "balance",
-    ///     100, // fee
+    ///     100,  // fee
+    ///     1800, // valid_until: a block height, e.g. valid_until_at(latest_height, 1800)
     /// ).unwrap();
     /// ```
     pub fn build_authorized_turn(
@@ -3664,6 +3668,7 @@ impl AgentCipherclerk {
         action_name: &str,
         resource_name: &str,
         fee: u64,
+        valid_until: i64,
     ) -> Result<SignedTurn, SdkError> {
         use dregg_token::AuthRequest;
         use dregg_turn::action::{Action, Authorization, DelegationMode};
@@ -3725,10 +3730,9 @@ impl AgentCipherclerk {
                 forest_hash: [0u8; 32],
             },
             memo: None,
-            // `valid_until: None` skips the executor's expiration check entirely
-            // (`turn/src/executor/execute.rs:426`) and falls this turn off the verified
-            // Lean producer (issue #46) — bound it with the crate's shared horizon instead.
-            valid_until: crate::runtime::default_valid_until(),
+            // The caller's deadline, a block height (`dregg_turn::valid_until_at`): this
+            // turn is signed here, so it cannot be stamped afterwards.
+            valid_until: Some(valid_until),
             previous_receipt_hash: self.agent_receipt_head_hash(&agent),
             depends_on: Vec::new(),
             conservation_proof: None,
@@ -5033,6 +5037,7 @@ impl AgentCipherclerk {
     /// * `recipients` - (amount, recipient_pubkey) pairs for outputs.
     /// * `domain` - Domain string for deriving the agent's cell ID.
     /// * `nonce` - Replay-protection nonce.
+    /// * `valid_until` - The deadline, a block height (`dregg_turn::valid_until_at`).
     ///
     /// # Returns
     ///
@@ -5044,6 +5049,7 @@ impl AgentCipherclerk {
         recipients: &[(u64, [u8; 32])],
         domain: &str,
         nonce: u64,
+        valid_until: i64,
     ) -> Result<Turn, crate::error::SdkError> {
         use crate::committed_turn::{
             CommittedNoteInput, CommittedNoteOutput, CommittedTurnBuilder,
@@ -5066,7 +5072,7 @@ impl AgentCipherclerk {
             });
         }
 
-        builder.build(agent_cell, nonce, 0)
+        builder.build(agent_cell, nonce, 0, valid_until)
     }
 
     // =========================================================================
@@ -5153,6 +5159,7 @@ impl AgentCipherclerk {
     /// * `amount` - The value to transfer.
     /// * `asset_type` - The asset type identifier.
     /// * `recipient_meta` - The recipient's stealth meta-address.
+    /// * `valid_until` - The deadline, a block height (`dregg_turn::valid_until_at`).
     ///
     /// # Returns
     ///
@@ -5162,6 +5169,7 @@ impl AgentCipherclerk {
         amount: u64,
         asset_type: u64,
         recipient_meta: &StealthMetaAddress,
+        valid_until: i64,
     ) -> Result<Turn, SdkError> {
         use crate::committed_turn::{CommittedNoteOutput, CommittedTurnBuilder};
 
@@ -5184,7 +5192,7 @@ impl AgentCipherclerk {
         // Note: In a full implementation, the caller would provide input notes to
         // spend. For the API surface, we build a turn with just the output --
         // the caller can use build_committed_transfer() for full input/output flows.
-        builder.build(agent_cell, nonce, 0)
+        builder.build(agent_cell, nonce, 0, valid_until)
     }
 
     // =========================================================================
@@ -5200,11 +5208,12 @@ impl AgentCipherclerk {
     /// # Arguments
     ///
     /// * `cell_id` - The cell to make sovereign. Must be a cell we own.
+    /// * `valid_until` - The deadline, a block height (`dregg_turn::valid_until_at`).
     ///
     /// # Returns
     ///
     /// A [`Turn`] containing an `Effect::MakeSovereign` action ready for signing.
-    pub fn make_sovereign(&mut self, cell_id: &CellId) -> Result<Turn, SdkError> {
+    pub fn make_sovereign(&mut self, cell_id: &CellId, valid_until: i64) -> Result<Turn, SdkError> {
         let agent_cell = *cell_id;
         let nonce = self.agent_receipt_count(&agent_cell) as u64;
 
@@ -5226,10 +5235,7 @@ impl AgentCipherclerk {
             call_forest: forest,
             fee: 0,
             memo: Some("make_sovereign".to_string()),
-            // `valid_until: None` skips the executor's expiration check entirely
-            // (`turn/src/executor/execute.rs:426`) and falls this turn off the verified
-            // Lean producer (issue #46) — bound it with the crate's shared horizon instead.
-            valid_until: crate::runtime::default_valid_until(),
+            valid_until: Some(valid_until),
             previous_receipt_hash: self.agent_receipt_head_hash(&agent_cell),
             depends_on: Vec::new(),
             conservation_proof: None,
@@ -5256,6 +5262,7 @@ impl AgentCipherclerk {
     /// * `cell_id` - The sovereign cell to target.
     /// * `effects` - The effects to apply.
     /// * `fee` - The computron fee for this turn.
+    /// * `valid_until` - The deadline, a block height (`dregg_turn::valid_until_at`).
     ///
     /// # Returns
     ///
@@ -5265,6 +5272,7 @@ impl AgentCipherclerk {
         cell_id: &CellId,
         effects: Vec<Effect>,
         fee: u64,
+        valid_until: i64,
     ) -> Result<Turn, SdkError> {
         // 1. Get our local cell state.
         let cell_state = self
@@ -5375,10 +5383,7 @@ impl AgentCipherclerk {
             call_forest: forest,
             fee,
             memo: None,
-            // `valid_until: None` skips the executor's expiration check entirely
-            // (`turn/src/executor/execute.rs:426`) and falls this turn off the verified
-            // Lean producer (issue #46) — bound it with the crate's shared horizon instead.
-            valid_until: crate::runtime::default_valid_until(),
+            valid_until: Some(valid_until),
             previous_receipt_hash: self.agent_receipt_head_hash(&agent_cell),
             depends_on: Vec::new(),
             conservation_proof: None,
@@ -6090,10 +6095,12 @@ impl AgentCipherclerk {
             call_forest: forest,
             fee,
             memo: Some("sovereign_proof_carrying_rotated".to_string()),
-            // `valid_until: None` skips the executor's expiration check entirely
-            // (`turn/src/executor/execute.rs:426`) and falls this turn off the verified
-            // Lean producer (issue #46) — bound it with the crate's shared horizon instead.
-            valid_until: crate::runtime::default_valid_until(),
+            // The verifier executes this turn at `block_height` (see the doc above), so the
+            // deadline is counted from it.
+            valid_until: Some(dregg_turn::valid_until_at(
+                block_height,
+                dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+            )),
             previous_receipt_hash: self.agent_receipt_head_hash(&agent_cell),
             depends_on: Vec::new(),
             conservation_proof: None,
@@ -6445,10 +6452,10 @@ impl AgentCipherclerk {
             call_forest: forest,
             fee,
             memo: Some("sovereign_proof_carrying_rotated_chain".to_string()),
-            // `valid_until: None` skips the executor's expiration check entirely
-            // (`turn/src/executor/execute.rs:426`) and falls this turn off the verified
-            // Lean producer (issue #46) — bound it with the crate's shared horizon instead.
-            valid_until: crate::runtime::default_valid_until(),
+            valid_until: Some(dregg_turn::valid_until_at(
+                block_height,
+                dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+            )),
             previous_receipt_hash: self.agent_receipt_head_hash(&agent_cell),
             depends_on: Vec::new(),
             conservation_proof: None,
@@ -8574,10 +8581,12 @@ mod tests {
         let mut cclerk = AgentCipherclerk::new();
         let cell_id = cclerk.cell_id("test");
 
-        let turn = cclerk.make_sovereign(&cell_id).unwrap();
+        let turn = cclerk.make_sovereign(&cell_id, 1_801).unwrap();
 
         // The turn targets the cell we specified.
         assert_eq!(turn.agent, cell_id);
+        // It carries exactly the caller's deadline, a block height.
+        assert_eq!(turn.valid_until, Some(1_801));
         // It should have one action with MakeSovereign effect.
         assert_eq!(turn.action_count(), 1);
         // Sovereign witnesses should be empty (not needed for MakeSovereign).
@@ -8592,7 +8601,7 @@ mod tests {
         let cell_id = cclerk.cell_id("test");
 
         // Without stored state, should fail.
-        let result = cclerk.execute_sovereign_turn(&cell_id, vec![], 0);
+        let result = cclerk.execute_sovereign_turn(&cell_id, vec![], 0, 1_801);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("no local sovereign state"));
@@ -8617,7 +8626,7 @@ mod tests {
             amount: 100,
         }];
         let turn = cclerk
-            .execute_sovereign_turn(&cell_id, effects, 10)
+            .execute_sovereign_turn(&cell_id, effects, 10, 1_801)
             .unwrap();
 
         // Turn should reference the cell.

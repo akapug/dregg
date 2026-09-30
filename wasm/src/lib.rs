@@ -2967,9 +2967,14 @@ pub fn cipherclerk_post_encrypted_intent(spec_json: &str) -> Result<JsValue, JsE
 ///   "recipient_meta": {
 ///     "spend_pubkey": [32 bytes as number[]],
 ///     "view_pubkey":  [32 bytes as number[]]
-///   }
+///   },
+///   "valid_until": <i64>
 /// }
 /// ```
+///
+/// `valid_until` is required and is a BLOCK HEIGHT (the node's `latest_height` from
+/// `GET /status` plus the blocks the turn may wait), not a Unix timestamp. It is covered by
+/// the turn hash the conservation proof binds, so it is decided here, not stamped later.
 ///
 /// Returns JSON: `{ turn_id: <hex>, turn_bytes: Uint8Array,
 /// agent_cell_id: <hex> }`. `turn_bytes` is the postcard-serialized
@@ -2993,6 +2998,7 @@ pub fn cipherclerk_private_transfer(spec_json: &str) -> Result<JsValue, JsError>
         #[serde(default)]
         asset_type: u64,
         recipient_meta: MetaInput,
+        valid_until: i64,
     }
 
     let spec: Spec = serde_json::from_str(spec_json).map_err(|e| JsError::new(&e.to_string()))?;
@@ -3024,7 +3030,7 @@ pub fn cipherclerk_private_transfer(spec_json: &str) -> Result<JsValue, JsError>
 
     let mut cclerk = AgentCipherclerk::from_key_bytes(Zeroizing::new(seed));
     let turn = cclerk
-        .private_transfer(spec.amount, spec.asset_type, &meta)
+        .private_transfer(spec.amount, spec.asset_type, &meta, spec.valid_until)
         .map_err(|e| JsError::new(&format!("private_transfer failed: {e}")))?;
 
     let turn_bytes = postcard::to_allocvec(&turn)

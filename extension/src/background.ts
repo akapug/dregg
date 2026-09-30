@@ -252,6 +252,10 @@ const CAP_SESSION_KEY = "dregg_cap_session";
 // Node configuration
 // ---------------------------------------------------------------------------
 
+/** Heights past the node's `latest_height` a turn this extension builds stays admissible.
+ * Mirrors `dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS`. */
+const TURN_VALIDITY_HORIZON_BLOCKS = 1800;
+
 let nodeConfig: NodeConfig = {
   nodeUrl: DEFAULT_NODE_URL,
   wssUrl: DEFAULT_NODE_WSS_URL,
@@ -5829,6 +5833,19 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
       const assetTypeU64 = typeof assetType === "number"
         ? assetType
         : (typeof assetType === "string" && /^[0-9]+$/.test(assetType) ? parseInt(assetType, 10) : 0);
+      // The turn's deadline is a BLOCK HEIGHT: the node's latest_height plus the default
+      // horizon (dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS). It is bound into the turn
+      // hash the conservation proof covers, so it is decided before the turn is built.
+      const heightResp = await nodeRequest<{ latest_height?: number }>(nodeConfig, "/status");
+      if (!heightResp.ok || typeof heightResp.data?.latest_height !== "number") {
+        return {
+          id: message.id,
+          error: `private transfer needs the node's latest_height for its deadline: ${
+            heightResp.ok ? "/status carries no latest_height" : heightResp.error
+          }`,
+        };
+      }
+      const validUntil = heightResp.data.latest_height + TURN_VALIDITY_HORIZON_BLOCKS;
       try {
         const result = w.cipherclerk_private_transfer(JSON.stringify({
           sender_privkey: cc.secretKey,
@@ -5838,6 +5855,7 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
             spend_pubkey: recipientMeta.spendPubkey,
             view_pubkey: recipientMeta.viewPubkey,
           },
+          valid_until: validUntil,
         }));
         const submitResult = await signAndSubmitBuiltTurn({
           turnBytes: new Uint8Array(result.turn_bytes),

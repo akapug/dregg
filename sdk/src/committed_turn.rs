@@ -133,7 +133,16 @@ impl CommittedTurnBuilder {
     /// * `agent_cell` - The agent's cell ID (turn initiator).
     /// * `nonce` - Replay-protection nonce.
     /// * `fee` - Computron fee for this turn.
-    pub fn build(&self, agent_cell: CellId, nonce: u64, fee: u64) -> Result<Turn, SdkError> {
+    /// * `valid_until` - The deadline, a block height (`dregg_turn::valid_until_at`). A
+    ///   parameter, not something the caller stamps afterwards: the conservation proof is
+    ///   bound to the turn hash, which covers `valid_until`.
+    pub fn build(
+        &self,
+        agent_cell: CellId,
+        nonce: u64,
+        fee: u64,
+        valid_until: i64,
+    ) -> Result<Turn, SdkError> {
         if self.inputs.is_empty() && self.outputs.is_empty() {
             return Err(SdkError::InvalidWitness(
                 "committed turn must have at least one input or output".into(),
@@ -279,10 +288,7 @@ impl CommittedTurnBuilder {
             call_forest,
             fee,
             memo: Some("committed transfer".into()),
-            // `valid_until: None` skips the executor's expiration check entirely
-            // (`turn/src/executor/execute.rs:426`) and falls this turn off the verified
-            // Lean producer (issue #46) — bound it with the crate's shared horizon instead.
-            valid_until: crate::runtime::default_valid_until(),
+            valid_until: Some(valid_until),
             previous_receipt_hash: None,
             depends_on: Vec::new(),
             conservation_proof: None,
@@ -435,7 +441,7 @@ mod tests {
         builder.add_input(input);
         builder.add_output(output);
 
-        let turn = builder.build(agent_cell, 0, 0).unwrap();
+        let turn = builder.build(agent_cell, 0, 0, 1_801).unwrap();
 
         // The turn should have a conservation proof.
         assert!(turn.conservation_proof.is_some());
@@ -499,7 +505,7 @@ mod tests {
         builder.add_output(output1);
         builder.add_output(output2);
 
-        let turn = builder.build(agent_cell, 1, 0).unwrap();
+        let turn = builder.build(agent_cell, 1, 0, 1_801).unwrap();
 
         // Deserialize the conservation proof.
         let proof_bytes = turn.conservation_proof.as_ref().unwrap();
@@ -572,7 +578,7 @@ mod tests {
         builder.add_input(input);
         builder.add_output(output);
 
-        let turn = builder.build(agent_cell, 2, 0).unwrap();
+        let turn = builder.build(agent_cell, 2, 0, 1_801).unwrap();
 
         // Deserialize and verify -- should FAIL because values don't balance.
         let proof_bytes = turn.conservation_proof.as_ref().unwrap();
@@ -617,7 +623,7 @@ mod tests {
     fn test_committed_turn_empty_rejected() {
         let agent_cell = CellId([0xAA; 32]);
         let builder = CommittedTurnBuilder::new();
-        let result = builder.build(agent_cell, 0, 0);
+        let result = builder.build(agent_cell, 0, 0, 1_801);
         assert!(result.is_err());
     }
 
@@ -654,7 +660,7 @@ mod tests {
         let mut builder = CommittedTurnBuilder::new();
         builder.add_input(input);
         builder.add_output(output);
-        let turn = builder.build(agent_cell, 7, 0).unwrap();
+        let turn = builder.build(agent_cell, 7, 0, 1_801).unwrap();
 
         // Pull the encrypted_note out of the NoteCreate effect.
         let create = turn.call_forest.roots[0]
@@ -765,7 +771,7 @@ mod tests {
             builder.add_output(out.clone());
         }
 
-        let turn = builder.build(agent_cell, 3, 0).unwrap();
+        let turn = builder.build(agent_cell, 3, 0, 1_801).unwrap();
         assert!(turn.conservation_proof.is_some());
 
         // Verify.

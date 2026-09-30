@@ -184,7 +184,9 @@ pub struct EngineConfig {
     /// This federation's identity (32-byte hash). Used for cross-federation
     /// replay prevention in turn signatures.
     pub federation_id: [u8; 32],
-    /// Initial block height.
+    /// Initial block height: precondition evaluation, and the clock every turn's
+    /// `valid_until` (a block height) is checked against. At 0 the engine has no height and
+    /// refuses every turn that carries a deadline (`dregg_turn::check_deadline`).
     pub block_height: u64,
     /// Initial timestamp (unix seconds).
     ///
@@ -827,12 +829,14 @@ impl DreggEngine {
     // Executor configuration pass-through
     // =========================================================================
 
-    /// Update the current block height (for precondition evaluation).
+    /// Update the current block height (precondition evaluation, and the clock turn
+    /// deadlines are checked against).
     pub fn set_block_height(&mut self, height: u64) {
         self.executor.set_block_height(height);
     }
 
-    /// Update the current timestamp (for expiration checks).
+    /// Update the current timestamp (proof freshness and preconditions; turn deadlines are
+    /// block heights, see [`Self::set_block_height`]).
     pub fn set_timestamp(&mut self, ts: i64) {
         self.executor.set_timestamp(ts);
     }

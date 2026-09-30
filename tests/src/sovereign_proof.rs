@@ -202,14 +202,21 @@ fn test_backward_compat_witness_path_still_works() {
     }];
 
     let turn = cclerk
-        .execute_sovereign_turn(&cell_id, effects, 500)
+        .execute_sovereign_turn(
+            &cell_id,
+            effects,
+            500,
+            dregg_turn::valid_until_at(1, dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS),
+        )
         .expect("should build witness-based turn");
 
     // Verify it has witnesses but NO execution proof.
     assert!(turn.execution_proof.is_none());
     assert!(!turn.sovereign_witnesses.is_empty());
 
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let mut executor = TurnExecutor::new(ComputronCosts::zero());
+    // The deadline above is a block height counted from 1; a height-0 executor refuses it.
+    executor.set_block_height(1);
     let result = executor.execute(&turn, &mut ledger);
 
     match result {

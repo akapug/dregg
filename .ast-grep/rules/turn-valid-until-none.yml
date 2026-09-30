@@ -1,0 +1,67 @@
+# THE UNBOUNDED-DEADLINE GATE (ast-grep).
+#
+# `Turn.valid_until` is a block height (decided 2026-09-29, issue #46). `None` means the turn
+# NEVER expires, and the verified Lean producer's wire marshal refuses it
+# (`lean_shadow::turn_to_wire_turn`: "turn.valid_until required for wire marshal"), so a
+# `None` turn silently falls off the verified producer onto the legacy Rust path. Stamp it
+# instead: `dregg_turn::valid_until_at(height, dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS)`,
+# where `height` is the attested height the turn is built against (inside a node,
+# `executor_setup::default_valid_until(s)`).
+#
+# This replaces the `include_str!` text ratchets PRs #78 / #81 / #82 / #83 / #84 carried: a
+# search for the string `valid_until: None,` is evaded by `None }`, `Option::None`, a new
+# file, or a formatter. This matches the Rust AST: a struct literal named `Turn` (bare or
+# path-qualified) with a `valid_until` field initialised to `None`.
+#
+# Scope: the production source of the five crates those PRs covered. `#[cfg(test)]` modules
+# are excluded structurally (the faithful-commitment rule's recipe). Two kinds of test file
+# carry no attribute of their own, because the `#[cfg(test)]` sits on the `mod` declaration in
+# the parent: the node's `*_e2e.rs` modules and `tests.rs` modules (`coord/src/tests.rs`).
+# They are ignored by path.
+#
+# A deliberate `None` in production — a skeleton the caller must stamp before signing, or a
+# turn that is only hashed and never executed — carries its reason in a comment, then
+# `// ast-grep-ignore: turn-valid-until-none` on its own line directly above the field.
+#
+# Run: bash scripts/check-turn-valid-until.sh   (and `--self-test`), rows in scripts/local-gates.sh.
+id: turn-valid-until-none
+language: rust
+severity: error
+files:
+  - "sdk/src/**/*.rs"
+  - "node/src/**/*.rs"
+  - "intent/src/**/*.rs"
+  - "starbridge-v2/src/**/*.rs"
+  - "coord/src/**/*.rs"
+ignores:
+  - "node/src/**/*_e2e.rs"
+  - "**/tests.rs"
+rule:
+  # The match is the `valid_until: None` FIELD (so a suppression sits on the line above that
+  # field, next to its reason), inside the field list of a struct literal named `Turn`.
+  all:
+    - kind: field_initializer
+    - has: {field: field, regex: '^valid_until$'}
+    - has: {field: value, regex: '^(Option::)?None$'}
+    - inside:
+        kind: field_initializer_list
+        inside:
+          kind: struct_expression
+          has:
+            field: name
+            regex: '(^|::)Turn$'
+    - not:
+        inside:
+          kind: mod_item
+          stopBy: end
+          follows:
+            kind: attribute_item
+            regex: "cfg\\(test\\)"
+message: >-
+  A `Turn` literal with `valid_until: None` in production source: the turn never expires and
+  falls off the verified Lean producer (the wire marshal requires a deadline). `valid_until` is
+  a block height; stamp it with `dregg_turn::valid_until_at(height,
+  dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS)` (in a node, `executor_setup::default_valid_until(s)`).
+  If the `None` is deliberate (a skeleton the caller stamps before signing, or a turn that is
+  never executed), write the reason in a comment and put
+  `// ast-grep-ignore: turn-valid-until-none` on its own line directly above the field.

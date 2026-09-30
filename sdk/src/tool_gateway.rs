@@ -1313,6 +1313,9 @@ impl ToolGateway {
             call_forest: forest,
             fee: 5_000,
             memo: None,
+            // Never executed: this turn is only hashed and parked in `PendingTurnRegistry`,
+            // so no executor ever checks a deadline on it.
+            // ast-grep-ignore: turn-valid-until-none
             valid_until: None,
             depends_on: Vec::new(),
             conservation_proof: None,
