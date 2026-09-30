@@ -396,6 +396,9 @@ fn handle_submit(node: &mut TestNode, body: &[u8]) -> (u16, serde_json::Value) {
     let mut executor = TurnExecutor::new(costs);
     executor.set_local_federation_id(node.fed_id);
     executor.set_timestamp(0);
+    // The height a node's submit executor runs at: the attested height `/status` serves, plus
+    // one (`executor_setup::BlockHeightMode::Next`). `valid_until` is checked against it.
+    executor.set_block_height(node.receipts.len() as u64 + 1);
     match executor.execute(&signed.turn, &mut node.ledger) {
         TurnResult::Committed { receipt, .. } => {
             node.receipts.push(receipt);

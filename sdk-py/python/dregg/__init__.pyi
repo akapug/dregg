@@ -106,8 +106,11 @@ class TurnBuilder:
     def nonce(self, nonce: int) -> "TurnBuilder":
         """Pin the turn nonce explicitly (else `.sign()` fetches the live
         nonce)."""
-    def valid_until(self, unix_secs: int) -> "TurnBuilder":
-        """Pin the validity horizon (unix seconds). Default now + 3600."""
+    def valid_until(self, height: int) -> "TurnBuilder":
+        """Pin the deadline: the last block HEIGHT at which the node admits the
+        turn (not a Unix timestamp; a value more than 2**20 heights past the
+        node's height is refused). Default: the node's `latest_height` from
+        /status plus 1800."""
     def sign(self) -> "AuthorizedTurn":
         """Sign the staged turn, yielding an AuthorizedTurn ready to
         `.submit()`. Refuses an empty turn."""

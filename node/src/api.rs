@@ -5030,29 +5030,6 @@ pub(crate) async fn enqueue_async_proof(
     }
 }
 
-/// Validity horizon (wall-clock seconds) stamped onto operator-constructed
-/// turns at the API boundary. Generous for a turn that executes immediately on
-/// the submit path; bounded so a replayed envelope eventually expires.
-const DEFAULT_TURN_VALIDITY_HORIZON_SECS: i64 = 3600;
-
-/// Default `valid_until` for turns the node constructs itself (the thin-HTTP
-/// `/turn/submit` and faucet paths).
-///
-/// The Lean producer's wire marshal REQUIRES the turn envelope's `valid_until`
-/// (`lean_shadow::turn_to_wire_turn`); a `None` here meant every thin-HTTP turn
-/// fell off the verified Lean producer back to the legacy Rust producer,
-/// per-turn, forever ("turn.valid_until required for wire marshal"). The Rust
-/// executor enforces `current_timestamp <= valid_until` (a TIMESTAMP deadline,
-/// not a height), so the default is wall-clock now + a horizon — never a block
-/// height, which would be in the past as a timestamp and expire every turn.
-fn default_valid_until() -> Option<i64> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    Some(now + DEFAULT_TURN_VALIDITY_HORIZON_SECS)
-}
-
 /// Build a 200-with-error `SubmitTurnResponse` for a malformed action/effect
 /// spec. Returns `Ok(...)` so the body carries the diagnostic rather than an
 /// opaque 4xx status (matching the rest of this handler's error reporting).
@@ -5228,9 +5205,9 @@ async fn post_submit_turn(
         nonce: effective_nonce,
         fee: req.fee,
         memo: req.memo,
-        // Stamped so the wire marshal accepts the envelope and the turn stays
-        // on the verified Lean producer (see `default_valid_until`).
-        valid_until: default_valid_until(),
+        // A height deadline (`executor_setup::default_valid_until`): the wire marshal
+        // requires one, and the executor checks it against its block height.
+        valid_until: crate::executor_setup::default_valid_until(&s),
         call_forest,
         depends_on: vec![],
         previous_receipt_hash,
@@ -9520,9 +9497,9 @@ async fn post_faucet(
         nonce: faucet_nonce,
         fee: 0, // sized to the estimated cost below so the budget gate passes
         memo: Some(format!("faucet_transfer:{}", req.amount)),
-        // Stamped so the wire marshal accepts the envelope and the turn stays
-        // on the verified Lean producer (see `default_valid_until`).
-        valid_until: default_valid_until(),
+        // A height deadline (`executor_setup::default_valid_until`): the wire marshal
+        // requires one, and the executor checks it against its block height.
+        valid_until: crate::executor_setup::default_valid_until(&s),
         call_forest,
         depends_on: vec![],
         previous_receipt_hash: faucet_prev_receipt,

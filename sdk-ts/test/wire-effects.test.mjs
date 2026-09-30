@@ -967,7 +967,7 @@ function differential(wasm, rawMod, agent, effects, label) {
     roots: [{ action: signedAction(rawMod, agent, effects), children: [] }],
     fee: 10_000n,
     memo: `fx-${label}`,
-    validUntil: 1765432100n,
+    validUntil: 1800n,
   };
   const jsonBytes = new TextEncoder().encode(JSON.stringify(turnToJson(tsTurn)));
   // Pre-signed (non-Unchecked) actions: the oracle performs a PURE re-encode.

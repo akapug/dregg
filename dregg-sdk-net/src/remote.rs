@@ -43,21 +43,9 @@ use dregg_sdk::cipherclerk::{AgentCipherclerk, SignedTurn};
 use dregg_sdk::error::SdkError;
 use dregg_sdk::raw;
 
-/// Validity horizon stamped on every remote turn: wall-clock now + one hour.
-/// A TIMESTAMP deadline (the executor enforces `current_timestamp <= valid_until`),
-/// matching the node's own `DEFAULT_TURN_VALIDITY_HORIZON_SECS`.
-pub const REMOTE_TURN_VALIDITY_HORIZON_SECS: i64 = 3600;
-
 /// Default fee (computron budget) for remote turns, mirroring the local
 /// runtime's agent-turn default.
 pub const DEFAULT_REMOTE_FEE: u64 = 10_000;
-
-fn now_secs() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
-}
 
 fn hex_decode_32(s: &str) -> Result<[u8; 32], SdkError> {
     let bytes = hex::decode(s).map_err(|e| SdkError::Wire(format!("bad hex from node: {e}")))?;
@@ -73,6 +61,13 @@ fn hex_decode_32(s: &str) -> Result<[u8; 32], SdkError> {
 #[derive(Debug, Deserialize)]
 struct NodeStatusLite {
     executor_federation_id: String,
+}
+
+/// The `/status` field a turn's deadline is computed from. No `#[serde(default)]`: a status
+/// without it is refused, never read as height 0.
+#[derive(Debug, Deserialize)]
+struct NodeHeightLite {
+    latest_height: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -217,6 +212,14 @@ impl RemoteRuntime {
     async fn discover_federation_id(&self) -> Result<[u8; 32], SdkError> {
         let status: NodeStatusLite = self.get_json("/status").await?;
         hex_decode_32(&status.executor_federation_id)
+    }
+
+    /// The node's attested height, `/status.latest_height`: the height a turn's
+    /// `valid_until` is counted from (`dregg_turn::valid_until_at`). A missing field, a
+    /// non-success status or a transport failure is an error.
+    pub async fn latest_height(&self) -> Result<u64, SdkError> {
+        let status: NodeHeightLite = self.get_json("/status").await?;
+        Ok(status.latest_height)
     }
 
     /// The agent cell's live replay counter on the node's ledger (0 when the
@@ -486,11 +489,16 @@ impl RemoteAuthorizedTurn<'_> {
     }
 
     /// Assemble the canonical turn envelope around the signed action with the
-    /// live node bindings. Every remote turn is stamped with `valid_until` —
-    /// load-bearing twice over: the executor's expiry gate AND the verified
+    /// live node bindings. Every remote turn is stamped with `valid_until`, a block
+    /// height — load-bearing twice over: the executor's expiry gate AND the verified
     /// Lean producer's wire marshal (an unstamped turn falls back to the
     /// legacy Rust producer on every node).
-    fn build_turn(&self, nonce: u64, previous_receipt_hash: Option<[u8; 32]>) -> Turn {
+    fn build_turn(
+        &self,
+        nonce: u64,
+        previous_receipt_hash: Option<[u8; 32]>,
+        valid_until: i64,
+    ) -> Turn {
         let mut forest = CallForest::new();
         forest.add_root(self.action.clone());
         Turn {
@@ -498,7 +506,7 @@ impl RemoteAuthorizedTurn<'_> {
             nonce,
             fee: self.fee,
             memo: None,
-            valid_until: Some(now_secs() + REMOTE_TURN_VALIDITY_HORIZON_SECS),
+            valid_until: Some(valid_until),
             call_forest: forest,
             depends_on: vec![],
             previous_receipt_hash,
@@ -530,10 +538,16 @@ impl RemoteAuthorizedTurn<'_> {
         }
         self.submitted = true;
 
+        // The deadline is decided once, from the node's attested height, and kept across the
+        // head-race retry below.
+        let valid_until = dregg_turn::valid_until_at(
+            self.runtime.latest_height().await?,
+            dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+        );
         let mut last_error = String::new();
         for attempt in 0..2 {
             let previous_receipt_hash = self.runtime.agent_receipt_chain_head().await?;
-            let turn = self.build_turn(self.turn_nonce, previous_receipt_hash);
+            let turn = self.build_turn(self.turn_nonce, previous_receipt_hash, valid_until);
             let resp = self.runtime.submit_envelope(&turn).await?;
             if resp.accepted {
                 return Ok(RemoteReceipt {
@@ -945,7 +959,7 @@ mod tests {
         let runtime = offline_runtime();
         let authorized =
             poll_ready(runtime.turn().write_u64(3, 77).sign_at(0)).expect("hybrid sign");
-        let turn = authorized.build_turn(0, None);
+        let turn = authorized.build_turn(0, None, 1 + 1800);
         let Authorization::HybridSignature { ml_dsa_pk, .. } = &authorized.action.authorization
         else {
             panic!("remote action must be hybrid");
@@ -964,6 +978,7 @@ mod tests {
             .insert_cell(cell.clone())
             .expect("fixture cell");
         let mut unenrolled = TurnExecutor::new(ComputronCosts::default());
+        unenrolled.set_block_height(1);
         unenrolled.set_local_federation_id(TEST_FED);
         unenrolled.set_require_pq(true);
         assert!(
@@ -981,6 +996,7 @@ mod tests {
             .insert_cell(cell.clone())
             .expect("fixture cell");
         let mut enrolled = TurnExecutor::new(ComputronCosts::default());
+        enrolled.set_block_height(1);
         enrolled.set_local_federation_id(TEST_FED);
         enrolled.set_require_pq(true);
         enrolled
@@ -1007,9 +1023,9 @@ mod tests {
             poll_ready(runtime.turn().transfer(CellId([9u8; 32]), 5).sign_at(0)).expect("sign");
 
         let prev = Some([0xCD; 32]);
-        let before = now_secs();
-        let turn = authorized.build_turn(41, prev);
-        let after = now_secs();
+        let valid_until =
+            dregg_turn::valid_until_at(500, dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS);
+        let turn = authorized.build_turn(41, prev, valid_until);
 
         assert_eq!(turn.agent, runtime.cell_id());
         assert_eq!(turn.nonce, 41);
@@ -1018,16 +1034,9 @@ mod tests {
         assert_eq!(turn.call_forest.action_count(), 1);
 
         // The valid_until stamp is load-bearing twice over (executor expiry
-        // gate + the verified Lean producer's wire marshal): ALWAYS Some,
-        // wall-clock now + the horizon.
-        let vu = turn
-            .valid_until
-            .expect("remote turns are ALWAYS stamped with valid_until");
-        assert!(
-            vu >= before + REMOTE_TURN_VALIDITY_HORIZON_SECS
-                && vu <= after + REMOTE_TURN_VALIDITY_HORIZON_SECS,
-            "valid_until must be now + horizon (got {vu})"
-        );
+        // gate + the verified Lean producer's wire marshal): ALWAYS Some, and
+        // exactly the height deadline `submit` computed from `/status`.
+        assert_eq!(turn.valid_until, Some(500 + 1800));
 
         // No phantom proof material on a fresh remote turn.
         assert!(turn.conservation_proof.is_none());
@@ -1042,7 +1051,7 @@ mod tests {
         let runtime = offline_runtime();
         let authorized =
             poll_ready(runtime.turn().transfer(CellId([9u8; 32]), 5).sign_at(0)).expect("sign");
-        let turn = authorized.build_turn(0, None);
+        let turn = authorized.build_turn(0, None, 1 + 1800);
 
         let signed = runtime.cipherclerk.sign_turn(&turn);
         let Authorization::HybridSignature {

@@ -40,6 +40,10 @@ async function mockNode({ onEnvelope }) {
     if (req.url === "/api/receipts") {
       return send(200, receipts);
     }
+    if (req.url === "/status") {
+      // `submit()` counts the turn's deadline (a block height) from this.
+      return send(200, { latest_height: receipts.length });
+    }
     if (req.url === "/api/turns/submit-signed" && req.method === "POST") {
       const chunks = [];
       req.on("data", (c) => chunks.push(c));

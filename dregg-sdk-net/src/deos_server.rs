@@ -172,9 +172,10 @@ pub async fn fire_affordance(
 
     // (1) the agent cell's current nonce + its own receipt head off the live node.
     let nonce = fetch_cell_nonce(node_url, &agent).await?;
-    let agent_head = crate::node_world_sink::NodeHttpClient::new(node_url)
-        .fetch_agent_receipt_head(&agent)
-        .await?;
+    let node = crate::node_world_sink::NodeHttpClient::new(node_url);
+    let agent_head = node.fetch_agent_receipt_head(&agent).await?;
+    // The deadline is a block height: the node's attested height plus the default horizon.
+    let latest_height = node.fetch_latest_height().await?;
 
     // (2) build + sign the single-action fire turn.
     let action = signer.make_action(agent, method, effects, &federation_id);
@@ -182,7 +183,10 @@ pub async fn fire_affordance(
     turn.agent = agent;
     turn.nonce = nonce;
     turn.memo = Some(format!("deos_server_{method}"));
-    turn.valid_until = Some(i64::MAX / 2);
+    turn.valid_until = Some(dregg_turn::valid_until_at(
+        latest_height,
+        dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+    ));
     // Thread the AGENT's own receipt head (`None` before its first commit). The node-wide
     // tip is another agent's receipt whenever one committed since, and is refused (#87).
     turn.previous_receipt_hash = agent_head;

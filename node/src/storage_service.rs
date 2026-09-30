@@ -774,17 +774,12 @@ fn commit_operator_turn(
         .map(|c| c.state.nonce())
         .unwrap_or(0);
 
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-
     let mut turn = Turn {
         agent: agent_cell,
         nonce,
         fee: 0,
         memo: None,
-        valid_until: Some(now + 3600),
+        valid_until: crate::executor_setup::default_valid_until(s),
         call_forest,
         depends_on: vec![],
         previous_receipt_hash,

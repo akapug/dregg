@@ -217,7 +217,7 @@ test("differential: TS HYBRID-signed turn == Rust DEFAULT-signed turn, byte for 
     nonce: ORACLE_NONCE,
     fee: 10_000n,
     memo: "differential",
-    validUntil: 1765432100n,
+    validUntil: 1800n,
     previousReceiptHash: cell(0x33),
     dependsOn: [cell(0x44)],
   };

@@ -499,12 +499,13 @@ pub fn client_signed_save(
     turn.previous_receipt_hash = prev_head;
     // Stamp `valid_until` so the turn stays on the verified Lean producer's wire
     // marshal (an unstamped turn falls back to the Rust path; it still commits,
-    // but we keep it on the covered producer to match the operator path).
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    turn.valid_until = Some(now + 3600);
+    // but we keep it on the covered producer to match the operator path). It is a
+    // block height: the node's `latest_height` plus the default horizon.
+    let latest_height = client.status()?.latest_height;
+    turn.valid_until = Some(dregg_turn::valid_until_at(
+        latest_height,
+        dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+    ));
     let signed = clerk.sign_turn(&turn);
 
     // (3) Submit + assert.

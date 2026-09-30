@@ -131,6 +131,8 @@ impl NodeHttpClient {
         // node-wide tip is another agent's receipt whenever one committed since.
         let nonce = self.fetch_cell_nonce(&agent).await?;
         let agent_head = self.fetch_agent_receipt_head(&agent).await?;
+        // The deadline is a block height: the node's attested height plus the default horizon.
+        let latest_height = self.fetch_latest_height().await?;
 
         // (2) build + sign the single-action fire turn (the deos_server shape).
         let action = signer.make_action(agent, method, effects, federation_id);
@@ -138,7 +140,10 @@ impl NodeHttpClient {
         turn.agent = agent;
         turn.nonce = nonce;
         turn.memo = Some(format!("node_world_sink_{method}"));
-        turn.valid_until = Some(i64::MAX / 2);
+        turn.valid_until = Some(dregg_turn::valid_until_at(
+            latest_height,
+            dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+        ));
         turn.previous_receipt_hash = agent_head;
         turn.fee = TurnExecutor::new(ComputronCosts::default()).estimate_cost(&turn);
 

@@ -297,16 +297,17 @@ fn post_signed_turn(
     }
 }
 
-fn now_secs() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+/// The node's attested height, `GET /status` → `latest_height`: the height a turn's
+/// `valid_until` (a block height) is counted from. Fails loud, like `fetch_cell_nonce`: a
+/// guessed height would stamp a deadline the node refuses. Pin `.valid_until(h)` for offline
+/// construction.
+fn fetch_latest_height(node_url: &str) -> Result<u64, String> {
+    let body = get_json(&format!("{node_url}/status"))
+        .map_err(|e| format!("could not read the node's latest height from {node_url}: {e}"))?;
+    body.get("latest_height")
+        .and_then(|h| h.as_u64())
+        .ok_or_else(|| format!("node {node_url} returned no unsigned `latest_height` on /status"))
 }
-
-/// Stamped so the wire marshal accepts the envelope and the turn rides the
-/// verified Lean producer (mirrors the node's `default_valid_until`).
-const TURN_VALIDITY_HORIZON_SECS: i64 = 3600;
 
 // ─── Identity ───
 
@@ -833,10 +834,13 @@ impl TurnBuilder {
         slf
     }
 
-    /// Pin the validity horizon (unix seconds). Default: now + 3600 — the
-    /// same horizon the node stamps so turns ride the verified producer.
-    fn valid_until(mut slf: PyRefMut<'_, Self>, unix_secs: i64) -> PyRefMut<'_, Self> {
-        slf.valid_until = Some(unix_secs);
+    /// Pin the deadline: the last block height at which the node admits this turn. A
+    /// BLOCK HEIGHT, not a Unix timestamp — a node refuses a deadline more than
+    /// `MAX_TURN_VALIDITY_HORIZON_BLOCKS` past its height. Default: the node's
+    /// `latest_height` (from `/status`) plus `DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS`, the
+    /// same stamp the node puts on turns it builds.
+    fn valid_until(mut slf: PyRefMut<'_, Self>, height: i64) -> PyRefMut<'_, Self> {
+        slf.valid_until = Some(height);
         slf
     }
 
@@ -849,9 +853,10 @@ impl TurnBuilder {
     /// AuthorizedTurn ready to `.submit()`. After this point the act is
     /// credentialed; there is no way back to an unauthorized shape.
     ///
-    /// Refuses an empty turn. Fetches the federation id and live nonce from
-    /// the node unless both were pinned (`federation_id=` on `.turn()`,
-    /// `.nonce(n)`) — pin both for fully offline construction.
+    /// Refuses an empty turn. Fetches the federation id, live nonce and latest
+    /// height from the node unless they were pinned (`federation_id=` on
+    /// `.turn()`, `.nonce(n)`, `.valid_until(h)`) — pin all three for fully
+    /// offline construction.
     fn sign(&self, py: Python<'_>) -> PyResult<AuthorizedTurn> {
         if self.effects.is_empty() {
             return Err(refused(
@@ -875,6 +880,14 @@ impl TurnBuilder {
                 .map_err(err)?,
         };
 
+        let valid_until = match self.valid_until {
+            Some(h) => h,
+            None => dregg_turn::valid_until_at(
+                py.detach(|| fetch_latest_height(&node_url)).map_err(err)?,
+                dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+            ),
+        };
+
         let signed = build_signed_turn(
             &ident.clerk,
             "default",
@@ -886,8 +899,7 @@ impl TurnBuilder {
             nonce,
             self.fee.unwrap_or(10_000),
             self.memo.clone(),
-            self.valid_until
-                .unwrap_or_else(|| now_secs() + TURN_VALIDITY_HORIZON_SECS),
+            valid_until,
         );
         Ok(AuthorizedTurn {
             signed,
@@ -2270,8 +2282,11 @@ fn rust_executor_probe() -> Result<(bool, String), String> {
     let from = clerk.cell_id("default");
     let to = CellId::derive_raw(&pk, &dst_token);
 
-    // EngineConfig::for_testing() runs federation [0;32] at timestamp 0.
+    // EngineConfig::for_testing() runs federation [0;32] at timestamp 0 and height 0; the
+    // deadline below is a block height, and a height-0 executor refuses every deadline, so
+    // the probe runs at height 1.
     let mut engine = DreggEngine::new(EngineConfig::for_testing());
+    engine.set_block_height(1);
     // Fund the source generously so the executor's fee/budget accounting cannot
     // underflow it; the DESTINATION (10 → 15) is the clean conservation witness.
     engine
@@ -2304,7 +2319,7 @@ fn rust_executor_probe() -> Result<(bool, String), String> {
         0,
         10_000,
         None,
-        4_000_000_000, // far future; never expired at ts 0
+        dregg_turn::valid_until_at(1, dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS),
     );
 
     engine

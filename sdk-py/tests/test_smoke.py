@@ -114,7 +114,7 @@ def test_empty_turn_refused():
 def test_sign_transfer_offline():
     ident, t = offline_builder("xfer")
     to = "28" * 32
-    signed = t.transfer(to, 100).fee(5000).memo("hi from python").nonce(0).sign()
+    signed = t.transfer(to, 100).fee(5000).memo("hi from python").nonce(0).valid_until(1_800).sign()
     assert len(signed.turn_hash) == 64
     assert signed.signer == ident.public_key
     text = signed.explain()
@@ -149,7 +149,7 @@ def test_explain_draft_and_signed():
     t = t.transfer("33" * 32, 9)
     draft = dregg.explain(t)
     assert draft.startswith("DRAFT")
-    signed = t.nonce(0).sign()
+    signed = t.nonce(0).valid_until(1_800).sign()
     assert dregg.explain(signed) == signed.explain()
     with pytest.raises(TypeError):
         dregg.explain("not a turn")
@@ -163,7 +163,7 @@ def test_signing_is_deterministic_per_turn():
         ident.turn("http://offline.invalid", federation_id=FED)
         .transfer("44" * 32, 5)
         .nonce(3)
-        .valid_until(1_700_000_000)
+        .valid_until(1_800)
         .sign()
     )
     assert mk().turn_hash == mk().turn_hash
@@ -237,6 +237,9 @@ class MockNode(BaseHTTPRequestHandler):
                     "unlocked": True,
                 }
             )
+        elif self.path == "/status":
+            # `.sign()` counts the default deadline (a block height) from this.
+            self._json({"latest_height": 42})
         elif self.path.startswith("/api/cell/"):
             self._json({"found": True, "balance": 1000, "nonce": 7})
         elif self.path.startswith("/trustline/status/"):

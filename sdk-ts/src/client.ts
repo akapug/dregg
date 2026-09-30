@@ -227,6 +227,19 @@ export class NodeClient {
     }
   }
 
+  /**
+   * The node's attested height (`GET /status` → `latest_height`): the height a
+   * turn's `validUntil` — a block height, not a Unix timestamp — is counted
+   * from. A status without the field is an error, never height 0.
+   */
+  async latestHeight(): Promise<bigint> {
+    const status = await this.request<{ latest_height?: number }>("/status");
+    if (typeof status.latest_height !== "number") {
+      throw new Error("node /status carries no latest_height");
+    }
+    return BigInt(status.latest_height);
+  }
+
   /** `GET /api/cell/{id}` — live cell state (balance, nonce, slots). */
   cell(cellId: Uint8Array | string): Promise<CellDetail> {
     const hex = typeof cellId === "string" ? cellId : hexEncode(cellId);

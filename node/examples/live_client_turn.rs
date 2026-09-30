@@ -321,13 +321,12 @@ fn main() {
         v
     };
     turn.memo = Some(format!("att:{}", hex_encode(&attestation_blob)));
-    turn.valid_until = Some(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0)
-            + 3600,
-    );
+    // `valid_until` is a block height: the submitting node's attested height plus the default
+    // horizon.
+    turn.valid_until = Some(dregg_turn::valid_until_at(
+        latest_height(&node),
+        dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+    ));
     let signed = client.sign_turn(&turn);
     let turn_hash_hex = hex_encode(&turn.hash());
     let wire = postcard::to_stdvec(&signed).expect("encode SignedTurn");

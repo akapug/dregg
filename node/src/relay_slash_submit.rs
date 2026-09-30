@@ -53,11 +53,6 @@ use dregg_turn::Turn;
 use crate::executor_setup::{federation_id_for_executor, local_agent_cell, new_submit_executor};
 use crate::state::NodeStateInner;
 
-/// How long a prepared slash turn stays valid when the intake turn carries
-/// no expiry of its own (the executor's expiry gate + the verified Lean
-/// producer's wire marshal both want `valid_until` stamped).
-pub const SLASH_TURN_VALIDITY_SECS: i64 = 3600;
-
 /// A slash turn finalized against the live node state and signed into the
 /// canonical `/turns/submit` wire envelope.
 #[derive(Clone, Debug)]
@@ -144,13 +139,10 @@ pub fn prepare_slash_submit(
         .map(|c| c.state.nonce())
         .unwrap_or(0);
 
-    // Expiry stamp (executor expiry gate + Lean-producer wire marshal).
+    // Expiry stamp, a block height (executor expiry gate + Lean-producer wire marshal), when
+    // the intake turn carries none of its own.
     if turn.valid_until.is_none() {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-        turn.valid_until = Some(now + SLASH_TURN_VALIDITY_SECS);
+        turn.valid_until = crate::executor_setup::default_valid_until(s);
     }
 
     // Receipt-chain binding (see the doc comment): re-bind to THIS AGENT's own causal

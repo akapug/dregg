@@ -63,8 +63,12 @@ export const PAY_METHOD = "pay";
 /** Default computron budget when `.fee()` is not called (Rust parity). */
 const DEFAULT_FEE = 10_000n;
 
-/** Turn validity horizon stamped on submitted turns (seconds). */
-const VALIDITY_HORIZON_SECS = 3600n;
+/**
+ * How many heights past the node's `latest_height` a submitted turn stays
+ * admissible. `validUntil` is a BLOCK HEIGHT (a node refuses one more than
+ * 2^20 heights past its own). Mirrors `dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS`.
+ */
+const DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS = 1800n;
 
 /** Refusal to sign a meaningless turn, mirroring the Rust builder. */
 export class EmptyTurnError extends Error {
@@ -520,7 +524,8 @@ export class AuthorizedTurn {
    *
    * The agent cell pays; the turn rides the cell's live nonce, the node's
    * receipt-chain head (`previous_receipt_hash` causal binding), and a
-   * one-hour validity horizon; the envelope signature binds the canonical
+   * deadline of the node's `latest_height` + 1800 heights, decided once; the
+   * envelope signature binds the canonical
    * `Turn::hash` (v3). A chain-head race (another commit landing between
    * read and submit) is retried once with fresh bindings. Because
    * `dregg-action-sig-v3` binds the turn nonce into the ACTION signature, a
@@ -533,6 +538,7 @@ export class AuthorizedTurn {
       throw new Error("AuthorizedTurn already submitted (one-shot, like the Rust consume-on-submit)");
     }
     this.submitted = true;
+    const validUntil = (await this.runtime.node.latestHeight()) + DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS;
     let lastError: unknown;
     for (let attempt = 0; attempt < 2; attempt++) {
       const nonce = await this.runtime.currentNonce();
@@ -553,7 +559,7 @@ export class AuthorizedTurn {
         nonce,
         roots: [{ action: this.signedAction, children: [] }],
         fee: this.fee,
-        validUntil: BigInt(Math.floor(Date.now() / 1000)) + VALIDITY_HORIZON_SECS,
+        validUntil,
         previousReceiptHash,
       };
       try {

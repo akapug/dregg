@@ -362,22 +362,16 @@ fn unknown_after_submit(
 }
 
 /// `valid_until` for a turn signed now: the node's `latest_height` plus
-/// [`TURN_VALID_FOR_HEIGHTS`], read from `/status` just before signing.
+/// [`TURN_VALID_FOR_HEIGHTS`], read from `/status` just before signing, through the one
+/// stamping helper `dregg_turn::valid_until_at`. (64, not
+/// `DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS`: this tool wants a short resend window.)
 async fn turn_deadline(node: &NodeHttpClient) -> Result<i64> {
     let height = node.fetch_latest_height().await.map_err(|e| {
         err(format!(
             "read the node's latest height for the turn deadline: {e}"
         ))
     })?;
-    let deadline = height
-        .checked_add(TURN_VALID_FOR_HEIGHTS)
-        .and_then(|h| i64::try_from(h).ok())
-        .ok_or_else(|| {
-            err(format!(
-                "latest_height {height} leaves no room for a deadline"
-            ))
-        })?;
-    Ok(deadline)
+    Ok(dregg_turn::valid_until_at(height, TURN_VALID_FOR_HEIGHTS))
 }
 
 /// What a submit response says about the turn THIS process signed.

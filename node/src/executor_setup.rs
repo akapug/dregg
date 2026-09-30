@@ -131,6 +131,20 @@ pub fn attested_block_height(s: &NodeStateInner) -> u64 {
     store_height.max(solo_height)
 }
 
+/// The `valid_until` of a turn the node builds itself: the attested height plus
+/// [`dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS`], through the one stamping helper
+/// [`dregg_turn::valid_until_at`]. The submit executor runs such a turn at `attested + 1`, so it
+/// is admissible for the next `DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS` heights and refused after.
+///
+/// Stamped rather than left `None` because the Lean producer's wire marshal requires a deadline
+/// (`lean_shadow::turn_to_wire_turn`); an unstamped turn falls off the verified producer.
+pub fn default_valid_until(s: &NodeStateInner) -> Option<i64> {
+    Some(dregg_turn::valid_until_at(
+        attested_block_height(s),
+        dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+    ))
+}
+
 /// Federation id for turn signing — matches blocklace finalized-turn path.
 pub fn federation_id_for_executor(s: &NodeStateInner) -> [u8; 32] {
     if s.federation_configured {
@@ -666,7 +680,7 @@ pub fn commit_effects_as(
         nonce,
         fee: 0,
         memo: Some(format!("deos_host:{method}")),
-        valid_until: Some(i64::MAX / 2),
+        valid_until: default_valid_until(s),
         call_forest,
         depends_on: vec![],
         previous_receipt_hash: prev,
