@@ -1183,6 +1183,22 @@ pub enum SpawnError {
     SocketPair(io::Error),
     /// `fork(2)` failed.
     Fork(io::Error),
+    /// The confinement the spawn asked for could NOT be established in the child,
+    /// so no body ran (the child `_exit`ed [`CONFINE_FAILED_EXIT`] and was reaped).
+    /// Carries the child's typed [`ConfineError`](crate::sandbox::ConfineError),
+    /// naming which layer was missing. A refused spawn never yields a
+    /// [`PdProcess`], so its exit code can never be read as a body's verdict.
+    #[cfg(all(feature = "process-pd-sandbox", unix))]
+    Confinement(crate::sandbox::ConfineError),
+    /// The child neither reported its confinement established nor reported a
+    /// typed refusal (it died first, or wrote garbage). Refused like a failed
+    /// confinement: the child was killed and reaped, no body is running.
+    #[cfg(all(feature = "process-pd-sandbox", unix))]
+    ConfinementUnreported(String),
+    /// The confined grain's `execve` returned (the image is missing or the exec
+    /// was denied); the grain never ran.
+    #[cfg(all(feature = "process-pd-sandbox", unix))]
+    Exec(io::Error),
 }
 
 impl std::fmt::Display for SpawnError {
@@ -1190,6 +1206,17 @@ impl std::fmt::Display for SpawnError {
         match self {
             SpawnError::SocketPair(e) => write!(f, "socketpair failed: {e}"),
             SpawnError::Fork(e) => write!(f, "fork failed: {e}"),
+            #[cfg(all(feature = "process-pd-sandbox", unix))]
+            SpawnError::Confinement(e) => {
+                write!(f, "confinement could not be established, no PD launched: {e}")
+            }
+            #[cfg(all(feature = "process-pd-sandbox", unix))]
+            SpawnError::ConfinementUnreported(m) => write!(
+                f,
+                "the child never reported its confinement established ({m}); refused, no PD launched"
+            ),
+            #[cfg(all(feature = "process-pd-sandbox", unix))]
+            SpawnError::Exec(e) => write!(f, "confined grain exec failed: {e}"),
         }
     }
 }
@@ -1253,8 +1280,10 @@ impl ProcessKernel {
     /// the remaining gap.
     ///
     /// If confinement fails (the sandbox could not be applied), the child
-    /// `_exit`s with [`CONFINE_FAILED_EXIT`] WITHOUT running `body` — fail-closed:
-    /// we NEVER run the payload un-confined.
+    /// `_exit`s WITHOUT running `body` and the spawn returns
+    /// [`SpawnError::Confinement`] naming the missing layer — fail-closed: we
+    /// NEVER run the payload un-confined, and never hand back a [`PdProcess`]
+    /// whose exit code could be mistaken for the body's.
     ///
     /// # Safety / fork discipline
     /// Same as [`Self::spawn_pd`]; confinement runs in the child only, before
@@ -1286,8 +1315,8 @@ impl ProcessKernel {
     ///
     /// Off-by-default by construction: a caller that grants nothing gets the same
     /// jail as [`Self::spawn_pd_confined`]. Fail-closed exactly the same: if the
-    /// sandbox cannot be applied, the child `_exit`s [`CONFINE_FAILED_EXIT`] before
-    /// the body runs.
+    /// sandbox cannot be applied the body never runs and the spawn returns
+    /// [`SpawnError::Confinement`].
     #[cfg(all(feature = "process-pd-sandbox", unix))]
     pub fn spawn_pd_confined_with<F>(
         &self,
@@ -1322,8 +1351,9 @@ impl ProcessKernel {
     /// named lookups, `system_reads` the keep-running bundle.
     ///
     /// Fail-closed exactly like the closure variants: if confinement cannot be
-    /// applied — or `execve` is denied / the image is missing — the child `_exit`s
-    /// [`CONFINE_FAILED_EXIT`] and NEVER runs an un-confined grain.
+    /// applied — or `execve` is denied / the image is missing — the grain NEVER
+    /// runs un-confined and the spawn returns [`SpawnError::Confinement`] /
+    /// [`SpawnError::Exec`] (the child is reaped).
     ///
     /// # Safety / fork discipline
     /// All allocation (the C `argv`/`env`) happens BEFORE the fork; the child does
@@ -1376,6 +1406,19 @@ impl ProcessKernel {
             return Err(SpawnError::SocketPair(io::Error::last_os_error()));
         }
         let (read_fd, write_fd) = (pfd[0], pfd[1]);
+        let (report_r, report_w) = match confine_report_pipe() {
+            Ok(p) => p,
+            Err(e) => {
+                unsafe {
+                    libc::close(read_fd);
+                    libc::close(write_fd);
+                }
+                return Err(e);
+            }
+        };
+        // The report fd survives confinement (kept) and closes on a successful
+        // `execve` (CLOEXEC): EOF with no bytes = the grain image is running.
+        let confinement = confinement.with_fds([report_w]);
 
         let pid = unsafe { libc::fork() };
         if pid < 0 {
@@ -1383,6 +1426,8 @@ impl ProcessKernel {
             unsafe {
                 libc::close(read_fd);
                 libc::close(write_fd);
+                libc::close(report_r);
+                libc::close(report_w);
             }
             return Err(SpawnError::Fork(e));
         }
@@ -1400,23 +1445,32 @@ impl ProcessKernel {
             // `sandbox_init` self-applies the profile, which grants `process-exec`
             // of EXACTLY `image` (+ its file-read). The raw `write_fd` (>=3) is
             // closed; fds 1/2 (the pipe dups) survive.
+            unsafe { libc::close(report_r) };
             if let Err(e) = crate::sandbox::confine_child(&confinement) {
-                eprintln!("[pd-exec] CONFINEMENT FAILED — refusing to exec grain: {e}");
-                use std::io::Write as _;
-                let _ = std::io::stderr().flush();
-                unsafe { libc::_exit(CONFINE_FAILED_EXIT) };
+                refuse_in_child("pd-exec", report_w, &e);
             }
             // execve the grain through the granted door. On success this never
-            // returns; if it returns, the exec was denied / the image is missing —
-            // fail-closed (the grain never ran un-confined; nothing else ran).
+            // returns (and CLOEXEC closes the report fd); if it returns, the exec
+            // was denied / the image is missing — fail-closed, reported typed.
             unsafe {
                 libc::execve(c_image.as_ptr(), argv_ptrs.as_ptr(), env_ptrs.as_ptr());
+                let errno = io::Error::last_os_error().raw_os_error().unwrap_or(0);
+                let mut msg = vec![REPORT_EXEC_FAILED];
+                msg.extend_from_slice(&errno.to_le_bytes());
+                write_report(report_w, &msg);
                 libc::_exit(CONFINE_FAILED_EXIT);
             }
         }
 
         // ── PARENT ──
-        unsafe { libc::close(write_fd) };
+        unsafe {
+            libc::close(write_fd);
+            libc::close(report_w);
+        }
+        if let Err(e) = await_confinement(pid, report_r, ReportShape::ExecClosesOnSuccess) {
+            unsafe { libc::close(read_fd) };
+            return Err(e);
+        }
         let stdout = unsafe { std::fs::File::from_raw_fd(read_fd) };
         Ok(ConfinedProcess { pid, stdout })
     }
@@ -1436,8 +1490,8 @@ impl ProcessKernel {
     /// child, which renders in its OWN (MMU-isolated) memory and replies a frame.
     ///
     /// Fail-closed exactly like [`Self::spawn_pd_confined`]: if confinement
-    /// cannot be applied the child `_exit`s with [`CONFINE_FAILED_EXIT`] before
-    /// the body runs.
+    /// cannot be applied the body never runs and the spawn returns
+    /// [`SpawnError::Confinement`].
     #[cfg(all(feature = "process-pd-sandbox", unix))]
     pub fn spawn_pd_confined_with_surface<F>(
         &self,
@@ -1523,13 +1577,9 @@ impl ProcessKernel {
                 let parent_surf = unsafe { UnixStream::from_raw_fd(parent_surf_fd) };
                 Ok((pd, parent_surf))
             }
-            Err(e) => {
-                unsafe {
-                    libc::close(parent_surf_fd);
-                    libc::close(child_surf_fd);
-                }
-                Err(e)
-            }
+            // `spawn_pd_inner_with_extra` closed both surface ends on its error
+            // paths (it owns them once called).
+            Err(e) => Err(e),
         }
     }
 
@@ -1552,13 +1602,30 @@ impl ProcessKernel {
     where
         F: FnOnce(KernelClient, UnixStream, Vec<CapHandle>) -> i32,
     {
+        // This fn OWNS both extra fds from here: every error path closes them.
+        let close_extras = || unsafe {
+            libc::close(child_extra_fd);
+            libc::close(parent_extra_fd);
+        };
         let mut fds = [0 as RawFd; 2];
         let rc = unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) };
         if rc != 0 {
+            close_extras();
             return Err(SpawnError::SocketPair(io::Error::last_os_error()));
         }
         let parent_fd = fds[0];
         let child_fd = fds[1];
+        let (report_r, report_w) = match confine_report_pipe() {
+            Ok(p) => p,
+            Err(e) => {
+                unsafe {
+                    libc::close(parent_fd);
+                    libc::close(child_fd);
+                }
+                close_extras();
+                return Err(e);
+            }
+        };
 
         let pid = unsafe { libc::fork() };
         if pid < 0 {
@@ -1566,7 +1633,10 @@ impl ProcessKernel {
             unsafe {
                 libc::close(parent_fd);
                 libc::close(child_fd);
+                libc::close(report_r);
+                libc::close(report_w);
             }
+            close_extras();
             return Err(SpawnError::Fork(e));
         }
 
@@ -1576,6 +1646,7 @@ impl ProcessKernel {
             unsafe {
                 libc::close(parent_fd);
                 libc::close(parent_extra_fd);
+                libc::close(report_r);
             }
 
             // THE CONFINEMENT — keep BOTH the control socket AND the surface
@@ -1584,17 +1655,14 @@ impl ProcessKernel {
             // the child may reach (every other remote stays denied by default).
             #[cfg(all(feature = "process-pd-sandbox", unix))]
             if confine {
-                let mut c =
-                    crate::sandbox::Confinement::endpoint_only(child_fd).with_fds([child_extra_fd]);
+                let mut c = crate::sandbox::Confinement::endpoint_only(child_fd)
+                    .with_fds([child_extra_fd, report_w]);
                 for endpoint in &net_out {
                     c = c.with_net_out(endpoint.clone());
                 }
-                if let Err(e) = crate::sandbox::confine_child(&c) {
-                    eprintln!("[pd] CONFINEMENT FAILED — refusing to run body: {e}");
-                    use std::io::Write as _;
-                    let _ = std::io::stderr().flush();
-                    unsafe { libc::_exit(CONFINE_FAILED_EXIT) };
-                }
+                confine_and_report(&c, report_w);
+            } else {
+                unsafe { libc::close(report_w) };
             }
 
             let client = unsafe { KernelClient::from_raw_fd(child_fd) };
@@ -1606,14 +1674,25 @@ impl ProcessKernel {
         }
 
         // ── PARENT (the kernel) ──
-        unsafe { libc::close(child_fd) };
-        // NOTE: parent_extra_fd is NOT closed here — the caller
-        // (`spawn_pd_confined_with_surface`) adopts it as the compositor's
-        // surface Endpoint after this returns Ok. We also do NOT close
-        // child_extra_fd in the parent: it was inherited by the child and the
-        // parent's copy must be closed so the child holds the only writer — do
-        // that here.
-        unsafe { libc::close(child_extra_fd) };
+        // The child holds its own copies now; the parent drops the child ends so
+        // the child holds the only writer. `parent_extra_fd` is NOT closed on
+        // success — the caller adopts it as the compositor's surface Endpoint.
+        unsafe {
+            libc::close(child_fd);
+            libc::close(child_extra_fd);
+            libc::close(report_w);
+        }
+        if confine {
+            if let Err(e) = await_confinement(pid, report_r, ReportShape::ExplicitAck) {
+                unsafe {
+                    libc::close(parent_fd);
+                    libc::close(parent_extra_fd);
+                }
+                return Err(e);
+            }
+        } else {
+            unsafe { libc::close(report_r) };
+        }
         let kernel_sock = unsafe { UnixStream::from_raw_fd(parent_fd) };
         Ok(PdProcess { pid, kernel_sock })
     }
@@ -1642,6 +1721,34 @@ impl ProcessKernel {
         let parent_fd = fds[0];
         let child_fd = fds[1];
 
+        // A confined spawn gets a report pipe: the child acknowledges its
+        // confinement ESTABLISHED (or sends the typed refusal) before the parent
+        // returns a `PdProcess`. `None` for an unconfined spawn.
+        #[cfg(all(feature = "process-pd-sandbox", unix))]
+        let report = if confine {
+            match confine_report_pipe() {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    unsafe {
+                        libc::close(parent_fd);
+                        libc::close(child_fd);
+                    }
+                    return Err(e);
+                }
+            }
+        } else {
+            None
+        };
+        #[cfg(all(feature = "process-pd-sandbox", unix))]
+        let close_report = |report: Option<(RawFd, RawFd)>| {
+            if let Some((r, w)) = report {
+                unsafe {
+                    libc::close(r);
+                    libc::close(w);
+                }
+            }
+        };
+
         let pid = unsafe { libc::fork() };
         if pid < 0 {
             let e = io::Error::last_os_error();
@@ -1649,6 +1756,8 @@ impl ProcessKernel {
                 libc::close(parent_fd);
                 libc::close(child_fd);
             }
+            #[cfg(all(feature = "process-pd-sandbox", unix))]
+            close_report(report);
             return Err(SpawnError::Fork(e));
         }
 
@@ -1667,21 +1776,18 @@ impl ProcessKernel {
                 // if one was passed, ELSE the implicit Endpoint-only jail. Either
                 // way the control socket is forced into the keep-list so the
                 // firmament Endpoint always survives.
+                let (report_r, report_w) = report.expect("a confined spawn made its report pipe");
+                unsafe { libc::close(report_r) };
                 let c = match confinement {
-                    Some(mut c) => {
-                        c = c.with_fds([child_fd]);
-                        c
+                    Some(c) => c.with_fds([child_fd, report_w]),
+                    None => {
+                        crate::sandbox::Confinement::endpoint_only(child_fd).with_fds([report_w])
                     }
-                    None => crate::sandbox::Confinement::endpoint_only(child_fd),
                 };
-                if let Err(e) = crate::sandbox::confine_child(&c) {
-                    // Fail-closed: confinement is the WHOLE point. If it could
-                    // not be applied we refuse to run the body un-confined.
-                    eprintln!("[pd] CONFINEMENT FAILED — refusing to run body: {e}");
-                    use std::io::Write as _;
-                    let _ = std::io::stderr().flush();
-                    unsafe { libc::_exit(CONFINE_FAILED_EXIT) };
-                }
+                // Fail-closed: confinement is the WHOLE point. If it could not be
+                // established the child reports the typed refusal and `_exit`s;
+                // the body never runs un-confined.
+                confine_and_report(&c, report_w);
             }
             #[cfg(not(all(feature = "process-pd-sandbox", unix)))]
             {
@@ -1703,13 +1809,158 @@ impl ProcessKernel {
 
         // ── PARENT (the kernel) ──
         unsafe { libc::close(child_fd) };
+        #[cfg(all(feature = "process-pd-sandbox", unix))]
+        if let Some((report_r, report_w)) = report {
+            unsafe { libc::close(report_w) };
+            if let Err(e) = await_confinement(pid, report_r, ReportShape::ExplicitAck) {
+                unsafe { libc::close(parent_fd) };
+                return Err(e);
+            }
+        }
         let kernel_sock = unsafe { UnixStream::from_raw_fd(parent_fd) };
         Ok(PdProcess { pid, kernel_sock })
     }
 }
 
+// ─────────────── the confinement report (child → parent, pre-body) ───────────────
+//
+// A confined child used to signal a failed confinement ONLY by `_exit`ing
+// `CONFINE_FAILED_EXIT` (99) after the spawn had already returned a `PdProcess`.
+// A caller that reads the exit code as the body's result then saw 99 as a VERDICT
+// (deos-hermes decoded it as the probe bitmask 0x63). So the refusal now crosses
+// the fork boundary BEFORE the spawn returns: a CLOEXEC pipe the child keeps
+// through confinement, one atomic write (< PIPE_BUF) of either the ack byte or
+// the typed refusal. The parent returns a `PdProcess` only on the ack.
+
+/// The child established every layer of its confinement.
+#[cfg(all(feature = "process-pd-sandbox", unix))]
+const REPORT_CONFINED: u8 = 0xC0;
+/// The child could not establish its confinement; a `ConfineError` encoding follows.
+#[cfg(all(feature = "process-pd-sandbox", unix))]
+const REPORT_REFUSED: u8 = 0xC1;
+/// The confined grain's `execve` returned; the errno (i32 LE) follows.
+#[cfg(all(feature = "process-pd-sandbox", unix))]
+const REPORT_EXEC_FAILED: u8 = 0xC2;
+/// The report stays under `PIPE_BUF` (POSIX floor 512) so one `write` is atomic.
+#[cfg(all(feature = "process-pd-sandbox", unix))]
+const REPORT_MAX: usize = 500;
+
+/// How the parent recognises success on the report pipe.
+#[cfg(all(feature = "process-pd-sandbox", unix))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReportShape {
+    /// A closure body: the child writes [`REPORT_CONFINED`] before running it.
+    ExplicitAck,
+    /// An exec'd grain: a successful `execve` closes the CLOEXEC pipe, so EOF
+    /// with no bytes means the confined image is running.
+    ExecClosesOnSuccess,
+}
+
+#[cfg(all(feature = "process-pd-sandbox", unix))]
+fn confine_report_pipe() -> Result<(RawFd, RawFd), SpawnError> {
+    let mut p = [0 as RawFd; 2];
+    if unsafe { libc::pipe(p.as_mut_ptr()) } != 0 {
+        return Err(SpawnError::SocketPair(io::Error::last_os_error()));
+    }
+    for fd in p {
+        unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
+    }
+    Ok((p[0], p[1]))
+}
+
+/// One `write` of the whole report (atomic under `PIPE_BUF`).
+#[cfg(all(feature = "process-pd-sandbox", unix))]
+fn write_report(fd: RawFd, msg: &[u8]) -> bool {
+    let msg = &msg[..msg.len().min(REPORT_MAX)];
+    let n = unsafe { libc::write(fd, msg.as_ptr().cast(), msg.len()) };
+    n == msg.len() as isize
+}
+
+/// CHILD: report a failed confinement (typed) and `_exit` — the body never runs.
+#[cfg(all(feature = "process-pd-sandbox", unix))]
+fn refuse_in_child(tag: &str, report_w: RawFd, e: &crate::sandbox::ConfineError) -> ! {
+    eprintln!("[{tag}] CONFINEMENT FAILED — refusing to run body: {e}");
+    let _ = std::io::stderr().flush();
+    let mut msg = vec![REPORT_REFUSED];
+    msg.extend(e.encode());
+    write_report(report_w, &msg);
+    unsafe { libc::_exit(CONFINE_FAILED_EXIT) }
+}
+
+/// CHILD: confine to `c` (whose keep-list MUST include `report_w`), then ack and
+/// close the report fd, so the body starts holding only its granted fds. On any
+/// failure — the confinement OR the ack write — the child `_exit`s here.
+#[cfg(all(feature = "process-pd-sandbox", unix))]
+fn confine_and_report(c: &crate::sandbox::Confinement, report_w: RawFd) {
+    if let Err(e) = crate::sandbox::confine_child(c) {
+        refuse_in_child("pd", report_w, &e);
+    }
+    let acked = write_report(report_w, &[REPORT_CONFINED]);
+    unsafe { libc::close(report_w) };
+    if !acked {
+        unsafe { libc::_exit(CONFINE_FAILED_EXIT) };
+    }
+}
+
+/// PARENT: read the child's report. `Ok` only on an ack (or, for an exec'd grain,
+/// a clean EOF). Every other outcome kills + reaps the child and returns the
+/// typed refusal, so no `PdProcess` exists for a PD whose confinement did not
+/// take.
+#[cfg(all(feature = "process-pd-sandbox", unix))]
+fn await_confinement(
+    pid: libc::pid_t,
+    report_r: RawFd,
+    shape: ReportShape,
+) -> Result<(), SpawnError> {
+    let mut f = unsafe { std::fs::File::from_raw_fd(report_r) };
+    let mut buf = [0u8; REPORT_MAX];
+    let n = loop {
+        match f.read(&mut buf) {
+            Ok(n) => break n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => {
+                return break_refused(pid, SpawnError::ConfinementUnreported(format!("read: {e}")));
+            }
+        }
+    };
+    drop(f);
+    let msg = &buf[..n];
+    let refusal = match (msg.first(), shape) {
+        (Some(&REPORT_CONFINED), ReportShape::ExplicitAck) if n == 1 => return Ok(()),
+        (None, ReportShape::ExecClosesOnSuccess) => return Ok(()),
+        (Some(&REPORT_REFUSED), _) => match crate::sandbox::ConfineError::decode(&msg[1..]) {
+            Some(e) => SpawnError::Confinement(e),
+            None => SpawnError::ConfinementUnreported("an undecodable refusal".into()),
+        },
+        (Some(&REPORT_EXEC_FAILED), ReportShape::ExecClosesOnSuccess) if n == 5 => {
+            let errno = i32::from_le_bytes([msg[1], msg[2], msg[3], msg[4]]);
+            SpawnError::Exec(io::Error::from_raw_os_error(errno))
+        }
+        (None, ReportShape::ExplicitAck) => {
+            SpawnError::ConfinementUnreported("the child exited before reporting".into())
+        }
+        (Some(b), _) => {
+            SpawnError::ConfinementUnreported(format!("unexpected report byte 0x{b:02x}"))
+        }
+    };
+    break_refused(pid, refusal)
+}
+
+/// Kill (a no-op on an already-exited child) and reap `pid`, then return `e`.
+#[cfg(all(feature = "process-pd-sandbox", unix))]
+fn break_refused(pid: libc::pid_t, e: SpawnError) -> Result<(), SpawnError> {
+    unsafe {
+        libc::kill(pid, libc::SIGKILL);
+        let mut status: libc::c_int = 0;
+        libc::waitpid(pid, &mut status, 0);
+    }
+    Err(e)
+}
+
 /// The exit code a child `_exit`s with when [`ProcessKernel::spawn_pd_confined`]
-/// could NOT apply the OS confinement — fail-closed, the body never ran.
+/// could NOT apply the OS confinement — fail-closed, the body never ran. The
+/// parent does not learn of the refusal from this code: the spawn itself returns
+/// [`SpawnError::Confinement`] (see the report pipe), and reaps the child.
 #[cfg(all(feature = "process-pd-sandbox", unix))]
 pub const CONFINE_FAILED_EXIT: i32 = 99;
 

@@ -26,6 +26,8 @@
 use std::io::BufReader;
 use std::sync::{Arc, RwLock};
 
+mod confine_env;
+
 use deos_hermes::mcp_server::{DREGG_TOOL_NAMES, McpServer, McpToolHost};
 use deos_hermes::{GrantRegistry, HermesGateway};
 use dregg_sdk::{AgentCipherclerk, AgentRuntime};
@@ -173,14 +175,43 @@ fn confinement_probe_reports_every_tooth_and_runs_nothing() {
     let (runtime, root) = grantor();
     let registry =
         GrantRegistry::default_for_session(1_000_000).with_standard_tool_grants(1_000_000);
+    let env = confine_env::probe_and_announce("confinement_probe_reports_every_tooth");
     let mut server = McpServer::new(host(&runtime, root, registry));
     let result = call_once(&mut server, "confinement_probe", json!({}));
 
-    assert_eq!(result["isError"], json!(false), "probe admitted: {result}");
+    // The cap gate admits and receipts the call on either branch: the refusal
+    // (if any) is the SANDBOX's, after admission.
     assert!(
         result["_deos"]["receipt"].is_string(),
         "the probe turn left a dregg receipt: {result}"
     );
+
+    if let confine_env::ConfineEnv::NoNamespaces(why) = &env {
+        // UNCONFINABLE host: the launch must be REFUSED, typed, and no PD may
+        // have reported anything.
+        assert_eq!(
+            result["isError"],
+            json!(true),
+            "refused launch is an error: {result}"
+        );
+        assert!(
+            result["_deos"]["sandboxVerdict"].is_null(),
+            "no PD ran, so there is no verdict (host: {why}): {result}"
+        );
+        let text = text_of(&result);
+        assert!(text.contains("did not launch"), "{text}");
+        assert!(
+            text.contains("Namespaces"),
+            "the refusal names the layer: {text}"
+        );
+        let host = server.into_host();
+        let tape = host.tape();
+        assert_eq!(tape.len(), 1, "exactly one tool-call ran");
+        assert_eq!(tape[0].sandbox_verdict, None);
+        return;
+    }
+
+    assert_eq!(result["isError"], json!(false), "probe admitted: {result}");
     let verdict = result["_deos"]["sandboxVerdict"]
         .as_i64()
         .expect("a probe verdict") as i32;

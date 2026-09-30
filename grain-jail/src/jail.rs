@@ -29,8 +29,8 @@ use crate::LineChannel;
 pub type JailChannel = LineChannel<BufReader<UnixStream>, UnixStream>;
 
 /// A running jailed body. [`join`](JailedBody::join) waits for it and returns its
-/// exit code (`0` = clean; the firmament `CONFINE_FAILED_EXIT` = 99 means the
-/// sandbox could not be applied and the body never ran — fail-closed).
+/// exit code (`0` = clean). A body whose sandbox could not be applied never gets
+/// here: the spawn itself returns `SpawnError::Confinement` (fail-closed).
 pub struct JailedBody {
     pd: PdProcess,
 }

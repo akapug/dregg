@@ -27,8 +27,8 @@
 //!   it) — fine, the child is trusted firmament code between fork and body.
 //!
 //! - **Linux (compiled here as a cfg-stub, ENFORCED on Linux):**
-//!   `unshare(CLONE_NEWUSER|NEWNET|NEWNS|NEWPID)` + a uid-map (an empty net
-//!   namespace = no route to any network), `prctl(PR_SET_NO_NEW_PRIVS)`, a
+//!   `unshare(CLONE_NEWUSER|NEWNET|NEWNS|NEWPID)` with NO id map (an empty net
+//!   namespace = no route to any network; no in-namespace root), `prctl(PR_SET_NO_NEW_PRIVS)`, a
 //!   default-deny seccomp-bpf allow-list (`seccompiler`), Landlock path-rules
 //!   (`landlock`) for any granted read paths, and `close_range` keeping only the
 //!   granted fds. On macOS the Linux body compiles to a no-op stub so the crate
@@ -295,8 +295,11 @@ pub const HOMESERVER_MACH_SERVICES: &[&str] = &[
 pub enum ConfineError {
     /// `sandbox_init` (macOS) failed with this message.
     SandboxInit(String),
-    /// A Linux confinement step (unshare / prctl / seccomp / landlock) failed.
-    Linux(String),
+    /// A Linux confinement layer could not be established. `layer` names WHICH
+    /// tooth is missing, so a refusal says what the host could not provide (e.g.
+    /// [`LinuxLayer::Namespaces`] under a kernel that forbids unprivileged user
+    /// namespaces) rather than a bare string.
+    Linux { layer: LinuxLayer, detail: String },
     /// Closing the non-granted fds failed.
     FdClose(String),
     /// A `net_out` grant cannot be expressed as a precise door on this platform
@@ -314,7 +317,12 @@ impl std::fmt::Display for ConfineError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ConfineError::SandboxInit(m) => write!(f, "macOS sandbox_init failed: {m}"),
-            ConfineError::Linux(m) => write!(f, "linux confinement failed: {m}"),
+            ConfineError::Linux { layer, detail } => {
+                write!(
+                    f,
+                    "linux confinement layer {layer:?} not established: {detail}"
+                )
+            }
             ConfineError::FdClose(m) => write!(f, "closing inherited fds failed: {m}"),
             ConfineError::NetOutNotExpressible(eps) => write!(
                 f,
@@ -329,6 +337,81 @@ impl std::fmt::Display for ConfineError {
 }
 
 impl std::error::Error for ConfineError {}
+
+/// The Linux confinement layers, in the order the jail stacks them. Each is a
+/// tooth: the jail launches only when EVERY layer it needs was established.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinuxLayer {
+    /// `unshare(USER|NET|NS|PID)` — the empty net namespace (no route anywhere).
+    Namespaces,
+    /// `prctl(PR_SET_NO_NEW_PRIVS)`.
+    NoNewPrivs,
+    /// The Landlock filesystem ruleset.
+    Landlock,
+    /// The seccomp-bpf filter (sealed allow-list or the connect-notify door).
+    Seccomp,
+    /// The provider-egress supervisor (its fork / socketpair / listener hand-off).
+    EgressSupervisor,
+}
+
+impl LinuxLayer {
+    const ALL: [LinuxLayer; 5] = [
+        LinuxLayer::Namespaces,
+        LinuxLayer::NoNewPrivs,
+        LinuxLayer::Landlock,
+        LinuxLayer::Seccomp,
+        LinuxLayer::EgressSupervisor,
+    ];
+}
+
+impl ConfineError {
+    /// Encode for the child→parent confinement report (see
+    /// `process_kernel`'s report pipe): a tag byte, then the payload. The parent
+    /// [`ConfineError::decode`]s it into the SAME typed error, so a refusal crosses
+    /// the fork boundary without collapsing into an exit code.
+    pub(crate) fn encode(&self) -> Vec<u8> {
+        let (tag, body): (u8, String) = match self {
+            ConfineError::SandboxInit(m) => (1, m.clone()),
+            ConfineError::Linux { layer, detail } => {
+                let i = LinuxLayer::ALL.iter().position(|l| l == layer).unwrap_or(0);
+                (2, format!("{}{detail}", char::from(b'0' + i as u8)))
+            }
+            ConfineError::FdClose(m) => (3, m.clone()),
+            ConfineError::NetOutNotExpressible(eps) => (4, eps.join("\n")),
+            ConfineError::Unsupported => (5, String::new()),
+        };
+        let mut out = vec![tag];
+        out.extend_from_slice(body.as_bytes());
+        out
+    }
+
+    /// Inverse of [`ConfineError::encode`]. `None` for a malformed report (the
+    /// caller then refuses with its own "unreadable report" error — never Ok).
+    pub(crate) fn decode(bytes: &[u8]) -> Option<ConfineError> {
+        let (&tag, rest) = bytes.split_first()?;
+        let body = String::from_utf8_lossy(rest).into_owned();
+        Some(match tag {
+            1 => ConfineError::SandboxInit(body),
+            2 => {
+                let mut chars = body.chars();
+                let i = chars.next()?.to_digit(10)? as usize;
+                ConfineError::Linux {
+                    layer: *LinuxLayer::ALL.get(i)?,
+                    detail: chars.collect(),
+                }
+            }
+            3 => ConfineError::FdClose(body),
+            4 => ConfineError::NetOutNotExpressible(
+                body.split('\n')
+                    .filter(|e| !e.is_empty())
+                    .map(str::to_owned)
+                    .collect(),
+            ),
+            5 => ConfineError::Unsupported,
+            _ => return None,
+        })
+    }
+}
 
 /// CONFINE the calling process (a freshly-forked child PD) to its granted
 /// authority — close all non-granted fds, then drop ambient OS authority via the
@@ -887,8 +970,8 @@ mod macos {
 //
 // Compiles on macOS as an unreachable cfg-stub (the module body is gated to
 // `target_os = "linux"`); RUNS on Linux. The steps:
-//   1. unshare(CLONE_NEWUSER|NEWNET|NEWNS|NEWPID) + a uid-map (root-in-namespace
-//      maps to the real uid) — an EMPTY net namespace means no route anywhere.
+//   1. unshare(CLONE_NEWUSER|NEWNET|NEWNS|NEWPID), no id map (no in-namespace
+//      root) — an EMPTY net namespace means no route anywhere.
 //   2. prctl(PR_SET_NO_NEW_PRIVS, 1) — no setuid/fscaps escalation.
 //   3. a default-deny seccomp-bpf allow-list (read/write/close/exit/… only) via
 //      `seccompiler` — socket()/open()/execve() trap to EPERM/SIGSYS.
@@ -898,7 +981,7 @@ mod macos {
 #[cfg(target_os = "linux")]
 mod linux {
     use super::provider_door::{self, AllowedEndpoint, DoorMode};
-    use super::{ConfineError, Confinement};
+    use super::{ConfineError, Confinement, LinuxLayer};
     use std::io;
     use std::os::raw::c_int;
     use std::os::unix::io::RawFd;
@@ -929,33 +1012,35 @@ mod linux {
         Ok(())
     }
 
-    /// unshare USER+NET+NS+PID namespaces and write the uid/gid maps. An empty
-    /// net namespace gives the child no network route at all (the net-cap denial).
+    /// A typed Linux-layer refusal.
+    fn layer_err(layer: LinuxLayer, detail: impl std::fmt::Display) -> ConfineError {
+        ConfineError::Linux {
+            layer,
+            detail: detail.to_string(),
+        }
+    }
+
+    /// unshare USER+NET+NS+PID namespaces. An empty net namespace gives the child
+    /// no network route at all (the net-cap denial).
+    ///
+    /// No uid/gid map is written. A map would only make the child root INSIDE the
+    /// namespace, an authority the jail never uses (it mounts nothing, and the
+    /// seccomp/Landlock layers need only `NO_NEW_PRIVS`). Unmapped, the child holds
+    /// no in-namespace capability at all. It is also the form a host that
+    /// restricts unprivileged user namespaces (Ubuntu's
+    /// `kernel.apparmor_restrict_unprivileged_userns = 1`) still allows: there
+    /// `unshare` succeeds and the empty net namespace is real, but writing
+    /// `/proc/self/uid_map` is `EPERM`.
     fn unshare_namespaces() -> Result<(), ConfineError> {
-        use std::io::Write;
-        // The real uid/gid to map root-in-namespace back to.
-        let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
         let flags =
             libc::CLONE_NEWUSER | libc::CLONE_NEWNET | libc::CLONE_NEWNS | libc::CLONE_NEWPID;
         let rc = unsafe { libc::unshare(flags) };
         if rc != 0 {
-            return Err(ConfineError::Linux(format!(
-                "unshare failed: {}",
-                std::io::Error::last_os_error()
-            )));
+            return Err(layer_err(
+                LinuxLayer::Namespaces,
+                format_args!("unshare(USER|NET|NS|PID): {}", io::Error::last_os_error()),
+            ));
         }
-        // setgroups must be denied before writing gid_map in a userns.
-        let _ = std::fs::write("/proc/self/setgroups", b"deny");
-        std::fs::OpenOptions::new()
-            .write(true)
-            .open("/proc/self/uid_map")
-            .and_then(|mut f| f.write_all(format!("0 {uid} 1\n").as_bytes()))
-            .map_err(|e| ConfineError::Linux(format!("uid_map: {e}")))?;
-        std::fs::OpenOptions::new()
-            .write(true)
-            .open("/proc/self/gid_map")
-            .and_then(|mut f| f.write_all(format!("0 {gid} 1\n").as_bytes()))
-            .map_err(|e| ConfineError::Linux(format!("gid_map: {e}")))?;
         Ok(())
     }
 
@@ -964,10 +1049,10 @@ mod linux {
     fn no_new_privs() -> Result<(), ConfineError> {
         let rc = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
         if rc != 0 {
-            return Err(ConfineError::Linux(format!(
-                "prctl(NO_NEW_PRIVS): {}",
-                std::io::Error::last_os_error()
-            )));
+            return Err(layer_err(
+                LinuxLayer::NoNewPrivs,
+                format_args!("prctl(NO_NEW_PRIVS): {}", io::Error::last_os_error()),
+            ));
         }
         Ok(())
     }
@@ -1025,12 +1110,13 @@ mod linux {
             SeccompAction::Allow,                     // matched (allow-listed) → allow
             arch,
         )
-        .map_err(|e| ConfineError::Linux(format!("seccomp build: {e}")))?;
+        .map_err(|e| layer_err(LinuxLayer::Seccomp, format_args!("build: {e}")))?;
 
         let prog: BpfProgram = filter
             .try_into()
-            .map_err(|e| ConfineError::Linux(format!("seccomp compile: {e}")))?;
-        apply_filter(&prog).map_err(|e| ConfineError::Linux(format!("seccomp apply: {e}")))?;
+            .map_err(|e| layer_err(LinuxLayer::Seccomp, format_args!("compile: {e}")))?;
+        apply_filter(&prog)
+            .map_err(|e| layer_err(LinuxLayer::Seccomp, format_args!("apply: {e}")))?;
         Ok(())
     }
 
@@ -1049,26 +1135,27 @@ mod linux {
         let read_only = AccessFs::from_read(abi);
         let mut ruleset = Ruleset::default()
             .handle_access(AccessFs::from_all(abi))
-            .map_err(|e| ConfineError::Linux(format!("landlock handle: {e}")))?
+            .map_err(|e| layer_err(LinuxLayer::Landlock, format_args!("handle: {e}")))?
             .create()
-            .map_err(|e| ConfineError::Linux(format!("landlock create: {e}")))?;
+            .map_err(|e| layer_err(LinuxLayer::Landlock, format_args!("create: {e}")))?;
 
         for path in read_paths {
             // landlock 0.4.x: `PathBeneath::new` is infallible (returns the rule
             // directly, no longer a Result); only PathFd::new + add_rule can fail.
             let rule = landlock::PathBeneath::new(
-                landlock::PathFd::new(path)
-                    .map_err(|e| ConfineError::Linux(format!("landlock pathfd {path}: {e}")))?,
+                landlock::PathFd::new(path).map_err(|e| {
+                    layer_err(LinuxLayer::Landlock, format_args!("pathfd {path}: {e}"))
+                })?,
                 read_only,
             );
             ruleset = ruleset
                 .add_rule(rule)
-                .map_err(|e| ConfineError::Linux(format!("landlock rule {path}: {e}")))?;
+                .map_err(|e| layer_err(LinuxLayer::Landlock, format_args!("rule {path}: {e}")))?;
         }
 
         let status = ruleset
             .restrict_self()
-            .map_err(|e| ConfineError::Linux(format!("landlock restrict: {e}")))?;
+            .map_err(|e| layer_err(LinuxLayer::Landlock, format_args!("restrict: {e}")))?;
         // If the running kernel lacks Landlock, the restriction is a no-op here;
         // the seccomp `open` denial is the backstop, so this is not fatal.
         let _ = matches!(status.ruleset, RulesetStatus::NotEnforced);
@@ -1094,10 +1181,10 @@ mod linux {
         // the supervisor. Created BEFORE the fork so both ends inherit it.
         let mut sv = [0 as RawFd; 2];
         if unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, sv.as_mut_ptr()) } != 0 {
-            return Err(ConfineError::Linux(format!(
-                "egress socketpair: {}",
-                io::Error::last_os_error()
-            )));
+            return Err(layer_err(
+                LinuxLayer::EgressSupervisor,
+                format_args!("socketpair: {}", io::Error::last_os_error()),
+            ));
         }
         let (sv_super, sv_jailed) = (sv[0], sv[1]);
 
@@ -1112,7 +1199,10 @@ mod linux {
                 libc::close(sv_super);
                 libc::close(sv_jailed);
             }
-            return Err(ConfineError::Linux(format!("egress supervisor fork: {e}")));
+            return Err(layer_err(
+                LinuxLayer::EgressSupervisor,
+                format_args!("fork: {e}"),
+            ));
         }
 
         if pid > 0 {
@@ -1174,8 +1264,9 @@ mod linux {
             libc::close(sv_jailed);
         }
         if !sent {
-            return Err(ConfineError::Linux(
-                "egress: handing the seccomp listener to the supervisor failed".into(),
+            return Err(layer_err(
+                LinuxLayer::EgressSupervisor,
+                "handing the seccomp listener to the supervisor failed",
             ));
         }
         Ok(())
@@ -1295,10 +1386,10 @@ mod linux {
             )
         };
         if fd < 0 {
-            return Err(ConfineError::Linux(format!(
-                "seccomp new_listener: {}",
-                io::Error::last_os_error()
-            )));
+            return Err(layer_err(
+                LinuxLayer::Seccomp,
+                format_args!("new_listener: {}", io::Error::last_os_error()),
+            ));
         }
         Ok(fd as RawFd)
     }
