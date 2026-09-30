@@ -35,12 +35,15 @@
 //! - **The signature** — libsodium's *combined* `crypto_sign` over `SHA-512(archive
 //!   bytes)`: the 128-byte `signature` field is `[ed25519 sig : 64][SHA-512 hash : 64]`.
 //!   Verifying mirrors `spk.c++`'s `crypto_sign_open`: check the Ed25519 signature over
-//!   the embedded hash, then require that hash to equal `SHA-512` of the archive message
-//!   bytes (the bytes that follow the `Signature` message). A grain never launches from
-//!   an image whose signature does not bind it.
+//!   the embedded hash (strictly: small-order keys and `R` refused), then require that
+//!   hash to equal `SHA-512` of the archive message bytes (the bytes that follow the
+//!   `Signature` message). The archive message must end exactly where the stream ends.
+//!   A grain never launches from an image whose signature does not bind it.
 //! - **`Archive`** (`List(File)`; a `File` is regular / executable / symlink /
 //!   directory + `lastModificationTimeNs`) — decoded from the genuine capnp wire
-//!   (multi-segment, far pointers and all) via [`crate::capnp_wire`].
+//!   (multi-segment, far pointers and all) via [`crate::capnp_wire`]. A symlink target
+//!   must normalise inside the image root (absolute = from the root, i.e. the jail's
+//!   `/`; relative = from the link's directory).
 //!
 //! [`SpkBuilder`] packs a synthetic, *genuinely signed* `.spk` in this exact wire
 //! (real capnp messages, real combined Ed25519/SHA-512 signature), so the reader, the
@@ -52,7 +55,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 
 use data_encoding::Specification;
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use sha2::{Digest, Sha512};
 
 use crate::capnp_wire::{self, Message, WireContent, WireFile};
@@ -227,9 +230,19 @@ impl Archive {
     /// Decode an `Archive` from the real capnp `Archive` message bytes (the second
     /// message in a `.spk`'s decompressed stream). Handles the genuine multi-segment,
     /// far-pointer wire a real catalog package uses; bounded against over-count bombs.
+    ///
+    /// The archive message must be the **whole** remainder: the signature binds
+    /// every byte after the `Signature` message, so a byte past the archive's
+    /// declared end would be signed but never acted on. It is refused as
+    /// [`SpkError::TrailingBytes`].
     fn from_bytes(buf: &[u8], max_data_bytes: usize) -> Result<Archive, SpkError> {
-        let (msg, _consumed) =
+        let (msg, consumed) =
             Message::parse_prefix(buf).map_err(|e| SpkError::Archive(e.to_string()))?;
+        if consumed != buf.len() {
+            return Err(SpkError::TrailingBytes {
+                count: buf.len().saturating_sub(consumed),
+            });
+        }
         let root = msg.root().map_err(|e| SpkError::Archive(e.to_string()))?;
         let files = match root
             .get_list(0)
@@ -282,6 +295,37 @@ impl ArchiveBudget {
             max_data_bytes,
         }
     }
+}
+
+/// The image-root rule for a symlink target, applied at decode time so no
+/// verified [`Spk`] ever carries an escaping link.
+///
+/// The image is the jail's `/` (the consumer binds the package root read-only as
+/// the sandbox root and never follows links on the host). So an **absolute**
+/// target is resolved from the image root, and a **relative** one from the link's
+/// own directory, which sits `depth` components below the root. Components are
+/// normalised lexically: `""`/`.` are no-ops, a name descends, `..` ascends. A
+/// `..` that would ascend above the image root is refused as
+/// [`SpkError::SymlinkEscape`], as is an empty or NUL-bearing target. Links are
+/// not followed through other links: the rule is on the target string, which is
+/// what a host-side materializer writes.
+fn check_symlink_target(depth: usize, name: &str, target: &str) -> Result<(), SpkError> {
+    let escape = || SpkError::SymlinkEscape {
+        name: name.to_owned(),
+        target: target.to_owned(),
+    };
+    if target.is_empty() || target.contains('\0') {
+        return Err(escape());
+    }
+    let mut level = if target.starts_with('/') { 0 } else { depth };
+    for component in target.split('/') {
+        match component {
+            "" | "." => {}
+            ".." => level = level.checked_sub(1).ok_or_else(escape)?,
+            _ => level += 1,
+        }
+    }
+    Ok(())
 }
 
 fn decode_files(
@@ -339,10 +383,13 @@ fn decode_files(
                     FileContent::Executable(data)
                 }
             }
-            2 => FileContent::Symlink(
-                s.get_text(1)
-                    .map_err(|e| SpkError::Archive(e.to_string()))?,
-            ),
+            2 => {
+                let target = s
+                    .get_text(1)
+                    .map_err(|e| SpkError::Archive(e.to_string()))?;
+                check_symlink_target(depth, &name, &target)?;
+                FileContent::Symlink(target)
+            }
             3 => {
                 let sub = match s
                     .get_list(1)
@@ -390,6 +437,12 @@ pub enum SpkError {
     BadSignature,
     /// The inner archive codec failed.
     Archive(String),
+    /// Bytes follow the declared end of the `Archive` message: signed, but never
+    /// decoded, so the signed bytes are not the bytes acted on.
+    TrailingBytes { count: usize },
+    /// A symlink's target is empty, carries NUL, or normalises above the image
+    /// root (see [`Spk::parse`]).
+    SymlinkEscape { name: String, target: String },
 }
 
 impl std::fmt::Display for SpkError {
@@ -403,6 +456,12 @@ impl std::fmt::Display for SpkError {
                 write!(f, ".spk signature does not verify — tampered or mis-signed")
             }
             SpkError::Archive(e) => write!(f, ".spk archive decode failed: {e}"),
+            SpkError::TrailingBytes { count } => {
+                write!(f, ".spk has {count} trailing byte(s) after the archive message")
+            }
+            SpkError::SymlinkEscape { name, target } => {
+                write!(f, ".spk symlink {name:?} -> {target:?} escapes the image root")
+            }
         }
     }
 }
@@ -437,6 +496,9 @@ impl Spk {
                 limit,
                 overflowed: &overflowed,
             };
+            // lzma-rs decodes exactly one stream and refuses any byte after its
+            // footer ("Unexpected data after last XZ block"), so the raw file has
+            // no unsigned tail (pinned by `trailing_bytes_after_the_xz_stream_are_refused`).
             let res = lzma_rs::xz_decompress(&mut std::io::Cursor::new(body), &mut sink);
             if overflowed.get() {
                 // The sink aborted decompression at the cap — a decompression bomb.
@@ -473,9 +535,13 @@ impl Spk {
         if embedded_hash != computed.as_slice() {
             return Err(SpkError::BadSignature);
         }
+        // Strict verification: `verify` (the `Verifier` trait) accepts a small-order
+        // public key, and with one (e.g. the identity point, R = identity, s = 0)
+        // "signs" every archive — a universal forgery for that App ID.
+        // `verify_strict` refuses small-order A and R.
         let vk = VerifyingKey::from_bytes(&public_key).map_err(|_| SpkError::BadSignature)?;
         let sig = Signature::from_bytes(&sig_bytes);
-        vk.verify(embedded_hash, &sig)
+        vk.verify_strict(embedded_hash, &sig)
             .map_err(|_| SpkError::BadSignature)?;
 
         let archive = Archive::from_bytes(archive_bytes, limit)?;
@@ -812,6 +878,163 @@ mod tests {
         assert_eq!(
             decode_files(&list, 0, &mut budget).unwrap_err().to_string(),
             ".spk archive decode failed: archive name bytes exceeded"
+        );
+    }
+
+    /// `magic ++ xz(plain)` — the container around a hand-assembled decompressed
+    /// stream, so a test can place arbitrary signature fields or trailing bytes.
+    fn seal(plain: &[u8]) -> Vec<u8> {
+        let mut out = SPK_MAGIC.to_vec();
+        lzma_rs::xz_compress(&mut std::io::Cursor::new(plain), &mut out).unwrap();
+        out
+    }
+
+    /// `Signature ++ archive_msg ++ extra`, genuinely signed by `key` over
+    /// `SHA-512(archive_msg ++ extra)` — everything after the `Signature` message.
+    fn signed_plain(archive_msg: &[u8], extra: &[u8], key: &SigningKey) -> Vec<u8> {
+        let mut tail = archive_msg.to_vec();
+        tail.extend_from_slice(extra);
+        let hash = Sha512::digest(&tail);
+        let mut sig_field = key.sign(&hash).to_bytes().to_vec();
+        sig_field.extend_from_slice(&hash);
+        let mut plain = capnp_wire::write_signature(key.verifying_key().as_bytes(), &sig_field);
+        plain.extend_from_slice(&tail);
+        plain
+    }
+
+    fn symlink(name: &str, target: &str) -> File {
+        File {
+            name: name.into(),
+            content: FileContent::Symlink(target.into()),
+            mtime_ns: 0,
+        }
+    }
+
+    /// The identity point as a public key, R = identity, s = 0: `[s]B = R + [k]A`
+    /// holds for every message, so non-strict `verify` accepts it over any archive
+    /// (the weak-key vector ed25519-dalek documents under `is_weak`).
+    #[test]
+    fn a_small_order_key_forgery_is_refused() {
+        use ed25519_dalek::Verifier;
+        let archive_msg = Archive {
+            files: vec![File::regular(MANIFEST_PATH, b"{}".to_vec())],
+        }
+        .to_bytes();
+        let hash = Sha512::digest(&archive_msg);
+        let mut identity = [0u8; 32];
+        identity[0] = 1;
+        let mut sig_bytes = [0u8; 64];
+        sig_bytes[0] = 1;
+        // Premise: the vector really is a forgery under the non-strict check.
+        let vk = VerifyingKey::from_bytes(&identity).unwrap();
+        assert!(vk.is_weak());
+        assert!(vk.verify(&hash, &Signature::from_bytes(&sig_bytes)).is_ok());
+        let mut sig_field = sig_bytes.to_vec();
+        sig_field.extend_from_slice(&hash);
+        let mut plain = capnp_wire::write_signature(&identity, &sig_field);
+        plain.extend_from_slice(&archive_msg);
+        assert_eq!(
+            Spk::parse(&seal(&plain)).map(|s| s.app_id()),
+            Err(SpkError::BadSignature)
+        );
+    }
+
+    /// `s + ℓ` for a genuine signature. Refused by both `verify` and
+    /// `verify_strict` in ed25519-dalek 2 (without `legacy_compatibility`); pinned
+    /// so a feature flip that re-admits it goes red here.
+    #[test]
+    fn a_non_canonical_s_is_refused() {
+        use ed25519_dalek::Verifier;
+        const ELL: [u8; 32] = [
+            0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9,
+            0xde, 0x14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10,
+        ];
+        let key = test_signing_key();
+        let archive_msg = Archive::default().to_bytes();
+        let hash = Sha512::digest(&archive_msg);
+        let mut sig_bytes = key.sign(&hash).to_bytes();
+        let mut carry = 0u16;
+        for (b, l) in sig_bytes[32..].iter_mut().zip(ELL) {
+            let sum = *b as u16 + l as u16 + carry;
+            *b = sum as u8;
+            carry = sum >> 8;
+        }
+        assert_eq!(carry, 0);
+        assert!(key
+            .verifying_key()
+            .verify(&hash, &Signature::from_bytes(&sig_bytes))
+            .is_err());
+        let mut sig_field = sig_bytes.to_vec();
+        sig_field.extend_from_slice(&hash);
+        let mut plain = capnp_wire::write_signature(key.verifying_key().as_bytes(), &sig_field);
+        plain.extend_from_slice(&archive_msg);
+        assert_eq!(
+            Spk::parse(&seal(&plain)).map(|s| s.app_id()),
+            Err(SpkError::BadSignature)
+        );
+    }
+
+    #[test]
+    fn an_escaping_symlink_target_is_refused() {
+        let key = test_signing_key();
+        let dir = |files| File {
+            name: "app".into(),
+            content: FileContent::Directory(files),
+            mtime_ns: 0,
+        };
+        // Accepted: rooted in the jail, or relative and staying inside.
+        let ok = SpkBuilder::new()
+            .file(dir(vec![
+                symlink("libc", "/lib/x86_64-linux-gnu/libc.so.6"),
+                symlink("up", "../lib/./x"),
+                symlink("self", "."),
+            ]))
+            .pack(&key);
+        assert!(Spk::parse(&ok).is_ok());
+        for target in ["../../etc/shadow", "/../etc/shadow", "a/../../../x", ""] {
+            let bytes = SpkBuilder::new()
+                .file(dir(vec![symlink("evil", target)]))
+                .pack(&key);
+            assert_eq!(
+                Spk::parse(&bytes).map(|s| s.app_id()),
+                Err(SpkError::SymlinkEscape {
+                    name: "evil".into(),
+                    target: target.into()
+                }),
+                "target {target:?}"
+            );
+        }
+    }
+
+    /// Eight bytes after the `Archive` message, **inside** the signature: the
+    /// package verifies, but the signed bytes are not the bytes decoded.
+    #[test]
+    fn signed_trailing_bytes_after_the_archive_are_refused() {
+        let key = test_signing_key();
+        let archive_msg = Archive {
+            files: vec![File::regular(MANIFEST_PATH, b"{}".to_vec())],
+        }
+        .to_bytes();
+        assert!(Spk::parse(&seal(&signed_plain(&archive_msg, &[], &key))).is_ok());
+        let bytes = seal(&signed_plain(&archive_msg, &[0xa5; 8], &key));
+        assert_eq!(
+            Spk::parse(&bytes).map(|s| s.app_id()),
+            Err(SpkError::TrailingBytes { count: 8 })
+        );
+    }
+
+    /// Eight bytes after the xz stream, **outside** the signature. Refused by
+    /// lzma-rs 0.3's end-of-input check, not by this crate; pinned so a
+    /// decompressor change that tolerates a tail goes red here.
+    #[test]
+    fn trailing_bytes_after_the_xz_stream_are_refused() {
+        let mut bytes = sample_spk();
+        bytes.extend_from_slice(&[0xa5; 8]);
+        assert_eq!(
+            Spk::parse(&bytes).map(|s| s.app_id()),
+            Err(SpkError::Decompress(
+                "xz error: Unexpected data after last XZ block".into()
+            ))
         );
     }
 
