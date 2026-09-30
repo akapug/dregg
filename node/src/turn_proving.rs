@@ -497,6 +497,7 @@ pub fn rotation_witness_for_self_sovereign(
         effects,
         &dregg_turn::rotation_witness::empty_nullifier_root_8(),
         &dregg_turn::rotation_witness::empty_commitments_root_8(),
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
     )
 }
 
@@ -508,6 +509,11 @@ pub fn rotation_witness_for_self_sovereign(
 /// closing the "committed nullifier root never reaches the state" gap for the non-spend rotated legs.
 /// A non-spend turn does not advance the frontier, so `nullifier_root` rides both the before and after
 /// block (before == after == the current frontier).
+///
+/// `revoked_root` is the executor's LIVE credential-revocation accumulator root
+/// (`note_revoked.lock().root8()`, base limb 37 + completion 82..88), threaded the same way: without
+/// it every rotated leg committed `empty_revoked_root_8()`, so a proof stated "nothing revoked" on a
+/// node whose committed set held revocations (synthesis item 20).
 #[allow(clippy::too_many_arguments)]
 pub fn rotation_witness_for_self_sovereign_with_root(
     pre_balance: u64,
@@ -518,6 +524,7 @@ pub fn rotation_witness_for_self_sovereign_with_root(
     effects: &[dregg_turn::Effect],
     nullifier_root: &dregg_circuit::Faithful8,
     commitments_root: &dregg_circuit::Faithful8,
+    revoked_root: &dregg_circuit::Faithful8,
 ) -> Option<dregg_sdk::RotationTurnWitness> {
     rotation_witness_for_self_sovereign_impl(
         pre_balance,
@@ -528,6 +535,7 @@ pub fn rotation_witness_for_self_sovereign_with_root(
         effects,
         nullifier_root,
         commitments_root,
+        revoked_root,
     )
 }
 
@@ -558,12 +566,15 @@ pub fn rotation_witness_for_capability(
         effects,
         &dregg_turn::rotation_witness::empty_nullifier_root_8(),
         &dregg_turn::rotation_witness::empty_commitments_root_8(),
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
     )
 }
 
 /// As [`rotation_witness_for_capability`], but the committed `nullifier_root` (limbs [26,67..73]) is
 /// the executor's LIVE nullifier frontier (`note_nullifiers.lock().root8()`), threaded from the live
-/// commit path so a capability-gated non-spend turn binds the node's REAL spent-note frontier.
+/// commit path so a capability-gated non-spend turn binds the node's REAL spent-note frontier, and
+/// the executor's LIVE `note_revoked.root8()` as `revoked_root` (see
+/// [`rotation_witness_for_self_sovereign_with_root`]).
 #[allow(clippy::too_many_arguments)]
 pub fn rotation_witness_for_capability_with_root(
     pre_balance: u64,
@@ -575,6 +586,7 @@ pub fn rotation_witness_for_capability_with_root(
     effects: &[dregg_turn::Effect],
     nullifier_root: &dregg_circuit::Faithful8,
     commitments_root: &dregg_circuit::Faithful8,
+    revoked_root: &dregg_circuit::Faithful8,
 ) -> Option<dregg_sdk::RotationTurnWitness> {
     rotation_witness_for_capability_turn(
         pre_balance,
@@ -586,6 +598,7 @@ pub fn rotation_witness_for_capability_with_root(
         effects,
         nullifier_root,
         commitments_root,
+        revoked_root,
     )
 }
 
@@ -648,6 +661,12 @@ fn rotation_witness_for_cap_less_turn(
         // `wide_commit_anchors`; the base producer carries the native empty frontier default here.
         &dregg_turn::rotation_witness::empty_nullifier_root_8(),
         &dregg_turn::rotation_witness::empty_commitments_root_8(),
+        // The synthetic cap-less spend context commits every accumulator at its empty default
+        // (the nullifier/commitments roots above included), and the rotated noteSpend generator
+        // overwrites the revoked group from its own `before_revoked` leaves (`&[]` in
+        // `dregg_sdk::full_turn_proof::spend_revocation_witness`). The live revoked set reaches this
+        // arm only when those leaves are threaded; until then it is the empty root, stated here.
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
     )
 }
 
@@ -661,6 +680,7 @@ fn rotation_witness_for_self_sovereign_impl(
     effects: &[dregg_turn::Effect],
     nullifier_root: &dregg_circuit::Faithful8,
     commitments_root: &dregg_circuit::Faithful8,
+    revoked_root: &dregg_circuit::Faithful8,
 ) -> Option<dregg_sdk::RotationTurnWitness> {
     use dregg_turn::rotation_witness as rw;
 
@@ -692,6 +712,10 @@ fn rotation_witness_for_self_sovereign_impl(
     // frontier: the committed `nullifier_root` rides both the before and after block unchanged. Its
     // value is the caller-threaded frontier (`rotation_witness_for_self_sovereign_with_root` passes
     // the executor's live `note_nullifiers.root8()`; the bare entry passes the native empty root).
+    // `revoked_root` follows the same rule: the live `note_revoked.root8()` from the commit path, the
+    // empty root from the bare / cap-less entries. Captured after execution, it rides both blocks;
+    // for a turn that itself revokes, the BEFORE block therefore already carries this turn's insert,
+    // the same post-execution convention the nullifier/commitments roots use here.
 
     // COHORT GATE (PATH-PRESERVE §1/§4 Shape-1 cutover): the rotated effect-vm prover
     // (`prove_effect_vm_rotated_ir2_with_caveat`) proves exactly ONE cohort descriptor per call and
@@ -742,7 +766,7 @@ fn rotation_witness_for_self_sovereign_impl(
         &ctx_ledger,
         nullifier_root,
         commitments_root,
-        &dregg_turn::rotation_witness::empty_revoked_root_8(),
+        revoked_root,
         receipt_hashes,
         &dregg_cell::commitment::RotationCarrierMaterial::default(),
     );
@@ -751,7 +775,7 @@ fn rotation_witness_for_self_sovereign_impl(
         &ctx_ledger,
         nullifier_root,
         commitments_root,
-        &dregg_turn::rotation_witness::empty_revoked_root_8(),
+        revoked_root,
         receipt_hashes,
         &after_material,
     );
@@ -802,6 +826,7 @@ fn rotation_witness_for_capability_turn(
     effects: &[dregg_turn::Effect],
     nullifier_root: &dregg_circuit::Faithful8,
     commitments_root: &dregg_circuit::Faithful8,
+    revoked_root: &dregg_circuit::Faithful8,
 ) -> Option<dregg_sdk::RotationTurnWitness> {
     use dregg_turn::rotation_witness as rw;
 
@@ -895,7 +920,7 @@ fn rotation_witness_for_capability_turn(
         &ctx_ledger,
         nullifier_root,
         commitments_root,
-        &dregg_turn::rotation_witness::empty_revoked_root_8(),
+        revoked_root,
         receipt_hashes,
         &dregg_cell::commitment::RotationCarrierMaterial::default(),
     );
@@ -904,7 +929,7 @@ fn rotation_witness_for_capability_turn(
         &ctx_ledger,
         nullifier_root,
         commitments_root,
-        &dregg_turn::rotation_witness::empty_revoked_root_8(),
+        revoked_root,
         receipt_hashes,
         &after_material,
     );
@@ -1902,6 +1927,7 @@ pub fn mint_and_encode_finalized_turn(
     receipt_hashes: &[[u8; 32]],
     nullifier_root: &dregg_circuit::Faithful8,
     commitments_root: &dregg_circuit::Faithful8,
+    revoked_root: &dregg_circuit::Faithful8,
     proven_old_commit: [BabyBear; 8],
     proven_new_commit: [BabyBear; 8],
 ) -> Result<Vec<u8>, String> {
@@ -1917,6 +1943,7 @@ pub fn mint_and_encode_finalized_turn(
         effects,
         nullifier_root,
         commitments_root,
+        revoked_root,
     ) {
         Some(rot) => rot
             .before_cell_state()
@@ -1930,6 +1957,7 @@ pub fn mint_and_encode_finalized_turn(
         after_cell,
         nullifier_root,
         commitments_root,
+        revoked_root,
         receipt_hashes,
         proven_old_commit,
         proven_new_commit,
@@ -2431,6 +2459,120 @@ mod tests {
         .expect("carried proof must re-verify against carried commitments");
     }
 
+    /// **A LIVE REVOCATION REACHES THE COMMITTED REVOKED LANES (synthesis item 20).** The four
+    /// rotation-witness producer sites used to pass `empty_revoked_root_8()`, so a rotated leg
+    /// committed "nothing revoked" whatever the executor's `note_revoked` held. With a non-empty
+    /// live set threaded through the commit-path entries, both blocks of both builders (the
+    /// self-sovereign and the capability-gated) must commit exactly the witness `produce` builds
+    /// over that live root — and must differ from the empty-root witness, so reverting any of the
+    /// four sites to the empty default turns this red.
+    #[test]
+    fn a_live_revocation_reaches_the_committed_revoked_lanes() {
+        use dregg_turn::rotation_witness as rw;
+
+        let bob = CellId::from_bytes([0xB3; 32]);
+        let pre_balance: u64 = 1000;
+        let before_cell = dregg_cell::Cell::with_balance([0xA7; 32], [0u8; 32], pre_balance as i64);
+        let alice = before_cell.id();
+        let mut after_cell = before_cell.clone();
+        after_cell.state.set_balance((pre_balance - 25) as i64);
+        let effects = vec![dregg_turn::Effect::Transfer {
+            from: alice,
+            to: bob,
+            amount: 25,
+        }];
+        let receipt_hashes = [[0x11u8; 32]];
+        let nul = rw::empty_nullifier_root_8();
+        let com = rw::empty_commitments_root_8();
+
+        let mut revoked = dregg_cell::revoked_set::RevokedSet::new();
+        revoked
+            .insert([0x5A; 32], 7)
+            .expect("a fresh revocation key inserts");
+        let live = revoked.root8();
+        let empty = rw::empty_revoked_root_8();
+        assert_ne!(
+            live, empty,
+            "the live set must be non-empty for this to test anything"
+        );
+
+        let mut ctx_ledger = dregg_cell::Ledger::new();
+        let _ = ctx_ledger.insert_cell(before_cell.clone());
+        let material = dregg_cell::commitment::RotationCarrierMaterial::default();
+        let expect_before = rw::produce(
+            &before_cell,
+            &ctx_ledger,
+            &nul,
+            &com,
+            &live,
+            &receipt_hashes,
+            &material,
+        );
+        let expect_after = rw::produce(
+            &after_cell,
+            &ctx_ledger,
+            &nul,
+            &com,
+            &live,
+            &receipt_hashes,
+            &material,
+        );
+
+        let sovereign = |revoked_root| {
+            rotation_witness_for_self_sovereign_with_root(
+                pre_balance,
+                0,
+                &before_cell,
+                &after_cell,
+                &receipt_hashes,
+                &effects,
+                &nul,
+                &com,
+                revoked_root,
+            )
+            .expect("a pristine transfer turn rotates")
+        };
+        let cap_root =
+            dregg_cell::compute_canonical_capability_root_felt(&before_cell.capabilities);
+        let capability = |revoked_root| {
+            rotation_witness_for_capability_with_root(
+                pre_balance,
+                0,
+                cap_root,
+                &before_cell,
+                &after_cell,
+                &receipt_hashes,
+                &effects,
+                &nul,
+                &com,
+                revoked_root,
+            )
+            .expect("a transfer turn with a matching cap root rotates")
+        };
+
+        for (name, with_live, with_empty) in [
+            ("self-sovereign", sovereign(&live), sovereign(&empty)),
+            ("capability", capability(&live), capability(&empty)),
+        ] {
+            assert_eq!(
+                with_live.before.pre_limbs, expect_before.pre_limbs,
+                "{name}: BEFORE block"
+            );
+            assert_eq!(
+                with_live.after.pre_limbs, expect_after.pre_limbs,
+                "{name}: AFTER block"
+            );
+            assert_ne!(
+                with_live.before.pre_limbs, with_empty.before.pre_limbs,
+                "{name}: the live revoked root must move the committed BEFORE limbs"
+            );
+            assert_ne!(
+                with_live.after.pre_limbs, with_empty.after.pre_limbs,
+                "{name}: the live revoked root must move the committed AFTER limbs"
+            );
+        }
+    }
+
     /// **RETENTION ROUND-TRIP (the REAL IVC-compression seam).** A committed
     /// transfer turn is proven exactly the commit path's way; the wrap-input
     /// `FinalizedTurn` is then minted anchor-tied to that proof
@@ -2459,6 +2601,7 @@ mod tests {
         let receipt_hashes = [[0x11u8; 32]];
         let nullifier_root = dregg_turn::rotation_witness::empty_nullifier_root_8();
         let commitments_root = dregg_turn::rotation_witness::empty_commitments_root_8();
+        let revoked_root = dregg_turn::rotation_witness::empty_revoked_root_8();
 
         let rotation = rotation_witness_for_self_sovereign_with_root(
             pre_balance,
@@ -2469,6 +2612,7 @@ mod tests {
             &effects,
             &nullifier_root,
             &commitments_root,
+            &revoked_root,
         );
         let proven = prove_and_verify_finalized_turn(
             &alice,
@@ -2491,6 +2635,7 @@ mod tests {
             &receipt_hashes,
             &nullifier_root,
             &commitments_root,
+            &revoked_root,
             proven.old_commit,
             proven.new_commit,
         )
@@ -2518,6 +2663,7 @@ mod tests {
                 &receipt_hashes,
                 &nullifier_root,
                 &commitments_root,
+                &revoked_root,
                 proven.old_commit,
                 bad_new,
             )

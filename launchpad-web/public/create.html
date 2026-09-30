@@ -81,7 +81,7 @@
 </main>
 
 <script type="module">
-import { connect, state, mountWalletPill, short } from '/js/app.js';
+import { connect, state, mountWalletPill, short, html, setHtml } from '/js/app.js';
 import { register, submitDisclosure } from '/js/launchpad.js';
 await import('/vendor/ethers.js');
 await mountWalletPill();
@@ -90,9 +90,9 @@ const $ = (id) => document.getElementById(id);
 function renderCard() {
   const total = +$('total').value, sale = +$('sale').value, alloc = +$('alloc').value, pool = +$('poolAlloc').value;
   const closes = sale + alloc + pool === total && total > 0;
-  $('closeHint').innerHTML = closes ? '<span class="badge ok">closes ✓</span>'
-    : `<span class="badge no">${sale}+${alloc}+${pool}≠${total}</span>`;
-  $('scheduleCard').innerHTML = `
+  setHtml($('closeHint'), closes ? html`<span class="badge ok">closes ✓</span>`
+    : html`<span class="badge no">${sale}+${alloc}+${pool}≠${total}</span>`);
+  setHtml($('scheduleCard'), html`
     <h4>${$('name').value} <span class="tick">$${$('symbol').value}</span></h4>
     <div class="kv" style="margin-top:8px">
       <span class="k">total supply</span><span class="v mono">${total}</span>
@@ -102,20 +102,20 @@ function renderCard() {
       <span class="k">graduation seed</span><span class="v mono">${$('gradPct').value}% of proceeds + ${pool} tokens</span>
       <span class="k">reserve price</span><span class="v mono">${$('reserve').value} gwei/token</span>
       <span class="k">accounting</span><span class="v">${closes
-        ? '<span class="badge ok">sale + creator + pool = total</span>'
-        : '<span class="badge no">does not close</span>'}</span>
-    </div>`;
+        ? html`<span class="badge ok">sale + creator + pool = total</span>`
+        : html`<span class="badge no">does not close</span>`}</span>
+    </div>`);
 }
 ['name','symbol','total','sale','alloc','poolAlloc','gradPct','reserve','lockDays'].forEach((id) => $(id).oninput = renderCard);
 renderCard();
 
 $('go').onclick = async () => {
-  const res = $('result'); res.innerHTML = '<div class="note">connecting wallet…</div>';
+  const res = $('result'); setHtml(res, html`<div class="note">connecting wallet…</div>`);
   try {
     await connect(0);
     const G = 10n ** 9n;
     const lockUntil = Math.floor(Date.now()/1000) + (+$('lockDays').value)*86400;
-    res.innerHTML = '<div class="note">registering (disclosed mint turn)…</div>';
+    setHtml(res, html`<div class="note">registering (disclosed mint turn)…</div>`);
     const r = await register({
       name: $('name').value, symbol: $('symbol').value,
       totalSupply: +$('total').value, saleSupply: +$('sale').value, creatorAllocation: +$('alloc').value,
@@ -126,19 +126,19 @@ $('go').onclick = async () => {
     // submit the raw disclosed schedule + metadata; server verifies vs the commitment.
     const disc = await submitDisclosure(r.launchId, r.schedule,
       { name: $('name').value, symbol: $('symbol').value, description: $('desc').value, creator: state.account });
-    res.innerHTML = `<div class="card">
+    setHtml(res, html`<div class="card">
       <div class="lab">✓ launch #${r.launchId} registered</div>
       <div class="kv" style="margin-top:8px">
         <span class="k">token</span><span class="v mono">${short(r.token)}</span>
         <span class="k">tx</span><span class="v mono">${short(r.txHash)}</span>
         <span class="k">disclosure</span><span class="v">${disc.verified
-          ? '<span class="badge ok">verified vs on-chain commitment</span>'
-          : '<span class="badge no">mismatch</span>'}</span>
+          ? html`<span class="badge ok">verified vs on-chain commitment</span>`
+          : html`<span class="badge no">mismatch</span>`}</span>
       </div>
-      <a href="/launch.html?id=${r.launchId}">→ open the sale/bid page</a> ·
-      <a href="/token.html?id=${r.launchId}">token page</a>
-    </div>`;
-  } catch (e) { res.innerHTML = `<div class="banner">register failed: ${e.shortMessage || e.message}</div>`; }
+      <a href="/launch.html?id=${encodeURIComponent(r.launchId)}">→ open the sale/bid page</a> ·
+      <a href="/token.html?id=${encodeURIComponent(r.launchId)}">token page</a>
+    </div>`);
+  } catch (e) { setHtml(res, html`<div class="banner">register failed: ${e.shortMessage || e.message}</div>`); }
 };
 </script>
 </body>

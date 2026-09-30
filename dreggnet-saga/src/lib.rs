@@ -505,7 +505,9 @@ mod saga {
 
         // ── trade: an atomic escrow swap moves THAT note to the buyer ──
         market.fund_dregg(BUYER, 100);
-        let mut trade = market.open_trade(HERO, LegSpec::Asset(charm), BUYER, LegSpec::Dregg(50));
+        let mut trade = market
+            .open_trade(HERO, LegSpec::Asset(charm), BUYER, LegSpec::Dregg(50))
+            .expect("a 50 $DREGG leg is movable");
         market
             .deposit(&mut trade, TradeSide::A)
             .expect("the seller deposits the charm");
@@ -539,8 +541,9 @@ mod saga {
         );
 
         // Non-vacuous: a NON-OWNER cannot offer the charm (the scam-proof gate).
-        let mut mallory_trade =
-            market.open_trade("Mallory", LegSpec::Asset(charm), BUYER, LegSpec::Dregg(1));
+        let mut mallory_trade = market
+            .open_trade("Mallory", LegSpec::Asset(charm), BUYER, LegSpec::Dregg(1))
+            .expect("a 1 $DREGG leg is movable");
         let stolen = market.deposit(&mut mallory_trade, TradeSide::A);
         assert!(
             stolen.is_err(),
@@ -775,12 +778,14 @@ mod saga {
             "the crafted note is the trade world's own live note (no re-mint)"
         );
         market.fund_dregg(BUYER, 100);
-        let mut trade = market.open_trade(
-            hero.holder_label(),
-            LegSpec::Asset(charm),
-            BUYER,
-            LegSpec::Dregg(50),
-        );
+        let mut trade = market
+            .open_trade(
+                hero.holder_label(),
+                LegSpec::Asset(charm),
+                BUYER,
+                LegSpec::Dregg(50),
+            )
+            .expect("a 50 $DREGG leg is movable");
         market
             .deposit(&mut trade, TradeSide::A)
             .expect("seller deposits the charm");

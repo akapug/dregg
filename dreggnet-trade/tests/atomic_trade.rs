@@ -35,7 +35,9 @@ fn atomic_asset_swap_crosses_both_legs_and_conserves() {
     assert_eq!(tw.current_holder_label(ore), Some("bob"));
 
     // "Alice gives the hat iff Bob gives the ore."
-    let mut trade = tw.open_trade("alice", LegSpec::Asset(hat), "bob", LegSpec::Asset(ore));
+    let mut trade = tw
+        .open_trade("alice", LegSpec::Asset(hat), "bob", LegSpec::Asset(ore))
+        .unwrap();
 
     // Both parties commit their legs into neutral escrow custody.
     tw.deposit(&mut trade, TradeSide::A)
@@ -105,12 +107,14 @@ fn ghosting_counterparty_cannot_walk_and_depositor_is_made_whole() {
     let sword = tw.mint("alice", b"cosmetic-flamebrand");
     let shield = tw.mint("bob", b"cosmetic-aegis");
 
-    let mut trade = tw.open_trade(
-        "alice",
-        LegSpec::Asset(sword),
-        "bob",
-        LegSpec::Asset(shield),
-    );
+    let mut trade = tw
+        .open_trade(
+            "alice",
+            LegSpec::Asset(sword),
+            "bob",
+            LegSpec::Asset(shield),
+        )
+        .unwrap();
 
     // Alice deposits; Bob GHOSTS (never deposits his leg).
     tw.deposit(&mut trade, TradeSide::A).unwrap();
@@ -158,12 +162,14 @@ fn non_owner_cannot_offer_an_asset_they_do_not_own() {
     let mut tw = TradeWorld::new();
     let relic = tw.mint("alice", b"provenance-trophy #1");
     // Mallory does not own the relic but tries to put it up in a trade.
-    let mut scam = tw.open_trade(
-        "mallory",
-        LegSpec::Asset(relic),
-        "victim",
-        LegSpec::Dregg(500),
-    );
+    let mut scam = tw
+        .open_trade(
+            "mallory",
+            LegSpec::Asset(relic),
+            "victim",
+            LegSpec::Dregg(500),
+        )
+        .unwrap();
     tw.fund_dregg("victim", 500);
 
     let refused = tw.deposit(&mut scam, TradeSide::A);
@@ -188,7 +194,9 @@ fn traded_item_provenance_reverifies_end_to_end() {
     let minter = tw.current_owner(drop).unwrap();
     assert_eq!(tw.lineage_len(drop), 1, "fresh mint is a 1-version lineage");
 
-    let mut trade = tw.open_trade("alice", LegSpec::Asset(drop), "bob", LegSpec::Asset(junk));
+    let mut trade = tw
+        .open_trade("alice", LegSpec::Asset(drop), "bob", LegSpec::Asset(junk))
+        .unwrap();
     tw.deposit(&mut trade, TradeSide::A).unwrap();
     tw.deposit(&mut trade, TradeSide::B).unwrap();
     tw.settle(&mut trade).unwrap();
@@ -307,7 +315,9 @@ fn redeposit_over_a_live_leg_is_refused() {
     let mut tw = TradeWorld::new();
     let a = tw.mint("alice", b"a");
     let b = tw.mint("bob", b"b");
-    let mut trade = tw.open_trade("alice", LegSpec::Asset(a), "bob", LegSpec::Asset(b));
+    let mut trade = tw
+        .open_trade("alice", LegSpec::Asset(a), "bob", LegSpec::Asset(b))
+        .unwrap();
     tw.deposit(&mut trade, TradeSide::A).unwrap();
     assert!(matches!(
         tw.deposit(&mut trade, TradeSide::A),
@@ -463,4 +473,152 @@ fn posting_is_owner_gated_soulbound_refused_and_cancel_is_seller_only() {
         Some("alice"),
         "a cancelled offer leaves the item where it was — nothing was ever locked"
     );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Unmovable prices: 0 and anything above i64::MAX are refused before custody.
+// (Synthesis item 17: both used to pass the funds check through `as i64` and panic
+// in `deposit` after the seller's asset was already in escrow custody.)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const TWO_POW_63: u64 = 1 << 63;
+
+#[test]
+fn list_and_post_refuse_a_zero_or_over_i64_price() {
+    use dreggnet_trade::Bazaar;
+
+    let mut tw = TradeWorld::new();
+    let hat = tw.mint("alice", b"unpriceable-hat");
+    let mut stall = Bazaar::new();
+
+    assert!(matches!(
+        tw.list("alice", hat, 0),
+        Err(TradeError::ZeroDreggAmount)
+    ));
+    assert!(matches!(
+        tw.list("alice", hat, TWO_POW_63),
+        Err(TradeError::DreggAmountTooLarge { amount }) if amount == TWO_POW_63
+    ));
+    assert!(matches!(
+        tw.list("alice", hat, u64::MAX),
+        Err(TradeError::DreggAmountTooLarge { amount }) if amount == u64::MAX
+    ));
+    assert!(matches!(
+        stall.post(&mut tw, "alice", hat, 0),
+        Err(TradeError::ZeroDreggAmount)
+    ));
+    assert!(matches!(
+        stall.post(&mut tw, "alice", hat, TWO_POW_63),
+        Err(TradeError::DreggAmountTooLarge { .. })
+    ));
+    assert_eq!(stall.open_count(), 0, "a refused post posts nothing");
+    // The boundary itself is movable.
+    tw.list("alice", hat, i64::MAX as u64)
+        .expect("i64::MAX is the largest movable price");
+    tw.list("alice", hat, 1)
+        .expect("1 is the smallest movable price");
+}
+
+#[test]
+fn buy_at_an_unmovable_price_refuses_before_the_asset_moves() {
+    for bad in [0u64, TWO_POW_63, u64::MAX] {
+        let mut tw = TradeWorld::new();
+        let skin = tw.mint("seller", b"weapon-skin #7");
+        tw.fund_dregg("buyer", 1_000);
+        let mut listing = tw.list("seller", skin, 300).expect("a valid listing");
+        let lineage = tw.lineage_len(skin);
+        // `Listing::price` is a pub field; `buy` must not trust `list`'s check.
+        listing.price = bad;
+
+        let bought = tw.buy(&mut listing, "buyer");
+        match bad {
+            0 => assert!(
+                matches!(bought, Err(TradeError::ZeroDreggAmount)),
+                "{bought:?}"
+            ),
+            _ => assert!(
+                matches!(bought, Err(TradeError::DreggAmountTooLarge { amount }) if amount == bad),
+                "{bought:?}"
+            ),
+        }
+        assert_eq!(tw.current_holder_label(skin), Some("seller"));
+        assert_eq!(
+            tw.lineage_len(skin),
+            lineage,
+            "the asset never entered custody (no transfer was recorded)"
+        );
+        assert_eq!(tw.dregg_balance("buyer"), 1_000);
+        assert_eq!(tw.dregg_balance("seller"), 0);
+
+        // The same listing still sells at a real price afterwards.
+        listing.price = 300;
+        tw.buy(&mut listing, "buyer")
+            .expect("a normal trade after the refusal");
+        assert_eq!(tw.current_holder_label(skin), Some("buyer"));
+        assert_eq!(tw.dregg_balance("seller"), 300);
+        assert_eq!(tw.dregg_balance("buyer"), 700);
+    }
+}
+
+#[test]
+fn a_bazaar_buy_at_2_pow_63_cannot_be_reached_and_a_normal_one_settles() {
+    use dreggnet_trade::Bazaar;
+
+    let mut tw = TradeWorld::new();
+    let mut stall = Bazaar::new();
+    let idol = tw.mint("alice", b"idol");
+    tw.fund_dregg("bob", 50);
+    assert!(stall.post(&mut tw, "alice", idol, TWO_POW_63).is_err());
+    let id = stall
+        .post(&mut tw, "alice", idol, 40)
+        .expect("a movable price posts");
+    stall
+        .buy(&mut tw, id, "bob")
+        .expect("the normal trade settles");
+    assert_eq!(tw.current_holder_label(idol), Some("bob"));
+    assert_eq!(tw.dregg_balance("alice"), 40);
+    assert_eq!(tw.dregg_balance("bob"), 10);
+}
+
+#[test]
+fn open_trade_refuses_an_unmovable_dregg_leg() {
+    let mut tw = TradeWorld::new();
+    let hat = tw.mint("alice", b"hat");
+    assert!(matches!(
+        tw.open_trade("alice", LegSpec::Asset(hat), "bob", LegSpec::Dregg(0)),
+        Err(TradeError::ZeroDreggAmount)
+    ));
+    assert!(matches!(
+        tw.open_trade(
+            "alice",
+            LegSpec::Dregg(TWO_POW_63),
+            "bob",
+            LegSpec::Asset(hat)
+        ),
+        Err(TradeError::DreggAmountTooLarge { .. })
+    ));
+    assert_eq!(tw.current_holder_label(hat), Some("alice"));
+}
+
+#[test]
+fn a_buyer_who_cannot_pay_gets_an_error_and_the_seller_is_made_whole() {
+    let mut tw = TradeWorld::new();
+    let cape = tw.mint("seller", b"cape");
+    tw.fund_dregg("buyer", 10);
+    let mut listing = tw.list("seller", cape, 300).unwrap();
+    let bought = tw.buy(&mut listing, "buyer");
+    assert!(
+        matches!(
+            bought,
+            Err(TradeError::InsufficientDregg {
+                have: 10,
+                need: 300
+            })
+        ),
+        "{bought:?}"
+    );
+    // The asset went into custody and the reclaim arm brought it back.
+    assert_eq!(tw.current_holder_label(cape), Some("seller"));
+    assert_eq!(tw.dregg_balance("buyer"), 10);
+    assert!(tw.verify_provenance(cape).verified);
 }

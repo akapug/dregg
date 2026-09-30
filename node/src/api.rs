@@ -1022,6 +1022,25 @@ pub struct SubmitEncryptedTurnResponse {
     pub error: Option<String>,
 }
 
+impl SubmitEncryptedTurnResponse {
+    /// The one refusal shape for `POST /turns/submit-encrypted`: `accepted: false`, `turn_hash` in
+    /// the documented `"rejected: <reason>"` form, `error` carrying the bare reason. Every refusal
+    /// arm builds through this, so the documented form is structural rather than four hand-written
+    /// strings (one of which, the receipt-append arm, had drifted off it).
+    fn rejected(reason: impl std::fmt::Display) -> Self {
+        let reason = reason.to_string();
+        Self {
+            accepted: false,
+            turn_hash: Some(format!("rejected: {reason}")),
+            was_encrypted: false,
+            proof_status: ActivityProofStatus::NotCommitted,
+            has_witness: false,
+            witness_count: 0,
+            error: Some(reason),
+        }
+    }
+}
+
 #[derive(Serialize)]
 pub struct CellResponse {
     pub id: String,
@@ -6141,17 +6160,9 @@ async fn post_submit_encrypted_turn(
     // envelope is rejected here — before the node spends decrypt work.
     if let Err(err) = encrypted.verify_admission_binding() {
         crate::metrics::inc_turns_executed("rejected");
-        return Ok(Json(SubmitEncryptedTurnResponse {
-            accepted: false,
-            turn_hash: Some(format!(
-                "rejected: encrypted turn validity proof invalid: {err:?}"
-            )),
-            was_encrypted: false,
-            proof_status: ActivityProofStatus::NotCommitted,
-            has_witness: false,
-            witness_count: 0,
-            error: Some(format!("encrypted turn validity proof invalid: {err:?}")),
-        }));
+        return Ok(Json(SubmitEncryptedTurnResponse::rejected(format!(
+            "encrypted turn validity proof invalid: {err:?}"
+        ))));
     }
 
     let mut s = state.write().await;
@@ -6191,17 +6202,9 @@ async fn post_submit_encrypted_turn(
             Err(err) => {
                 crate::metrics::inc_turns_executed("rejected");
                 drop(s);
-                return Ok(Json(SubmitEncryptedTurnResponse {
-                    accepted: false,
-                    turn_hash: Some(format!(
-                        "rejected: encrypted turn decryption failed: {err:?}"
-                    )),
-                    was_encrypted: false,
-                    proof_status: ActivityProofStatus::NotCommitted,
-                    has_witness: false,
-                    witness_count: 0,
-                    error: Some(format!("encrypted turn decryption failed: {err:?}")),
-                }));
+                return Ok(Json(SubmitEncryptedTurnResponse::rejected(format!(
+                    "encrypted turn decryption failed: {err:?}"
+                ))));
             }
         };
 
@@ -6222,23 +6225,21 @@ async fn post_submit_encrypted_turn(
             crate::metrics::record_turn_execution_duration(start.elapsed().as_secs_f64());
             crate::metrics::set_ledger_cell_count(s.ledger.len() as f64);
 
-            // Solo mode: record nullifier + tentative finality, same as
-            // the cleartext path (post_submit_turn). The encrypted path
-            // doesn't change consensus semantics — only privacy.
+            // Solo mode: tentative finality + nullifier-log entry + height advance, same as
+            // the cleartext path. The encrypted path doesn't change consensus semantics — only
+            // privacy. The finality downgrade must precede the append (finality is bound into
+            // `receipt_hash`, and the appended receipt is the one served). The nullifier entry and
+            // the height advance must FOLLOW it: they used to run first, so a refused append
+            // rolled the ledger back while the turn stayed in `nullifier_log` and the solo height
+            // had moved with no block.
             let turn_hash_bytes = receipt.turn_hash;
             let node_signing_key = s.cclerk.gossip_signing_key().to_bytes();
-            if let Some(ref mut solo) = s.solo_consensus
-                && solo.is_solo
-            {
+            let solo_mode = s.solo_consensus.as_ref().is_some_and(|solo| solo.is_solo);
+            if solo_mode {
                 receipt.finality = dregg_turn::Finality::Tentative;
                 // Re-sign after the committed finality downgrade: finality is bound
                 // into receipt_hash, and the executor signed the optimistic Final.
                 resign_receipt_committed(&mut receipt, &node_signing_key);
-                let height = solo.height;
-                let _ = solo
-                    .nullifier_log
-                    .insert(turn_hash_bytes, turn_hash_bytes, height);
-                solo.advance_height();
                 #[cfg(debug_assertions)]
                 debug_assert_signed_last(&receipt, &node_signing_key);
             }
@@ -6251,18 +6252,20 @@ async fn post_submit_encrypted_turn(
             // inline re-check. The composed proof (rotated effect-vm leg) is built +
             // self-verified asynchronously off the lock by the prove pool below.
             if let Err(err) = s.cclerk.append_receipt(receipt.clone()) {
+                // Nothing but the ledger has moved yet: roll it back and refuse.
                 s.ledger.rollback_restore_point();
                 crate::metrics::inc_turns_executed("rejected");
                 drop(s);
-                return Ok(Json(SubmitEncryptedTurnResponse {
-                    accepted: false,
-                    turn_hash: Some(format!("rejected: receipt chain mismatch: {err}")),
-                    was_encrypted: false,
-                    proof_status: ActivityProofStatus::NotCommitted,
-                    has_witness: false,
-                    witness_count: 0,
-                    error: Some(format!("receipt chain mismatch: {err}")),
-                }));
+                return Ok(Json(SubmitEncryptedTurnResponse::rejected(format!(
+                    "receipt append refused: {err}"
+                ))));
+            }
+            if solo_mode && let Some(solo) = s.solo_consensus.as_mut() {
+                let height = solo.height;
+                let _ = solo
+                    .nullifier_log
+                    .insert(turn_hash_bytes, turn_hash_bytes, height);
+                solo.advance_height();
             }
             // Receipt is on the chain: read the pre-turn cells from the journal
             // (the O(touched) stand-in for the old `pre_ledger` clone), drop it.
@@ -6349,15 +6352,7 @@ async fn post_submit_encrypted_turn(
             crate::metrics::inc_turns_executed("rejected");
             crate::metrics::record_turn_execution_duration(start.elapsed().as_secs_f64());
             drop(s);
-            Ok(Json(SubmitEncryptedTurnResponse {
-                accepted: false,
-                turn_hash: Some(format!("rejected: {reason}")),
-                was_encrypted: false,
-                proof_status: ActivityProofStatus::NotCommitted,
-                has_witness: false,
-                witness_count: 0,
-                error: Some(format!("rejected: {reason}")),
-            }))
+            Ok(Json(SubmitEncryptedTurnResponse::rejected(reason)))
         }
     }
 }
@@ -14330,6 +14325,206 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&bytes).expect("replay json");
         assert_eq!(json["accepted"], false, "replayed envelope must refuse");
         assert_eq!(json["error"], serde_json::json!("receipt chain mismatch"));
+    }
+
+    /// #88 follow-up: a receipt append that fails AFTER the executor accepted an encrypted turn
+    /// leaves nothing behind. The append is refused through the cipherclerk's durability sink (the
+    /// redb-refusal path), injected here; the handler must answer in the documented
+    /// `rejected: <reason>` form, roll the ledger back, and leave the solo nullifier log and height
+    /// untouched — so the same envelope, retried once the sink works, commits instead of being
+    /// shadowed by a phantom entry, and only THEN do the log and the height move.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn encrypted_turn_receipt_append_failure_rolls_back_nullifier_and_height() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = NodeState::new(tmp.path(), vec![]).expect("node state");
+        state.write().await.unlocked = true;
+        {
+            let mut s = state.write().await;
+            let sk = s.cclerk.gossip_signing_key().to_bytes();
+            s.solo_consensus = Some(dregg_federation::solo::SoloConsensusState::new(sk));
+        }
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let app = router(state.clone(), false, recorder.handle());
+        let addr: std::net::SocketAddr = "127.0.0.1:4445".parse().unwrap();
+
+        let clerk = dregg_sdk::AgentCipherclerk::new();
+        let clerk2 = dregg_sdk::AgentCipherclerk::new();
+        let default_token_id = *blake3::hash(b"default").as_bytes();
+        let agent = clerk.cell_id("default");
+        let recipient = clerk2.cell_id("default");
+        {
+            let mut s = state.write().await;
+            for (cell, owner) in [(agent, &clerk), (recipient, &clerk2)] {
+                let ml_dsa_public_key = dregg_turn::pq::MlDsaTurnKey::from_ed25519_seed(
+                    &owner.gossip_signing_key().to_bytes(),
+                )
+                .public_bytes();
+                let funded = dregg_cell::Cell::with_hybrid_balance(
+                    owner.public_key().0,
+                    &ml_dsa_public_key,
+                    default_token_id,
+                    5_000,
+                )
+                .expect("canonical ML-DSA-65 identity");
+                assert_eq!(funded.id(), cell, "seeded cell must be the derived id");
+                s.ledger.insert_cell(funded).expect("seed cell");
+            }
+        }
+        let (fed_id, unsealer_public) = {
+            let s = state.read().await;
+            let secret = s.cclerk.derive_symmetric_key(TURN_UNSEALER_DOMAIN);
+            (
+                crate::executor_setup::federation_id_for_executor(&s),
+                *x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(secret))
+                    .as_bytes(),
+            )
+        };
+        let unsigned = Action {
+            target: agent,
+            method: *blake3::hash(b"execute").as_bytes(),
+            args: vec![],
+            authorization: Authorization::Unchecked,
+            preconditions: dregg_cell::Preconditions::default(),
+            effects: vec![Effect::Transfer {
+                from: agent,
+                to: recipient,
+                amount: 7,
+            }],
+            may_delegate: DelegationMode::None,
+            commitment_mode: CommitmentMode::Full,
+            balance_change: None,
+            witness_blobs: vec![],
+        };
+        let mut forest = CallForest::new();
+        forest.add_root(clerk.sign_action_hybrid(unsigned, &fed_id, 0));
+        let turn = Turn {
+            agent,
+            nonce: 0,
+            fee: 1_000,
+            memo: None,
+            valid_until: Some(dregg_turn::valid_until_at(
+                0,
+                dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+            )),
+            call_forest: forest,
+            depends_on: vec![],
+            previous_receipt_hash: None,
+            conservation_proof: None,
+            sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
+            custom_program_proofs: None,
+            effect_binding_proofs: Vec::new(),
+            cross_effect_dependencies: Vec::new(),
+            effect_witness_index_map: Vec::new(),
+        };
+        let encrypted = clerk
+            .make_encrypted_turn(&turn, &unsealer_public, 0)
+            .expect("make_encrypted_turn");
+        let envelope = postcard::to_stdvec(&encrypted).expect("encode envelope");
+        let turn_hash_bytes = turn.hash();
+
+        let submit = |bytes: Vec<u8>| {
+            let app = app.clone();
+            async move {
+                let response = app
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri("/turns/submit-encrypted")
+                            .header("content-type", "application/octet-stream")
+                            .extension(ConnectInfo(addr))
+                            .body(Body::from(bytes))
+                            .expect("submit request"),
+                    )
+                    .await
+                    .expect("submit response");
+                assert_eq!(response.status(), StatusCode::OK);
+                let bytes = response
+                    .into_body()
+                    .collect()
+                    .await
+                    .expect("body")
+                    .to_bytes();
+                serde_json::from_slice::<serde_json::Value>(&bytes).expect("submit json")
+            }
+        };
+        let snapshot = |s: &crate::state::NodeStateInner| {
+            let solo = s.solo_consensus.as_ref().expect("solo");
+            (
+                solo.height,
+                solo.nullifier_log.len(),
+                solo.nullifier_log.contains(&turn_hash_bytes),
+                s.ledger
+                    .get(&agent)
+                    .map(|c| (c.state.balance(), c.state.nonce())),
+                s.cclerk.receipt_chain_length(),
+            )
+        };
+
+        // ── INJECT: the durability sink refuses every append. ──
+        let before = {
+            let mut s = state.write().await;
+            s.cclerk.set_receipt_persist(std::sync::Arc::new(|_, _| {
+                Err("injected: durable receipt store refused the append".to_string())
+            }));
+            snapshot(&*s)
+        };
+        let json = submit(envelope.clone()).await;
+        assert_eq!(
+            json["accepted"], false,
+            "a refused append must refuse the turn: {json}"
+        );
+        let reason = json["error"].as_str().expect("error string").to_string();
+        assert!(reason.starts_with("receipt append refused: "), "{json}");
+        assert!(
+            reason.contains("injected: durable receipt store refused"),
+            "{json}"
+        );
+        assert_eq!(
+            json["turn_hash"],
+            serde_json::json!(format!("rejected: {reason}"))
+        );
+        assert_eq!(
+            snapshot(&*state.read().await),
+            before,
+            "a refused append must leave the solo height, the nullifier log, the ledger and \
+             the receipt chain exactly as they were"
+        );
+
+        // ── RETRY once the sink works: the same envelope commits, and only now do the
+        // nullifier log and the solo height move. ──
+        state
+            .write()
+            .await
+            .cclerk
+            .set_receipt_persist(std::sync::Arc::new(|_, _| Ok(())));
+        let json = submit(envelope).await;
+        assert_eq!(
+            json["accepted"], true,
+            "the retried turn must commit: {json}"
+        );
+        assert_eq!(
+            json["turn_hash"],
+            serde_json::json!(hex_encode(&turn_hash_bytes))
+        );
+        let (height, log_len, logged, cell, chain_len) = snapshot(&*state.read().await);
+        assert_eq!(
+            height,
+            before.0 + 1,
+            "one committed turn advances the solo height once"
+        );
+        assert_eq!(log_len, before.1 + 1);
+        assert!(logged, "the committed turn is in the nullifier log");
+        assert_eq!(
+            cell.map(|(_, nonce)| nonce),
+            Some(1),
+            "the nonce ticked exactly once"
+        );
+        assert_ne!(cell, before.3, "the transfer and fee landed on the retry");
+        assert_eq!(chain_len, before.4 + 1);
     }
 
     /// WHICH RECEIPT HEAD A CLIENT THREADS, against the real admission check.

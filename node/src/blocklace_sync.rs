@@ -10559,6 +10559,10 @@ async fn execute_finalized_turn(
         // (commitment, value) `note_commitments` map — so the rotated producer binds the committed
         // `commitments_root` (limbs [27,74..80]) to the node's REAL created-note frontier.
         let live_commitments_root = executor.note_commitments.lock().unwrap().root8();
+        // REVOKED-ROOT (synthesis item 20): the executor's LIVE credential-revocation accumulator
+        // (`note_revoked`, the committed `revoked_root`), captured beside the other two so the
+        // rotated producer commits the node's REAL revoked set instead of `empty_revoked_root_8()`.
+        let live_revoked_root = executor.note_revoked.lock().unwrap().root8();
         // Capture the COMPLETE post-execution executor image only after receipt
         // resolution. This includes accumulators, sparse rate/factory images,
         // the canonical pending registry, and the dedicated React replay set.
@@ -10572,6 +10576,7 @@ async fn execute_finalized_turn(
             exec_ledger,
             live_nullifier_root,
             live_commitments_root,
+            live_revoked_root,
             executor_state,
             resolution_events,
             poa_signal_evaluation,
@@ -10582,6 +10587,7 @@ async fn execute_finalized_turn(
         exec_ledger,
         live_nullifier_root,
         live_commitments_root,
+        live_revoked_root,
         mut executor_state,
         resolution_events,
         poa_signal_evaluation,
@@ -11122,6 +11128,7 @@ async fn execute_finalized_turn(
                                         &effects,
                                         &live_nullifier_root,
                                         &live_commitments_root,
+                                        &live_revoked_root,
                                     )
                                 }
                                 _ => None,
@@ -11196,6 +11203,7 @@ async fn execute_finalized_turn(
                                     &effects,
                                     &live_nullifier_root,
                                     &live_commitments_root,
+                                    &live_revoked_root,
                                 )
                                 }
                                 _ => None,
@@ -11276,6 +11284,7 @@ async fn execute_finalized_turn(
                                     &effects,
                                     &live_nullifier_root,
                                     &live_commitments_root,
+                                    &live_revoked_root,
                                 )
                                 }
                                 _ => None,
@@ -11320,6 +11329,7 @@ async fn execute_finalized_turn(
                                     &receipt_hashes,
                                     &live_nullifier_root,
                                     &live_commitments_root,
+                                    &live_revoked_root,
                                     proven.old_commit,
                                     proven.new_commit,
                                 ) {

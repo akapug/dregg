@@ -126,6 +126,12 @@ pub enum MarketError {
     },
     /// The wallet's asset does not match the leg's asset.
     AssetMismatch,
+    /// A leg of `0` or less: [`move_value`] cannot move it, so it is refused before the
+    /// capacity records it (it used to be recorded and then panic the value move).
+    NonPositiveAmount {
+        /// The refused leg amount.
+        amount: i64,
+    },
 }
 
 impl std::fmt::Display for MarketError {
@@ -136,6 +142,12 @@ impl std::fmt::Display for MarketError {
                 write!(f, "insufficient funds: have {have}, need {need}")
             }
             MarketError::AssetMismatch => write!(f, "wallet asset does not match the leg asset"),
+            MarketError::NonPositiveAmount { amount } => {
+                write!(
+                    f,
+                    "a leg of {amount} cannot be moved (legs must be positive)"
+                )
+            }
         }
     }
 }
@@ -219,6 +231,9 @@ impl SealedEscrowMarket {
         if from.asset() != self.custody(side).asset() {
             return Err(MarketError::AssetMismatch);
         }
+        if leg.amount <= 0 {
+            return Err(MarketError::NonPositiveAmount { amount: leg.amount });
+        }
         if from.state.balance() < leg.amount {
             return Err(MarketError::InsufficientFunds {
                 have: from.state.balance(),
@@ -230,7 +245,7 @@ impl SealedEscrowMarket {
         deposit_leg(&mut self.escrow, &self.terms, side, leg)?;
         assert!(
             move_value(from, self.custody_mut(side), leg.amount),
-            "the funds check above guarantees the move succeeds"
+            "a positive amount the wallet covers always moves (both checked above)"
         );
         Ok(())
     }
@@ -1372,6 +1387,32 @@ mod sealed_market_tests {
             250,
             "the refused deposit moved nothing"
         );
+    }
+
+    /// A zero (or negative) leg the terms admit is refused before the capacity records it — it
+    /// used to be recorded and then panic `deposit`'s value move (`move_value` refuses `<= 0`).
+    #[test]
+    fn a_non_positive_leg_is_refused_before_the_escrow_records_it() {
+        let alice = party(ALICE_PK, ASSET_10);
+        let bob = party(BOB_PK, ASSET_20);
+        for amount in [0i64, -5] {
+            let terms = EscrowTerms::swap(
+                LegRequirement::new(alice, CellId::from_bytes(ASSET_10), amount),
+                LegRequirement::new(bob, CellId::from_bytes(ASSET_20), 250),
+            );
+            let mut market = SealedEscrowMarket::open(terms);
+            let mut alice_a10 = wallet(ALICE_PK, ASSET_10, 100);
+            assert_eq!(
+                market.deposit(
+                    Side::A,
+                    &Leg::new(alice, CellId::from_bytes(ASSET_10), amount),
+                    &mut alice_a10,
+                ),
+                Err(MarketError::NonPositiveAmount { amount })
+            );
+            assert_eq!(market.state().unwrap().status(Side::A), LegStatus::Empty);
+            assert_eq!(alice_a10.state.balance(), 100);
+        }
     }
 
     #[test]

@@ -6,7 +6,8 @@
   "description": "The dregg launchpad product layer — create / bid / token-page / backend over the fair-launch engine (chain/contracts/launchpad).",
   "scripts": {
     "serve": "node server.mjs",
-    "gate": "bash gate/run-gate.sh"
+    "gate": "bash gate/run-gate.sh",
+    "test": "node --test test/"
   },
   "dependencies": {
     "ethers": "^6.13.0"

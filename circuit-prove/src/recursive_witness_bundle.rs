@@ -81,8 +81,9 @@
 //!   VM verifier" — disjoint from cell-program VK hashes.
 //! - `air_fingerprint` pins the Effect VM AIR's shape; mutating the AIR
 //!   changes the hash and invalidates old recursive proofs.
-//! - `verifier_fingerprint` is the source hash of this module file (set
-//!   at registry-registration time); pins the verifier's code.
+//! - `verifier_fingerprint` is the BLAKE3 of the verifier surface's source
+//!   bytes ([`RECURSIVE_VERIFIER_SURFACE`], compiled in with `include_bytes!`);
+//!   any edit to those files moves the VK hash with no hand-bumped suffix.
 //! - `proving_system_id` carries the Plonky3 git rev so a rev bump
 //!   invalidates old recursive proofs (which were produced against the
 //!   old FRI configuration).
@@ -136,18 +137,55 @@ pub const RECURSIVE_VK_PROGRAM_BYTES: &[u8] = b"dregg-effect-vm-recursive-v1";
 /// accepts a 7--40 hex pin and resolves it through `Cargo.lock`.
 pub const RECURSION_P3_REV: &str = "fc3c6dfac26e2082653d2a617a1740446ce33f05";
 
-/// Returns the verifier-source fingerprint used in the recursive VK
-/// hash. Deterministic: BLAKE3 of a stable string identifying this
-/// module's verifier surface.
+/// The source files that ARE the recursive verifier, as compiled into this binary: the dispatch,
+/// registry and PI cross-binding here; the inner shape AIR; the recursion re-export seam; and the
+/// `dregg-recursion-verify` decode/verify + config it forwards to. The external p3 crates are pinned
+/// separately by [`RECURSION_P3_REV`]. `verifier_surface_names_every_module_it_uses` fails if the
+/// verifier starts using a crate-local module that is not listed here.
 ///
-/// In a fuller VK v2 rollout this would be the git-blob-hash of this
-/// source file pinned at registration time; we use a stable canonical-
-/// bytes derivation under "dregg-recursive-witness-bundle-verifier-v1"
-/// so the hash is deterministic without a build-time hook. When this
-/// module's verifier surface changes meaningfully, bump the suffix to
-/// invalidate old VK hashes.
+/// This replaced a hash of the string `"dregg-recursive-witness-bundle-verifier-v1"` whose suffix had
+/// to be bumped by hand when the verifier changed (synthesis item 21): a verifier edit without the
+/// bump kept the old VK hash. Now any byte change to these files moves the VK hash.
+pub const RECURSIVE_VERIFIER_SURFACE: [(&str, &[u8]); 5] = [
+    (
+        "circuit-prove/src/recursive_witness_bundle.rs",
+        include_bytes!("recursive_witness_bundle.rs"),
+    ),
+    (
+        "circuit-prove/src/effect_vm_p3_air.rs",
+        include_bytes!("effect_vm_p3_air.rs"),
+    ),
+    (
+        "circuit-prove/src/plonky3_recursion_impl.rs",
+        include_bytes!("plonky3_recursion_impl.rs"),
+    ),
+    (
+        "recursion-verify/src/verify.rs",
+        include_bytes!("../../recursion-verify/src/verify.rs"),
+    ),
+    (
+        "recursion-verify/src/config.rs",
+        include_bytes!("../../recursion-verify/src/config.rs"),
+    ),
+];
+
+/// BLAKE3 over a verifier surface: each file's workspace path and bytes, length-prefixed, in order.
+pub fn verifier_source_hash_of(surface: &[(&str, &[u8])]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_derive_key("dregg-recursive-verifier-source-v2");
+    hasher.update(&(surface.len() as u64).to_le_bytes());
+    for (path, bytes) in surface {
+        hasher.update(&(path.len() as u64).to_le_bytes());
+        hasher.update(path.as_bytes());
+        hasher.update(&(bytes.len() as u64).to_le_bytes());
+        hasher.update(bytes);
+    }
+    *hasher.finalize().as_bytes()
+}
+
+/// The verifier-source fingerprint used in the recursive VK hash: [`verifier_source_hash_of`] the
+/// compiled-in [`RECURSIVE_VERIFIER_SURFACE`].
 pub fn recursive_verifier_source_hash() -> [u8; 32] {
-    *blake3::hash(b"dregg-recursive-witness-bundle-verifier-v1").as_bytes()
+    verifier_source_hash_of(&RECURSIVE_VERIFIER_SURFACE)
 }
 
 /// Compute the canonical VK v2 layered hash for the recursive Effect VM
@@ -572,6 +610,97 @@ mod tests {
                 assert_eq!(hash, bogus_hash);
             }
             other => panic!("bogus recursive_vk_hash must be rejected; got {:?}", other),
+        }
+    }
+
+    /// Every file of the verifier surface is load-bearing in the VK hash: flipping one byte in
+    /// any one of them moves both the source hash and the recursive VK hash's verifier input.
+    #[test]
+    fn a_one_byte_edit_anywhere_in_the_verifier_surface_moves_the_source_hash() {
+        let base = recursive_verifier_source_hash();
+        assert_eq!(base, verifier_source_hash_of(&RECURSIVE_VERIFIER_SURFACE));
+        assert_ne!(
+            base,
+            *blake3::hash(b"dregg-recursive-witness-bundle-verifier-v1").as_bytes(),
+            "the hand-bumped string hash is gone"
+        );
+        for i in 0..RECURSIVE_VERIFIER_SURFACE.len() {
+            let mut edited: Vec<Vec<u8>> = RECURSIVE_VERIFIER_SURFACE
+                .iter()
+                .map(|(_, b)| b.to_vec())
+                .collect();
+            assert!(
+                !edited[i].is_empty(),
+                "{} is empty",
+                RECURSIVE_VERIFIER_SURFACE[i].0
+            );
+            let mid = edited[i].len() / 2;
+            edited[i][mid] ^= 0x01;
+            let surface: Vec<(&str, &[u8])> = RECURSIVE_VERIFIER_SURFACE
+                .iter()
+                .zip(edited.iter())
+                .map(|((p, _), b)| (*p, b.as_slice()))
+                .collect();
+            assert_ne!(
+                verifier_source_hash_of(&surface),
+                base,
+                "an edit to {} must move the verifier source hash",
+                RECURSIVE_VERIFIER_SURFACE[i].0
+            );
+        }
+    }
+
+    /// The compiled-in bytes are the files on disk (the surface is not a stale copy), and the
+    /// surface names every module the verifier reaches: each `crate::<module>` used by this
+    /// module's non-test code, and each `dregg_recursion_verify::<module>` the recursion seam
+    /// re-exports, must be one of the listed files.
+    #[test]
+    fn verifier_surface_names_every_module_it_uses() {
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/..");
+        for (path, bytes) in RECURSIVE_VERIFIER_SURFACE {
+            let on_disk = std::fs::read(format!("{root}/{path}")).expect(path);
+            assert_eq!(
+                on_disk.as_slice(),
+                bytes,
+                "{path}: compiled-in bytes differ from disk"
+            );
+        }
+        let listed = |p: &str| RECURSIVE_VERIFIER_SURFACE.iter().any(|(q, _)| *q == p);
+        let non_test = |bytes: &[u8]| {
+            let s = std::str::from_utf8(bytes).expect("utf8 source").to_string();
+            match s.find("#[cfg(test)]") {
+                Some(i) => s[..i].to_string(),
+                None => s,
+            }
+        };
+        let modules_after = |src: &str, prefix: &str| -> Vec<String> {
+            src.match_indices(prefix)
+                .map(|(i, _)| {
+                    src[i + prefix.len()..]
+                        .chars()
+                        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                        .collect::<String>()
+                })
+                .filter(|m| !m.is_empty())
+                .collect()
+        };
+        let bundle = non_test(RECURSIVE_VERIFIER_SURFACE[0].1);
+        let crate_modules = modules_after(&bundle, "crate::");
+        assert!(crate_modules.iter().any(|m| m == "plonky3_recursion_impl"));
+        for m in crate_modules {
+            assert!(
+                listed(&format!("circuit-prove/src/{m}.rs")),
+                "crate::{m} is not in the surface"
+            );
+        }
+        let seam = non_test(RECURSIVE_VERIFIER_SURFACE[2].1);
+        let verify_modules = modules_after(&seam, "dregg_recursion_verify::");
+        assert!(verify_modules.iter().any(|m| m == "verify"));
+        for m in verify_modules {
+            assert!(
+                listed(&format!("recursion-verify/src/{m}.rs")),
+                "dregg_recursion_verify::{m} is not in the surface"
+            );
         }
     }
 
