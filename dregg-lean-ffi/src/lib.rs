@@ -2411,7 +2411,11 @@ mod ffi {
             let mut backend = Backend::default();
             state.ensure_pq(&mut backend).unwrap();
             state.ensure_pq(&mut backend).unwrap();
-            assert_eq!(backend.calls, ["runtime", "pq"], "once, and only the PQ family");
+            assert_eq!(
+                backend.calls,
+                ["runtime", "pq"],
+                "once, and only the PQ family"
+            );
             assert!(state.status.pq_ready);
             assert!(!state.status.executor_ready);
             assert!(!state.status.delegated_admission_ready);
@@ -2432,7 +2436,10 @@ mod ffi {
                 .unwrap();
             let calls = backend.calls.clone();
             state.ensure_pq(&mut backend).unwrap();
-            assert_eq!(backend.calls, calls, "the default full list already ran the PQ modules");
+            assert_eq!(
+                backend.calls, calls,
+                "the default full list already ran the PQ modules"
+            );
             assert!(state.status.pq_ready);
         }
 
@@ -2468,7 +2475,10 @@ mod ffi {
                 .ensure_pq(&mut backend)
                 .unwrap_err()
                 .contains("without the PQ family"));
-            assert_eq!(backend.calls, calls, "no module initializer after the end marker");
+            assert_eq!(
+                backend.calls, calls,
+                "no module initializer after the end marker"
+            );
             assert!(!state.status.pq_ready);
         }
 
