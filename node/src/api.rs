@@ -3134,7 +3134,9 @@ async fn get_status(State(state): State<NodeState>) -> Json<StatusResponse> {
     let turns_in_flight = blocklace
         .as_ref()
         .map(|handle| handle.in_flight_turns.len());
-    let turn_finality = blocklace.as_ref().map(|handle| handle.turn_finality.clone());
+    let turn_finality = blocklace
+        .as_ref()
+        .map(|handle| handle.turn_finality.clone());
     // DID THIS NODE EVER GET IN? The partition legs above are read against the
     // vote collector's LIVE threshold, and a non-member's threshold is 1 (its
     // own single-key constitution), so neither of them can go false for a
@@ -11435,7 +11437,11 @@ mod tests {
         let limits = PirQueryLimits::new();
 
         for _ in 0..PIR_QUERIES_PER_MINUTE {
-            assert!(pir_request_from(&state, [203, 0, 113, 7], &limits).await.is_ok());
+            assert!(
+                pir_request_from(&state, [203, 0, 113, 7], &limits)
+                    .await
+                    .is_ok()
+            );
         }
         assert_eq!(
             pir_request_from(&state, [203, 0, 113, 7], &limits)
@@ -11446,7 +11452,11 @@ mod tests {
             PIR_QUERIES_PER_MINUTE + 1
         );
         // A different address has its own budget ...
-        assert!(pir_request_from(&state, [198, 51, 100, 9], &limits).await.is_ok());
+        assert!(
+            pir_request_from(&state, [198, 51, 100, 9], &limits)
+                .await
+                .is_ok()
+        );
 
         // ... but not its own scan slots: with every in-flight permit held, a
         // fresh address is refused too.
@@ -11459,11 +11469,17 @@ mod tests {
             .collect();
         assert_eq!(limits.in_flight.available_permits(), 0);
         assert_eq!(
-            pir_request_from(&state, [192, 0, 2, 44], &limits).await.err(),
+            pir_request_from(&state, [192, 0, 2, 44], &limits)
+                .await
+                .err(),
             Some(StatusCode::TOO_MANY_REQUESTS)
         );
         drop(held);
-        assert!(pir_request_from(&state, [192, 0, 2, 45], &limits).await.is_ok());
+        assert!(
+            pir_request_from(&state, [192, 0, 2, 45], &limits)
+                .await
+                .is_ok()
+        );
     }
 
     /// A genesis member publishes NO join fields — `JoinProgress::default()` on

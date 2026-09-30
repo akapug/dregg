@@ -8221,7 +8221,11 @@ pub(crate) mod tests {
             store.commit_finalized_turn(k, &rec).unwrap();
         }
         let middle = store.commit_record_at(1).unwrap().unwrap();
-        assert_eq!(middle.touched_cells, vec![shared(9_999_999)], "mutation present");
+        assert_eq!(
+            middle.touched_cells,
+            vec![shared(9_999_999)],
+            "mutation present"
+        );
         assert_eq!(store.recovered_ledger_root().unwrap(), Some(last_root));
 
         assert!(
@@ -8252,7 +8256,10 @@ pub(crate) mod tests {
                 rec.ledger_root = [0x77; 32];
             }
         });
-        assert_ne!(store.commit_record_at(1).unwrap().unwrap().ledger_root, roots[1]);
+        assert_ne!(
+            store.commit_record_at(1).unwrap().unwrap().ledger_root,
+            roots[1]
+        );
         assert_eq!(store.recovered_ledger_root().unwrap(), Some(roots[3]));
         assert!(matches!(
             store.recover_to_last_consistent(),

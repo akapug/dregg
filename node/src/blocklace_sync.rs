@@ -12448,7 +12448,11 @@ mod tests {
         assert_eq!(never.observe(0, 2600), 2600);
 
         let p = TurnFinalityProgress::default();
-        assert_eq!(p.observe(5, 1000), 0, "a node restarted mid-life anchors at first read");
+        assert_eq!(
+            p.observe(5, 1000),
+            0,
+            "a node restarted mid-life anchors at first read"
+        );
         assert_eq!(p.observe(5, 1040), 40);
         assert_eq!(p.observe(6, 1050), 0, "turn finality advanced: re-anchor");
         assert_eq!(p.observe(6, 1300), 250);
@@ -12465,7 +12469,10 @@ mod tests {
     fn a_threshold_one_node_that_stops_finalizing_is_stalled() {
         let me = [0x01u8; 32];
         let window = finality_stall_window(2_000, 2_000);
-        assert_eq!(window, FINALITY_STALL_THRESHOLD, "2 s heartbeat: the 90 s floor governs");
+        assert_eq!(
+            window, FINALITY_STALL_THRESHOLD,
+            "2 s heartbeat: the 90 s floor governs"
+        );
         let liveness = FederationLiveness::with_stall_window(window);
         let t0 = std::time::Instant::now();
 
@@ -12481,9 +12488,15 @@ mod tests {
         let stuck = liveness.snapshot_at(later, &me, threshold, 0);
         let since = Duration::from_secs(stuck.seconds_since_quorum);
         let pre_fix = threshold > 1 && since > FINALITY_STALL_THRESHOLD;
-        assert!(since > window, "the mutation is present: the clock is past the window");
+        assert!(
+            since > window,
+            "the mutation is present: the clock is past the window"
+        );
         assert!(!pre_fix, "the pre-fix leg is blind to this at threshold 1");
-        assert!(stuck.finality_stalled, "threshold 1 must not exempt a stalled node");
+        assert!(
+            stuck.finality_stalled,
+            "threshold 1 must not exempt a stalled node"
+        );
 
         // Threshold > 1 still stalls on the same clock.
         assert!(liveness.snapshot_at(later, &me, 3, 2).finality_stalled);
@@ -12494,8 +12507,14 @@ mod tests {
     /// default heartbeat would call every idle solo node stalled.
     #[test]
     fn finality_stall_window_scales_with_the_idle_heartbeat() {
-        assert_eq!(finality_stall_window(2_000, 120_000), Duration::from_secs(360));
-        assert_eq!(finality_stall_window(2_000, 2_000), FINALITY_STALL_THRESHOLD);
+        assert_eq!(
+            finality_stall_window(2_000, 120_000),
+            Duration::from_secs(360)
+        );
+        assert_eq!(
+            finality_stall_window(2_000, 2_000),
+            FINALITY_STALL_THRESHOLD
+        );
         // No idle heartbeats: the flat floor, not an unbounded window.
         assert_eq!(finality_stall_window(0, 120_000), FINALITY_STALL_THRESHOLD);
         assert_eq!(finality_stall_window(2_000, 0), FINALITY_STALL_THRESHOLD);
@@ -12505,9 +12524,17 @@ mod tests {
         liveness.note_quorum();
         let t0 = std::time::Instant::now();
         // Two idle heartbeats without a quorum is an idle node, not a stall ...
-        assert!(!liveness.snapshot_at(t0 + Duration::from_secs(240), &me, 1, 0).finality_stalled);
+        assert!(
+            !liveness
+                .snapshot_at(t0 + Duration::from_secs(240), &me, 1, 0)
+                .finality_stalled
+        );
         // ... four is a stall.
-        assert!(liveness.snapshot_at(t0 + Duration::from_secs(480), &me, 1, 0).finality_stalled);
+        assert!(
+            liveness
+                .snapshot_at(t0 + Duration::from_secs(480), &me, 1, 0)
+                .finality_stalled
+        );
     }
 
     /// A submitted turn has a name for the window between "accepted for
