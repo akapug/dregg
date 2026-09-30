@@ -165,56 +165,66 @@ the reached state; VC class 4 turns `inv` into `post`. This is the *generated* f
 proof `recordCell_run_preserves_sumEquals` — proved once, it makes every VCG-discharged cell sound
 w.r.t. the operational `recCexec`. -/
 
-/-- The `inv`-on-value predicate as a `Good` for the record coalgebra. -/
-private def invGood (spec : CellSpec) : RecChained → Prop := fun c => spec.inv c.value
+/-- **The run-level `Good` for the record coalgebra**: the cell runs `program` under `method`
+AND its value satisfies `inv`. The program/method conjunct is a fact about ONE state — assumed at
+the start of a run and carried by every step (`runsProgram_next`) — which is what lets VC class 1,
+stated about `program`, speak about the state the step actually runs. -/
+def invGood (program : RecordProgram) (method : Nat) (spec : CellSpec) : RecChained → Prop :=
+  fun c => RunsProgram program method c ∧ spec.inv c.value
 
 /-- **`vcg_preserves_good`** — VC class 1 + 2 discharge `Good`-preservation along the
-totalized `recNext`: on a commit the admitted post-value satisfies `inv` (VC 1, via
-`recCexec_attests`); on a stay-put the value is unchanged (VC 2, trivially). This is the `hpres`
+totalized `recNext`: the program/method conjunct is carried by the step (`runsProgram_next`); on a
+commit the admitted post-value satisfies `inv` (VC 1, via `recCexec_attests`, at the program the
+state runs); on a stay-put the value is unchanged (VC 2, trivially). This is the `hpres`
 hypothesis `stepComplete_preserves` consumes — *generated* from the VC set. -/
-theorem vcg_preserves_good (program : RecordProgram) (spec : CellSpec)
-    (hprogInv : ∀ x : RecChained, x.program = program)
-    (hmethodInv : ∀ x : RecChained, x.method = method)
+theorem vcg_preserves_good (program : RecordProgram) (method : Nat) (spec : CellSpec)
     (hpres : VC_preserve program method spec)
-    (x : RecChained) (op : RecOp) (hgood : invGood spec x)
+    (x : RecChained) (op : RecOp) (hgood : invGood program method spec x)
     (_hsi : StepInv recordCell recCons recAdmit recChain recObsA x op (recordCell.next x op)) :
-    invGood spec (recordCell.next x op) := by
-  show spec.inv (recordCell.next x op).value
+    invGood program method spec (recordCell.next x op) := by
+  obtain ⟨⟨hprog, hmeth⟩, hinv⟩ := hgood
   -- `recordCell.next x op` is defeq `recNext x op`.
-  show spec.inv (recNext x op).value
+  show RunsProgram program method (recNext x op) ∧ spec.inv (recNext x op).value
+  refine ⟨runsProgram_next ⟨hprog, hmeth⟩ op, ?_⟩
   rcases recNext_commits_or_stays x op with hc | hstay
   · -- commit: the admitted post-state satisfies `inv` by VC class 1.
     have hadm : program.admits method x.value (recNext x op).value = true := by
       have a := recCexec_attests hc
-      rw [← hprogInv x, ← hmethodInv x]; exact a.1
-    exact hpres x.value (recNext x op).value hgood hadm
+      rw [← hprog, ← hmeth]; exact a.1
+    exact hpres x.value (recNext x op).value hinv hadm
   · -- stay-put: the value is unchanged, so `inv` carries over.
-    rw [hstay]; exact hgood
+    rw [hstay]; exact hinv
 
 /-- **`vcg_run_sound` (THE SINGLE SOUNDNESS OBLIGATION).** A fully-discharged VC set
 (`vcg program method spec`) entails that `inv` AND `post` hold at every reachable state of the
-record cell's whole run, given the precondition at the start. Concluded by handing the generated
-`StepInvariant` to `Boundary.stepComplete_preserves`. This is the machine-generated analog of
-`recordCell_run_preserves_sumEquals` (`Exec/RecordCellLive.lean:228`). -/
-theorem vcg_run_sound (program : RecordProgram) (spec : CellSpec)
-    (hprogInv : ∀ x : RecChained, x.program = program)
-    (hmethodInv : ∀ x : RecChained, x.method = method)
+record cell's whole run, given that the START state runs `program` under `method` and satisfies
+the precondition. Concluded by handing the generated `StepInvariant` to
+`Boundary.stepComplete_preserves`. This is the machine-generated analog of
+`recordCell_run_preserves_sumEquals` (`Exec/RecordCellLive.lean`).
+
+The program/method hypothesis is about `s` alone. An earlier revision took
+`∀ x : RecChained, x.program = program` and `∀ x : RecChained, x.method = method`; both are
+refuted by `not_forall_program_eq`/`not_forall_method_eq`, so that theorem held of no run.
+The poles of the repaired premise are `vcg_start_premise_satisfiable` and
+`vcg_start_premise_refutable` below. -/
+theorem vcg_run_sound (program : RecordProgram) (method : Nat) (spec : CellSpec)
     (hVCs : vcg program method spec)
     {s s' : RecChained}
+    (hstart : RunsProgram program method s)
     (hrun : Execution.Run (inducedSystem recordCell) s s')
     (h0 : spec.pre s.value) :
     spec.inv s'.value ∧ spec.post s'.value := by
   obtain ⟨hpres, _hstay, hinit, hpost⟩ := hVCs
-  -- VC class 3: lift `pre` to `inv` at the start.
-  have hgood0 : invGood spec s := hinit s.value h0
-  -- The lift: `stepComplete_preserves` with `Good := invGood spec`.
-  have hinv' : invGood spec s' := by
+  -- VC class 3: lift `pre` to `inv` at the start; the start hypothesis supplies the program.
+  have hgood0 : invGood program method spec s := ⟨hstart, hinit s.value h0⟩
+  -- The lift: `stepComplete_preserves` with `Good := invGood program method spec`.
+  have hinv' : invGood program method spec s' := by
     refine stepComplete_preserves recordCell recCons recAdmit recChain recObsA
-      (Good := invGood spec) recordCell_stepComplete ?_ hrun hgood0
+      (Good := invGood program method spec) recordCell_stepComplete ?_ hrun hgood0
     intro x op hgx hsi
-    exact vcg_preserves_good program spec hprogInv hmethodInv hpres x op hgx hsi
+    exact vcg_preserves_good program method spec hpres x op hgx hsi
   -- VC class 4: turn `inv s'` into `post s'`.
-  exact ⟨hinv', hpost s'.value hinv'⟩
+  exact ⟨hinv'.2, hpost s'.value hinv'.2⟩
 
 #assert_axioms vcg_preserves_good
 #assert_axioms vcg_run_sound
@@ -268,17 +278,49 @@ program, `count ≥ n₀` holds at every reachable state of the cell's whole run
 did by hand — this is the regression check that the generator matches reality. -/
 theorem counter_run_sound (n₀ : Int)
     {s s' : RecChained}
-    (hprogInv : ∀ x : RecChained, x.program = monoCountProgram)
-    (hmethodInv : ∀ x : RecChained, x.method = 0)
+    (hstart : RunsProgram monoCountProgram 0 s)
     (hrun : Execution.Run (inducedSystem recordCell) s s')
     (h0 : ∃ c, s.value.scalar "count" = some c ∧ n₀ ≤ c) :
     ∃ c, s'.value.scalar "count" = some c ∧ n₀ ≤ c :=
-  (vcg_run_sound monoCountProgram (counterSpec n₀) hprogInv hmethodInv
-    (counterVCs n₀) hrun h0).1
+  (vcg_run_sound monoCountProgram 0 (counterSpec n₀) (counterVCs n₀) hstart hrun h0).1
 
 #assert_axioms counter_VC_preserve
 #assert_axioms counterVCs
 #assert_axioms counter_run_sound
+
+/-- **Satisfiable pole of the start premise and of `Good`.** A concrete cell (`liveCounter`: the
+monotonic-counter program, method 0, `count = 5`) runs the program AND satisfies the counter
+invariant at `n₀ = 5`, so `vcg_run_sound`'s hypotheses are jointly inhabited. -/
+theorem vcg_start_premise_satisfiable :
+    ∃ s : RecChained, RunsProgram monoCountProgram 0 s ∧
+      invGood monoCountProgram 0 (counterSpec 5) s :=
+  ⟨liveCounter, ⟨rfl, rfl⟩, ⟨rfl, rfl⟩, 5, by decide, le_refl 5⟩
+
+/-- **Refutable pole of the start premise and of `Good`.** The same cell with its method bumped
+to `1` does not run `(monoCountProgram, 0)`, so it breaks `Good` for every spec: the premise is a
+real constraint on the start state, not a fact about the type. -/
+theorem vcg_start_premise_refutable (spec : CellSpec) :
+    ∃ s : RecChained, ¬ RunsProgram monoCountProgram 0 s ∧
+      ¬ invGood monoCountProgram 0 spec s :=
+  ⟨{ liveCounter with method := 1 }, fun h => by simp [RunsProgram] at h,
+    fun h => by simp [invGood, RunsProgram] at h⟩
+
+/-- **The repaired apex fires on a real run.** From `liveCounter` (a state satisfying the start
+premise), one committed increment is a genuine `Run` of the record coalgebra, and
+`counter_run_sound` concludes `count ≥ 5` at its end. The premise of the apex is inhabited by a
+reachable execution, not only by a state. -/
+theorem counter_run_sound_fires :
+    ∃ s' : RecChained, Execution.Run (inducedSystem recordCell) liveCounter s' ∧
+      ∃ c, s'.value.scalar "count" = some c ∧ 5 ≤ c :=
+  let s' := recordCell.next liveCounter (.addScalar "count" 1)
+  have hrun : Execution.Run (inducedSystem recordCell) liveCounter s' :=
+    .step ⟨_, rfl⟩ (.refl _)
+  ⟨s', hrun, counter_run_sound 5 ⟨rfl, rfl⟩ hrun ⟨5, by decide, le_refl 5⟩⟩
+
+#assert_axioms vcg_start_premise_satisfiable
+#assert_axioms vcg_start_premise_refutable
+#assert_axioms counter_run_sound_fires
+
 
 /-! ## §6 — Worked example B: the escrow (single-ledger; cross-vat OPEN).
 
@@ -324,13 +366,12 @@ cell's whole run, generated by `vcg_run_sound`. The conservation half of the esc
 in the single-ledger case — closable today, exactly as the study says. -/
 theorem escrow_run_sound (deposit₀ : Int)
     {s s' : RecChained}
-    (hprogInv : ∀ x : RecChained, x.program = escrowProgram deposit₀)
-    (hmethodInv : ∀ x : RecChained, x.method = 0)
+    (hstart : RunsProgram (escrowProgram deposit₀) 0 s)
     (hrun : Execution.Run (inducedSystem recordCell) s s')
     (h0 : sumScalars s.value ["escrowed", "paidOut"] = some deposit₀) :
     sumScalars s'.value ["escrowed", "paidOut"] = some deposit₀ :=
-  (vcg_run_sound (escrowProgram deposit₀) (escrowSpec deposit₀) hprogInv hmethodInv
-    (escrowVCs deposit₀) hrun h0).1
+  (vcg_run_sound (escrowProgram deposit₀) 0 (escrowSpec deposit₀) (escrowVCs deposit₀)
+    hstart hrun h0).1
 
 #assert_axioms escrow_VC_preserve
 #assert_axioms escrowVCs
