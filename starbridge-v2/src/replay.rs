@@ -1927,7 +1927,7 @@ mod tests {
                 if got.contains("original receipt-chain predecessor")
         ));
         assert!(history
-            .fork_at(history.len(), bare_turn(a, 2, vec![transfer(a, b, 1)]))
+            .fork_at(history.len(), bare_turn(a, 2, vec![transfer(a, b, 1)], 0))
             .is_err());
     }
 
