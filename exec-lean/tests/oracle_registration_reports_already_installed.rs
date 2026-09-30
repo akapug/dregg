@@ -7,7 +7,9 @@
 //! runner. Without the export the registration must say `Unavailable`; `DREGG_TEST_REQUIRE_LEAN=1`
 //! makes that exit a failure instead of a skip.
 
-use dregg_exec_lean::{OracleRegistration, register_conservation_oracle, register_constraint_oracle};
+use dregg_exec_lean::{
+    OracleRegistration, register_conservation_oracle, register_constraint_oracle,
+};
 
 #[test]
 fn a_second_constraint_registration_is_already_installed_not_unavailable() {
@@ -15,7 +17,10 @@ fn a_second_constraint_registration_is_already_installed_not_unavailable() {
         dregg_lean_ffi::constraint_admits_available(),
         "dregg_constraint_admits export (the Lean-backed constraint oracle)",
     ) {
-        assert_eq!(register_constraint_oracle(), OracleRegistration::Unavailable);
+        assert_eq!(
+            register_constraint_oracle(),
+            OracleRegistration::Unavailable
+        );
         return;
     }
     assert_eq!(register_constraint_oracle(), OracleRegistration::Installed);
@@ -31,10 +36,16 @@ fn a_second_conservation_registration_is_already_installed_not_unavailable() {
         dregg_lean_ffi::cross_cell_conserves_available(),
         "dregg_cross_cell_conserves export (the Lean-backed conservation oracle)",
     ) {
-        assert_eq!(register_conservation_oracle(), OracleRegistration::Unavailable);
+        assert_eq!(
+            register_conservation_oracle(),
+            OracleRegistration::Unavailable
+        );
         return;
     }
-    assert_eq!(register_conservation_oracle(), OracleRegistration::Installed);
+    assert_eq!(
+        register_conservation_oracle(),
+        OracleRegistration::Installed
+    );
     let second = register_conservation_oracle();
     assert_eq!(second, OracleRegistration::AlreadyInstalled);
     assert!(second.is_armed());

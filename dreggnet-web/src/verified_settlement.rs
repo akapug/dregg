@@ -133,8 +133,7 @@ fn install_and_probe() -> Result<(), String> {
     // (`dregg_sdk::constraint_subset_fails_closed_without_oracle()`, re-exported from `dregg-cell` —
     // the same `const fn` `eval.rs` branches on) instead of hand-repeating its `cfg`. A copied
     // predicate is a claim that the gate may have moved, and this file carried two copies of it.
-    if dregg_sdk::constraint_subset_fails_closed_without_oracle() && !constraint_oracle.is_armed()
-    {
+    if dregg_sdk::constraint_subset_fails_closed_without_oracle() && !constraint_oracle.is_armed() {
         return Err(format!(
             "the verified deployed-constraint oracle is not installed ({constraint_oracle:?}: \
              `Unavailable` is a linked archive that does not export `dregg_constraint_admits`, \
@@ -163,8 +162,7 @@ fn install_and_probe() -> Result<(), String> {
     // `dregg_turn::executor::native_build_requires_oracle()` is `any(unix, windows)` with no profile
     // clause, which is why `dregg-node` panics on a missing conservation oracle in debug too. This
     // surface deliberately keeps the narrower release-only refusal it shipped with.)
-    if dregg_sdk::constraint_subset_fails_closed_without_oracle()
-        && !conservation_oracle.is_armed()
+    if dregg_sdk::constraint_subset_fails_closed_without_oracle() && !conservation_oracle.is_armed()
     {
         return Err(format!(
             "the verified cross-cell conservation oracle is not installed \
