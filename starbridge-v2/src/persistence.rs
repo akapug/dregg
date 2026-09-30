@@ -1449,7 +1449,7 @@ mod tests {
                 .get(&treasury)
                 .map(|c| c.state.nonce())
                 .unwrap_or(0);
-            let t = bare_turn(treasury, nonce, vec![transfer(treasury, user, amount)]);
+            let t = bare_turn(treasury, nonce, vec![transfer(treasury, user, amount)], 0);
             assert!(w.commit_turn(t).is_committed(), "durable commit must land");
         }
         // Flush a checkpoint so recovery exercises checkpoint ⊕ overlay.
@@ -1598,7 +1598,7 @@ mod tests {
             .get(&treasury)
             .map(|c| c.state.nonce())
             .unwrap_or(0);
-        let t = bare_turn(treasury, nonce, vec![transfer(treasury, user, 7)]);
+        let t = bare_turn(treasury, nonce, vec![transfer(treasury, user, 7)], 0);
         assert!(
             reopened.commit_turn(t).is_committed(),
             "a new turn commits on the reopened image"
@@ -1666,7 +1666,7 @@ mod tests {
         let mut p = WorldPersist::open(&path).expect("fresh store");
         let (mut ledger, ids) = wide_ledger(n);
         let target = ids[n / 2];
-        let turn = bare_turn(ids[0], 0, vec![transfer(ids[0], target, 1)]);
+        let turn = bare_turn(ids[0], 0, vec![transfer(ids[0], target, 1)], 0);
         let mut receipt = TurnReceipt {
             agent: ids[0],
             timestamp: TS,
@@ -2187,7 +2187,7 @@ mod tests {
             .get(&treasury)
             .map(|c| c.state.nonce())
             .unwrap_or(0);
-        let t = bare_turn(treasury, nonce, vec![transfer(treasury, user, 1)]);
+        let t = bare_turn(treasury, nonce, vec![transfer(treasury, user, 1)], 0);
         assert!(
             reopened.commit_turn(t).is_committed(),
             "a post-reopen turn must thread the re-primed chain head and commit"
@@ -2224,7 +2224,7 @@ mod tests {
                 .get(&treasury)
                 .map(|c| c.state.nonce())
                 .unwrap_or(0);
-            let t = bare_turn(treasury, nonce, vec![transfer(treasury, user, 100)]);
+            let t = bare_turn(treasury, nonce, vec![transfer(treasury, user, 100)], 0);
             assert!(w.commit_turn(t).is_committed(), "the turn commits");
             cell_id = user;
             // w dropped — the redb file persists.
@@ -2268,7 +2268,7 @@ mod tests {
                 .get(&treasury)
                 .map(|c| c.state.nonce())
                 .unwrap_or(0);
-            let t = bare_turn(treasury, nonce, vec![transfer(treasury, user, 100)]);
+            let t = bare_turn(treasury, nonce, vec![transfer(treasury, user, 100)], 0);
             assert!(
                 w.commit_turn(t).is_committed(),
                 "the mid-session turn commits"
@@ -2316,7 +2316,7 @@ mod tests {
                 .get(&treasury)
                 .map(|c| c.state.nonce())
                 .unwrap_or(0);
-            let t = bare_turn(treasury, nonce, vec![transfer(treasury, user, 100)]);
+            let t = bare_turn(treasury, nonce, vec![transfer(treasury, user, 100)], 0);
             assert!(
                 w.commit_turn(t).is_committed(),
                 "the mid-session turn commits"
@@ -2380,7 +2380,7 @@ mod tests {
             .get(&treasury)
             .map(|c| c.state.nonce())
             .unwrap_or(0);
-        let t = bare_turn(treasury, nonce, vec![transfer(treasury, sink, 100)]);
+        let t = bare_turn(treasury, nonce, vec![transfer(treasury, sink, 100)], 0);
         assert!(
             w.commit_turn(t).is_committed(),
             "the mid-session turn commits"
@@ -2421,7 +2421,7 @@ mod tests {
                 .get(&treasury)
                 .map(|c| c.state.nonce())
                 .unwrap_or(0);
-            let t = bare_turn(treasury, nonce, vec![transfer(treasury, user, 999)]);
+            let t = bare_turn(treasury, nonce, vec![transfer(treasury, user, 999)], 0);
             assert!(fork.commit_turn(t).is_committed());
             // reopened + fork drop here, releasing the redb handle.
         }

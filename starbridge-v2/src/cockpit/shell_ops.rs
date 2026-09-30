@@ -45,6 +45,7 @@ impl Cockpit {
                 .and_then(|l| l.get(&treasury).map(|c| c.state.nonce()))
                 .unwrap_or(0),
             vec![world::transfer(treasury, user, 1)],
+            history.height_at(k),
         );
         match history.fork_at(k, alt) {
             Ok(fork) => {

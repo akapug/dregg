@@ -224,7 +224,9 @@ impl EngineConfig {
         Self {
             costs: ComputronCosts::default_costs(),
             federation_id: [0u8; 32],
-            block_height: 0,
+            // The embedded executor's starting height (0 would refuse every deadline);
+            // the host moves it with `set_block_height`.
+            block_height: crate::runtime::LOCAL_RUNTIME_START_HEIGHT,
             timestamp,
             max_proof_age_secs: present::DEFAULT_MAX_PROOF_AGE_SECS,
         }
@@ -241,7 +243,9 @@ impl EngineConfig {
         Self {
             costs: ComputronCosts::default_costs(),
             federation_id: [0u8; 32],
-            block_height: 0,
+            // The embedded executor's starting height (0 would refuse every deadline);
+            // the host moves it with `set_block_height`.
+            block_height: crate::runtime::LOCAL_RUNTIME_START_HEIGHT,
             timestamp: 0,
             max_proof_age_secs: present::DEFAULT_MAX_PROOF_AGE_SECS,
         }

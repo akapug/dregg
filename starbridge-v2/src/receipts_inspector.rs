@@ -1485,7 +1485,7 @@ mod tests {
         let a = h.record_genesis(&mut l, crate::world::make_open_cell(1, 1_000));
         let b = h.record_genesis(&mut l, crate::world::make_open_cell(2, 0));
         let nonce = |l: &Ledger, id: &CellId| l.get(id).map(|c| c.state.nonce()).unwrap_or(0);
-        let t1 = crate::world::bare_turn(a, nonce(&l, &a), vec![transfer(a, b, 100)]);
+        let t1 = crate::world::bare_turn(a, nonce(&l, &a), vec![transfer(a, b, 100)], 0);
         assert!(h.record_commit(&ex, &mut l, t1).is_some());
 
         let tt = TimeTravel::over(&h);
@@ -1495,7 +1495,7 @@ mod tests {
         // with a DIFFERENT turn.
         let branch = 2; // 2 genesis steps
         let alt_nonce = tt.replay_to(branch).unwrap().get(&a).unwrap().state.nonce();
-        let alt = crate::world::bare_turn(a, alt_nonce, vec![transfer(a, b, 500)]);
+        let alt = crate::world::bare_turn(a, alt_nonce, vec![transfer(a, b, 500)], 0);
         let fork = tt
             .fork(branch, alt)
             .expect("fork replays+verifies the branch point");

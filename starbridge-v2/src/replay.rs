@@ -113,6 +113,11 @@ pub enum RecordedStep {
         /// image that spans two sessions (`World::open`) genuinely holds two clocks;
         /// carrying one per step is what keeps the scrub bit-exact across a reopen.
         timestamp: i64,
+        /// The executor block height this turn committed at (`World::commit_turn` runs
+        /// each turn at the World's height + 1). Replay re-executes the step at it, for
+        /// the same reason as `timestamp`: the turn's `valid_until` is a block height
+        /// checked against it, and height-gated program constraints read it.
+        block_height: u64,
     },
 }
 
@@ -261,7 +266,23 @@ impl History {
     pub fn fresh_executor(&self) -> TurnExecutor {
         let mut e = TurnExecutor::new(self.costs.clone());
         e.set_timestamp(self.replay_clock_floor());
+        // The first commit's height; replay moves it to each step's recorded height.
+        e.set_block_height(1);
         e
+    }
+
+    /// The World height after the first `k` steps: the recorded `block_height` of the last
+    /// committed step among them, or 0 before any turn. A turn built "at step k" is built
+    /// against this height and executes at `height_at(k) + 1` ([`Self::fork_at`]).
+    pub fn height_at(&self, k: usize) -> u64 {
+        self.steps[..k.min(self.steps.len())]
+            .iter()
+            .rev()
+            .find_map(|step| match step {
+                RecordedStep::Committed { block_height, .. } => Some(*block_height),
+                _ => None,
+            })
+            .unwrap_or(0)
     }
 
     /// The clock a replay's executor must START at: no later than the earliest
@@ -422,6 +443,8 @@ impl History {
                     // The clock this turn actually ran under — read off the receipt
                     // the executor just stamped, so it can never drift from it.
                     timestamp: receipt.timestamp,
+                    // The height it ran at, read off the executor that ran it.
+                    block_height: executor.block_height,
                     receipt: Box::new(receipt.clone()),
                     post_root,
                 });
@@ -657,6 +680,8 @@ impl History {
         }
         let mut alt = alt;
         alt.previous_receipt_hash = executor.get_last_receipt_hash(&alt.agent);
+        // The alternate turn commits at the next height after the branch point.
+        executor.set_block_height(self.height_at(k) + 1);
         let checkpoint = executor.checkpoint_embedded_candidate(&alt);
         fork_ledger.begin_restore_point();
         let result = executor.execute_candidate(&alt, &mut fork_ledger);
@@ -789,6 +814,7 @@ fn apply_step(
             receipt,
             timestamp,
             post_root,
+            block_height,
         } => {
             let expected_receipt = receipt.receipt_hash();
             if turn.previous_receipt_hash != executor.get_last_receipt_hash(&turn.agent) {
@@ -810,6 +836,7 @@ fn apply_step(
                 });
             }
             executor.set_timestamp(*timestamp);
+            executor.set_block_height(*block_height);
             let checkpoint = executor.checkpoint_embedded_candidate(turn);
             ledger.begin_restore_point();
             let result = executor.execute_candidate(turn, ledger);
@@ -1498,30 +1525,35 @@ pub fn demo_history() -> (History, Ledger, [CellId; 3]) {
         treasury,
         nonce(&ledger, &treasury),
         vec![transfer(treasury, service, 250_000)],
+        0,
     );
     history.record_commit(&executor, &mut ledger, t1);
     let t2 = crate::world::bare_turn(
         treasury,
         nonce(&ledger, &treasury),
         vec![transfer(treasury, user, 50_000)],
+        0,
     );
     history.record_commit(&executor, &mut ledger, t2);
     let t3 = crate::world::bare_turn(
         user,
         nonce(&ledger, &user),
         vec![transfer(user, service, 1_000)],
+        0,
     );
     history.record_commit(&executor, &mut ledger, t3);
     let t4 = crate::world::bare_turn(
         service,
         nonce(&ledger, &service),
         vec![grant_capability(service, service, user, user_cap_slot + 1)],
+        0,
     );
     history.record_commit(&executor, &mut ledger, t4);
     let t5 = crate::world::bare_turn(
         service,
         nonce(&ledger, &service),
         vec![set_field(service, 0, [7u8; 32])],
+        0,
     );
     history.record_commit(&executor, &mut ledger, t5);
 
@@ -1604,7 +1636,7 @@ mod tests {
         let mut ledger = Ledger::new();
         let a = history.record_genesis(&mut ledger, make_open_cell(0x51, 100_000));
         let b = history.record_genesis(&mut ledger, make_open_cell(0x52, 0));
-        let mut first = bare_turn(a, 0, vec![transfer(a, b, 10)]);
+        let mut first = bare_turn(a, 0, vec![transfer(a, b, 10)], 0);
         first.fee = 1_000;
         let prefix = history
             .record_commit(&executor, &mut ledger, first)
@@ -1613,7 +1645,12 @@ mod tests {
         let root = ledger.root();
         let steps = history.len();
         let nonce = ledger.get(&a).unwrap().state.nonce();
-        let mut bad = bare_turn(a, nonce, vec![transfer(a, b, 1), transfer(a, b, 100_000)]);
+        let mut bad = bare_turn(
+            a,
+            nonce,
+            vec![transfer(a, b, 1), transfer(a, b, 100_000)],
+            0,
+        );
         bad.fee = 1_000;
         assert!(history.record_commit(&executor, &mut ledger, bad).is_none());
         assert_eq!(postcard::to_stdvec(ledger.get(&a).unwrap()).unwrap(), cells);
@@ -1625,7 +1662,7 @@ mod tests {
         );
         assert!(!ledger.has_restore_point());
 
-        let mut next = bare_turn(a, nonce, vec![transfer(a, b, 20)]);
+        let mut next = bare_turn(a, nonce, vec![transfer(a, b, 20)], 0);
         next.fee = 1_000;
         assert!(history
             .record_commit(&executor, &mut ledger, next)
@@ -1646,11 +1683,11 @@ mod tests {
         let a = h.record_genesis(&mut l, make_open_cell(1, 1_000));
         let b = h.record_genesis(&mut l, make_open_cell(2, 0));
         let nonce = |l: &Ledger, id: &CellId| l.get(id).map(|c| c.state.nonce()).unwrap_or(0);
-        let t1 = bare_turn(a, nonce(&l, &a), vec![transfer(a, b, 100)]);
+        let t1 = bare_turn(a, nonce(&l, &a), vec![transfer(a, b, 100)], 0);
         assert!(h.record_commit(&ex, &mut l, t1).is_some());
-        let t2 = bare_turn(a, nonce(&l, &a), vec![transfer(a, b, 50)]);
+        let t2 = bare_turn(a, nonce(&l, &a), vec![transfer(a, b, 50)], 0);
         assert!(h.record_commit(&ex, &mut l, t2).is_some());
-        let t3 = bare_turn(b, nonce(&l, &b), vec![transfer(b, a, 30)]);
+        let t3 = bare_turn(b, nonce(&l, &b), vec![transfer(b, a, 30)], 0);
         assert!(h.record_commit(&ex, &mut l, t3).is_some());
         (h, l, a, b)
     }
@@ -1947,7 +1984,7 @@ mod tests {
         let mut ledger = Ledger::new();
         let a = history.record_genesis(&mut ledger, make_open_cell(0x75, 100_000));
         let b = history.record_genesis(&mut ledger, make_open_cell(0x76, 0));
-        let mut first = bare_turn(a, 0, vec![transfer(a, b, 10)]);
+        let mut first = bare_turn(a, 0, vec![transfer(a, b, 10)], 0);
         first.fee = 1_000;
         history
             .record_commit(&executor, &mut ledger, first)
@@ -1955,14 +1992,19 @@ mod tests {
         let branch = history.len();
         let root = ledger.root();
         let nonce = ledger.get(&a).unwrap().state.nonce();
-        let mut bad = bare_turn(a, nonce, vec![transfer(a, b, 1), transfer(a, b, 100_000)]);
+        let mut bad = bare_turn(
+            a,
+            nonce,
+            vec![transfer(a, b, 1), transfer(a, b, 100_000)],
+            0,
+        );
         bad.fee = 1_000;
         let rejected = history.fork_at(branch, bad).unwrap();
         assert!(!rejected.outcome.is_committed());
         assert_eq!(rejected.fork_root, root);
         assert!(rejected.divergence.is_empty());
 
-        let mut next = bare_turn(a, nonce, vec![transfer(a, b, 20)]);
+        let mut next = bare_turn(a, nonce, vec![transfer(a, b, 20)], 0);
         next.fee = 1_000;
         let predicted = history.fork_at(branch, next.clone()).unwrap();
         assert!(predicted.outcome.is_committed());
@@ -1982,7 +2024,7 @@ mod tests {
         // transfer a bigger amount than the mainline's t2.
         // Step 3 corresponds to "after the first turn" (2 genesis + 1 turn).
         let alt_nonce = h.replay_to(3).unwrap().get(&a).unwrap().state.nonce();
-        let alt = bare_turn(a, alt_nonce, vec![transfer(a, b, 777)]);
+        let alt = bare_turn(a, alt_nonce, vec![transfer(a, b, 777)], 0);
         let fork = h
             .fork_at(3, alt)
             .expect("fork must replay+verify the branch point");
@@ -2015,7 +2057,7 @@ mod tests {
         // Branch at step 3 and apply EXACTLY the mainline's next turn (t2:
         // a→b 50). The fork must NOT diverge from the mainline at step 4.
         let nonce = h.replay_to(3).unwrap().get(&a).unwrap().state.nonce();
-        let same = bare_turn(a, nonce, vec![transfer(a, b, 50)]);
+        let same = bare_turn(a, nonce, vec![transfer(a, b, 50)], 0);
         let fork = h.fork_at(3, same).unwrap();
         assert!(fork.outcome.is_committed());
         assert_eq!(
@@ -2156,7 +2198,7 @@ mod tests {
     fn panel_model_pins_a_fork_summary() {
         let (h, _l, a, b) = fixture();
         let nonce = h.replay_to(3).unwrap().get(&a).unwrap().state.nonce();
-        let alt = bare_turn(a, nonce, vec![transfer(a, b, 500)]);
+        let alt = bare_turn(a, nonce, vec![transfer(a, b, 500)], 0);
         let fork = h.fork_at(3, alt).unwrap();
         let model = ReplayPanelModel::build(&h, 3, Some(&fork));
         let fs = model.fork.expect("fork pinned");

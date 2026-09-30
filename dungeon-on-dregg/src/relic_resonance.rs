@@ -807,7 +807,7 @@ mod atomic_raid_narration {
             for root in roots {
                 forest.add_root(root);
             }
-            let mut turn = bare_turn(self.agent, self.current_nonce(), Vec::new());
+            let mut turn = bare_turn(self.agent, self.current_nonce(), Vec::new(), 0);
             turn.call_forest = forest;
             turn.previous_receipt_hash = self.receipts.last().map(TurnReceipt::receipt_hash);
             turn

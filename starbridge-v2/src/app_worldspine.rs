@@ -348,7 +348,7 @@ impl AppWorldSpine {
         // program matches its operation case. `bare_turn`'s action carries an empty
         // method; everything else (the full `Turn`/`Action` field set) is exactly what
         // `World::turn` produces — we do not hand-roll the struct.
-        let mut turn = crate::world::bare_turn(self.app_cell, nonce, effects);
+        let mut turn = crate::world::bare_turn(self.app_cell, nonce, effects, world.height());
         if let Some(root) = turn.call_forest.roots.get_mut(0) {
             root.action.method = symbol(method);
         }

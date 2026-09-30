@@ -145,7 +145,12 @@ impl World {
             "collapse: fewer receipts than buffered symbolic turns (provenance desync)".to_string()
         })?;
 
+        // The buffered turns committed symbolically at heights `height - n + 1 ..= height`
+        // (`commit_turn` ran each at `self.height + 1`); re-execute each at its own.
+        let first_height = self.height - n as u64;
         for (offset, turn) in buffered.into_iter().enumerate() {
+            self.record_exec
+                .set_block_height(first_height + offset as u64 + 1);
             // Drive the SKIPPED Full replay-tape commit — re-executes the turn
             // against the recorder's Full executor + ledger and captures the real
             // post-root tooth. The recorder's chain head advances in lock-step.

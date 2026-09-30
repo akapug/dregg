@@ -668,6 +668,10 @@ pub enum ReversibleStep {
         turn: Turn,
         receipt: TurnReceipt,
         post_root: [u8; 32],
+        /// The executor block height the turn committed at. Replay re-executes it there:
+        /// `Turn::valid_until` is a block height checked against it, and height-gated
+        /// program constraints read it.
+        block_height: u64,
     },
 }
 
@@ -822,6 +826,8 @@ impl ReversibleHistory {
             .min()
             .map_or(self.timestamp, |earliest| earliest.min(self.timestamp));
         e.set_timestamp(floor);
+        // The first commit's height; replay moves it to each step's recorded height.
+        e.set_block_height(1);
         e
     }
 
@@ -958,6 +964,7 @@ impl ReversibleHistory {
                     turn: turn.clone(),
                     receipt: receipt.clone(),
                     post_root,
+                    block_height: executor.block_height,
                 }));
                 self.roots.push(post_root);
                 executor.observe_committed_candidate(&turn, ledger, &result);
@@ -1444,7 +1451,12 @@ fn apply_step(
             })?;
             Ok(())
         }
-        ReversibleStep::Committed { turn, receipt, .. } => {
+        ReversibleStep::Committed {
+            turn,
+            receipt,
+            block_height,
+            ..
+        } => {
             if turn.previous_receipt_hash != executor.get_last_receipt_hash(&turn.agent) {
                 return Err(ReversibleError::NondeterministicReplay {
                     step: index,
@@ -1452,6 +1464,7 @@ fn apply_step(
                 });
             }
             executor.set_timestamp(receipt.timestamp);
+            executor.set_block_height(*block_height);
             match executor.execute(turn, ledger) {
                 TurnResult::Committed { receipt: r, .. }
                     if r.receipt_hash() == receipt.receipt_hash() =>

@@ -563,7 +563,7 @@ impl AtomicRaidHarness {
         forest.add_root(sigil_action);
         forest.add_root(party_action);
         forest.add_root(arena_action);
-        let mut turn = bare_turn(agent, 0, Vec::new());
+        let mut turn = bare_turn(agent, 0, Vec::new(), 0);
         turn.call_forest = forest;
 
         Self {

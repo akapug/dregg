@@ -299,7 +299,9 @@ impl World {
         let config = EngineConfig {
             costs: costs.clone(),
             federation_id: [0u8; 32],
-            block_height: 0,
+            // The executor height the first turn runs at. `commit_turn` moves it to
+            // `self.height + 1` before every turn; 0 would refuse every deadline.
+            block_height: 1,
             timestamp,
             max_proof_age_secs: 0,
         };
@@ -818,9 +820,13 @@ impl World {
                     receipt,
                     timestamp,
                     post_root,
+                    block_height,
                 } => {
                     if turn.previous_receipt_hash != rebuilt.chain_head(&turn.agent) {
                         return Err(format!("history receipt chain mismatch at step {index}"));
+                    }
+                    if *block_height != rebuilt.height + 1 {
+                        return Err(format!("history block height mismatch at step {index}"));
                     }
                     if *timestamp != receipt.timestamp {
                         return Err(format!("history receipt clock mismatch at step {index}"));
@@ -1397,6 +1403,14 @@ impl World {
         // Thread the chain head the engine's executor will check.
         turn.previous_receipt_hash = self.engine.executor().get_last_receipt_hash(&turn.agent);
 
+        // The height this turn commits at: the World's own height + 1, on the engine AND the
+        // replay-tape recorder (which records it per step, so every replay re-executes the
+        // turn at the same height). `valid_until` is checked against it. Recovery and
+        // `rebuild` re-commit through here, so they reproduce the same heights.
+        let exec_height = self.height + 1;
+        self.engine.executor_mut().set_block_height(exec_height);
+        self.record_exec.set_block_height(exec_height);
+
         // Materialize a DEFERRED replay-tape clone (#7) BEFORE the engine mutates the
         // ledger, so `record_commit` re-executes against the fork's pre-turn snapshot
         // (this is where a fork finally pays its second clone — a predict that never
@@ -1786,7 +1800,7 @@ impl World {
     /// OPERATOR is the authority. The cells' `Permissions` still gate every
     /// effect; an effect a cell forbids is rejected regardless of auth.)
     pub fn turn(&self, agent: CellId, effects: Vec<Effect>) -> Turn {
-        let mut t = bare_turn(agent, self.next_nonce(&agent), effects);
+        let mut t = bare_turn(agent, self.next_nonce(&agent), effects, self.height);
         t.fee = self.turn_fee;
         t
     }
@@ -1810,7 +1824,7 @@ impl World {
         for (target, effects) in actions {
             forest.add_root(bare_action(target, effects));
         }
-        let mut t = wrap_turn(agent, nonce, forest);
+        let mut t = wrap_turn(agent, nonce, forest, self.height);
         t.fee = self.turn_fee;
         t
     }
@@ -1826,7 +1840,7 @@ impl World {
         let nonce = self.next_nonce(&agent);
         let mut forest = CallForest::new();
         forest.add_root(action);
-        let mut t = wrap_turn(agent, nonce, forest);
+        let mut t = wrap_turn(agent, nonce, forest, self.height);
         t.fee = self.turn_fee;
         t
     }
@@ -2074,46 +2088,33 @@ pub fn bare_action(target: CellId, effects: Vec<Effect>) -> Action {
     }
 }
 
-/// The bare single-action turn shape (matches the executor test template).
-pub fn bare_turn(agent: CellId, nonce: u64, effects: Vec<Effect>) -> Turn {
+/// The bare single-action turn shape (matches the executor test template), built against
+/// World height `height` (see [`wrap_turn`] for its deadline).
+pub fn bare_turn(agent: CellId, nonce: u64, effects: Vec<Effect>, height: u64) -> Turn {
     let mut forest = CallForest::new();
     forest.add_root(bare_action(agent, effects));
-    wrap_turn(agent, nonce, forest)
-}
-
-/// Validity horizon (wall-clock seconds) stamped onto turns this module constructs.
-///
-/// `wrap_turn` feeds `World::commit_turn`, which runs `executor.execute(&turn, &mut
-/// ledger)` against a REAL `TurnExecutor` (module docs above) — not a mock. That
-/// executor's expiration check is `if let Some(valid_until) = turn.valid_until { .. }`
-/// (`turn/src/executor/execute.rs:426`) — entirely SKIPPED on `None`, so a turn built
-/// that way never expires, no matter how stale. Mirrors `default_valid_until` in
-/// `node/src/api.rs` / `sdk/src/runtime.rs` (same rationale, same fix, same 1-hour
-/// horizon); `dregg-sdk`'s copy is crate-private and this crate's dependency on it is
-/// optional (`embedded-executor` feature) besides, hence this module's own copy.
-const STARBRIDGE_TURN_VALIDITY_HORIZON_SECS: i64 = 3600;
-
-fn default_valid_until() -> Option<i64> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    Some(now + STARBRIDGE_TURN_VALIDITY_HORIZON_SECS)
+    wrap_turn(agent, nonce, forest, height)
 }
 
 /// Wrap a built call-forest into the bare `Turn` shape (no proofs/witnesses —
 /// the single-custody embedded world's operator path).
-fn wrap_turn(agent: CellId, nonce: u64, forest: CallForest) -> Turn {
+///
+/// `height` is the World height the turn is built against ([`World::height`]); the World
+/// executes its next turn at `height + 1`. The deadline is a block height derived from it,
+/// `valid_until_at(height, DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS)`, never from the host
+/// wall-clock, so the same turn built at the same height hashes the same (replay,
+/// share-link and fork re-derivation depend on that).
+fn wrap_turn(agent: CellId, nonce: u64, forest: CallForest, height: u64) -> Turn {
     Turn {
         agent,
         nonce,
         call_forest: forest,
         fee: 0,
         memo: None,
-        // `valid_until: None` skips the executor's expiration check entirely
-        // (`turn/src/executor/execute.rs:426`) — bound it with the module's shared
-        // wall-clock horizon instead.
-        valid_until: default_valid_until(),
+        valid_until: Some(dregg_turn::valid_until_at(
+            height,
+            dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+        )),
         previous_receipt_hash: None,
         depends_on: vec![],
         conservation_proof: None,
@@ -6140,57 +6141,48 @@ mod tests {
         );
     }
 
-    /// The sentinel must be `Some` — `None` here skips the executor's expiration check
-    /// entirely (`turn/src/executor/execute.rs:426`), so a turn built via `wrap_turn` /
-    /// `bare_turn` would never expire no matter how stale.
+    /// A World turn's deadline is a height the World itself decides: stamped from
+    /// `World::height`, checked against the height the World executes at (`height + 1`),
+    /// with no wall-clock in the turn hash. So a World turn CAN expire: one stamped to
+    /// expire at the current height is refused on commit, while the same turn stamped one
+    /// height later commits, and after it commits the World's next turn runs one height
+    /// higher.
     #[test]
-    fn default_valid_until_is_some() {
-        assert!(
-            default_valid_until().is_some(),
-            "a None here means every bare_turn/wrap_turn built by this module never \
-             expires — see the doc comment on default_valid_until"
-        );
-    }
+    fn a_world_turn_expires_at_the_world_height() {
+        let mut w = World::new();
+        let a = w.genesis_cell(1, 1_000);
+        let b = w.genesis_cell(2, 0);
+        assert!(w
+            .commit_turn(w.turn(a, vec![transfer(a, b, 1)]))
+            .is_committed());
+        let h = w.height();
+        assert_eq!(h, 1);
 
-    /// The stamped deadline must be strictly in the future and within the declared
-    /// horizon.
-    #[test]
-    fn default_valid_until_is_a_future_wall_clock_horizon() {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-        let stamped =
-            default_valid_until().expect("must be Some, see default_valid_until_is_some");
-        assert!(
-            stamped > now,
-            "stamped valid_until ({stamped}) must be strictly after now ({now})"
+        // Deterministic: the same turn at the same height hashes the same.
+        let t1 = w.turn(a, vec![transfer(a, b, 2)]);
+        let t2 = w.turn(a, vec![transfer(a, b, 2)]);
+        assert_eq!(t1.hash(), t2.hash());
+        assert_eq!(
+            t1.valid_until,
+            Some(h as i64 + dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS as i64)
         );
-        assert!(
-            stamped <= now + STARBRIDGE_TURN_VALIDITY_HORIZON_SECS,
-            "stamped valid_until ({stamped}) must not exceed the declared horizon (now={now} \
-             + {STARBRIDGE_TURN_VALIDITY_HORIZON_SECS}s)"
-        );
-    }
 
-    /// Ratchet against the unbounded `valid_until` sentinel regrowing in a `Turn` literal
-    /// this file builds. `include_str!` reads this file at COMPILE time, so this cannot go
-    /// stale against what actually ships. This file is itself the one scanned, which is
-    /// why the needle is assembled at runtime rather than written as one literal — a
-    /// literal copy of it here would trivially match itself.
-    #[test]
-    fn no_world_turn_rebuilds_the_unbounded_valid_until_sentinel() {
-        let src = include_str!("mod.rs");
-        let sentinel_field = "valid_until";
-        let sentinel_value = "None";
-        let needle = format!("{sentinel_field}: {sentinel_value},");
-        assert!(
-            !src.contains(&needle),
-            "world/mod.rs builds a Turn with `{sentinel_field}` bound to a bare \
-             `{sentinel_value}` — this turn will NEVER expire (the executor's expiration \
-             check is skipped entirely when this field is `{sentinel_value}`, \
-             turn/src/executor/execute.rs:426). Use `default_valid_until()` instead, as \
-             `wrap_turn` now does."
-        );
+        // Expired: valid only through height h, but the World executes at h + 1.
+        let mut stale = w.turn(a, vec![transfer(a, b, 2)]);
+        stale.valid_until = Some(h as i64);
+        match w.commit_turn(stale) {
+            CommitOutcome::Rejected { reason, .. } => assert!(
+                reason.contains("Expired"),
+                "expected the height deadline to refuse it, got {reason}"
+            ),
+            other => panic!("an expired World turn must be rejected, got {other:?}"),
+        }
+        assert_eq!(w.height(), h, "a refused turn does not advance the height");
+
+        // Inside the window: the same turn, valid through h + 1, commits.
+        let mut fresh = w.turn(a, vec![transfer(a, b, 2)]);
+        fresh.valid_until = Some(h as i64 + 1);
+        assert!(w.commit_turn(fresh).is_committed());
+        assert_eq!(w.height(), h + 1);
     }
 }

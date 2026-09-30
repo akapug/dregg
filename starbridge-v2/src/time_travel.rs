@@ -388,6 +388,7 @@ fn reversible_mirror_steps(
                 receipt,
                 timestamp,
                 post_root,
+                block_height,
             } => {
                 if *timestamp != receipt.timestamp {
                     return Err(BranchError::ReplayRefused {
@@ -402,6 +403,7 @@ fn reversible_mirror_steps(
                     });
                 }
                 ex.set_timestamp(*timestamp);
+                ex.set_block_height(*block_height);
                 let actual = rh
                     .record_commit(&ex, &mut ledger, (**turn).clone())
                     .ok_or_else(|| BranchError::ReplayRefused {
@@ -545,6 +547,8 @@ impl TimeBranch {
         // chain (the same warm-replay `undo_to` does before walking backward).
         let mut ex = fork.fresh_executor();
         let mut working = Ledger::new();
+        // The height of the last committed step replayed: the fork point's World height.
+        let mut fork_height = 0u64;
         for (index, step) in fork.steps().iter().enumerate() {
             match step.as_ref() {
                 ReversibleStep::FactoryDeployment { deployment } => {
@@ -596,8 +600,15 @@ impl TimeBranch {
                         }
                     })?;
                 }
-                ReversibleStep::Committed { turn, receipt, .. } => {
+                ReversibleStep::Committed {
+                    turn,
+                    receipt,
+                    block_height,
+                    ..
+                } => {
                     ex.set_timestamp(receipt.timestamp);
+                    ex.set_block_height(*block_height);
+                    fork_height = *block_height;
                     match ex.execute(turn, &mut working) {
                         TurnResult::Committed {
                             receipt: actual, ..
@@ -635,7 +646,9 @@ impl TimeBranch {
         // a bare unchecked turn; the executor's conservation / ocap guarantees
         // still gate it exactly as on the live line.
         let nonce = working.get(&agent).map(|c| c.state.nonce()).unwrap_or(0);
-        let turn = crate::world::bare_turn(agent, nonce, effects);
+        // Built against the fork point's height and committed at the next one.
+        ex.set_block_height(fork_height + 1);
+        let turn = crate::world::bare_turn(agent, nonce, effects, fork_height);
         let verified = fork.record_commit(&ex, &mut working, turn).is_some();
         if !verified {
             return Err(BranchError::DriveRejected { step: k });
