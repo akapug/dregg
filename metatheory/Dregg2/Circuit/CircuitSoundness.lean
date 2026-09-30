@@ -813,15 +813,74 @@ opaque cfgExtView : BatchPublicInputs → BatchProof →
 /-- Deployed config: the residual non-FRI checks of the deployed verifier. KAT-validated. -/
 opaque cfgExtra : FriVerifier.BatchProofData ℤ → FriVerifier.WrapPublics ℤ → Bool
 
+/-- **The one key the deployed configuration was validated for.** The `cfg*` constants above are
+ONE configuration — one AIR evaluation (`cfgExtView`), one recursion-VK shape pin (`cfgVk`) — KAT-
+validated against the deployed p3 verifier for ONE registry. Nothing in them is a function of a
+registry, so the only honest way for `verifyBatch` to consult its key is to check that the key IS
+this one. Which registry `cfgKey` commits to is the same KAT-tier fact as the rest of the
+configuration: not provable here, and not assumed by any theorem in this module. -/
+opaque cfgKey : VerifyKey := ⟨0⟩
+
 /-- The batch verifier: the continued-thread verifier strengthened with the faithful
-single-AIR quotient identity AND the quartic-extension p3 fold.  The apex consumes the
-real RLC/chunk-recomposition/inverse teeth and full four-lane FRI arithmetic; the scalar
-fold is retained only as a redundant soundness-refinement conjunct. -/
-def verifyBatch (_vk : VerifyKey) (pi : BatchPublicInputs) (π : BatchProof) : Verdict :=
-  if Dregg2.Circuit.ExtFieldChallenge.verifyAlgoUnifiedFaithfulExt
+single-AIR quotient identity AND the quartic-extension p3 fold, run at the deployed
+configuration, and ONLY for the key that configuration was validated for (`cfgKey`). The apex
+consumes the real RLC/chunk-recomposition/inverse teeth and full four-lane FRI arithmetic; the
+scalar fold is retained only as a redundant soundness-refinement conjunct.
+
+The key is consulted: under any key other than `cfgKey` the verdict is `reject`
+(`verifyBatch_rejects_foreign_key`), so `verifyBatch (vkOfRegistry R) pi π = accept` genuinely
+depends on `R` — it forces `vkOfRegistry R = cfgKey` (`verifyBatch_accept_iff`). An earlier
+revision bound the key as `_vk` and never read it, so `StarkSound hash R`'s hypothesis was the
+same proposition for every registry while its conclusion named `R pi.effect`. -/
+def verifyBatch (vk : VerifyKey) (pi : BatchPublicInputs) (π : BatchProof) : Verdict :=
+  if vk = cfgKey ∧
+      (Dregg2.Circuit.ExtFieldChallenge.verifyAlgoUnifiedFaithfulExt
         cfgPerm cfgRATE cfgToNat cfgParams cfgVk cfgCore cfgA cfgExtCore cfgExtA cfgExtW
         cfgInitState cfgLogN (cfgView pi π).1 (cfgView pi π).2 (cfgExtView pi π)
-      && cfgExtra (cfgView pi π).1 (cfgView pi π).2 then Verdict.accept else Verdict.reject
+      && cfgExtra (cfgView pi π).1 (cfgView pi π).2) = true then Verdict.accept else Verdict.reject
+
+/-- **Acceptance, unfolded.** `verifyBatch vk pi π` accepts exactly when `vk` is the deployed key
+AND the deployed configuration accepts. The single unfolding lemma every consumer uses. -/
+theorem verifyBatch_accept_iff (vk : VerifyKey) (pi : BatchPublicInputs) (π : BatchProof) :
+    verifyBatch vk pi π = Verdict.accept ↔
+      vk = cfgKey ∧
+        (Dregg2.Circuit.ExtFieldChallenge.verifyAlgoUnifiedFaithfulExt
+          cfgPerm cfgRATE cfgToNat cfgParams cfgVk cfgCore cfgA cfgExtCore cfgExtA cfgExtW
+          cfgInitState cfgLogN (cfgView pi π).1 (cfgView pi π).2 (cfgExtView pi π)
+        && cfgExtra (cfgView pi π).1 (cfgView pi π).2) = true := by
+  unfold verifyBatch
+  split
+  · exact iff_of_true rfl ‹_›
+  · exact iff_of_false (by decide) ‹_›
+
+/-- **The key is consulted (refuting pole of key-independence).** Under any key other than the
+deployed one, `verifyBatch` rejects every batch. -/
+theorem verifyBatch_rejects_foreign_key {vk : VerifyKey} (hvk : vk ≠ cfgKey)
+    (pi : BatchPublicInputs) (π : BatchProof) : verifyBatch vk pi π = Verdict.reject := by
+  unfold verifyBatch
+  rw [if_neg (fun h => hvk h.1)]
+
+/-- **At the deployed key the verdict is the configuration's (satisfiable pole).** `verifyBatch`
+under `cfgKey` accepts exactly the batches the deployed configuration accepts, so the key check
+removes nothing at the key the configuration belongs to. -/
+theorem verifyBatch_cfgKey_accept_iff (pi : BatchPublicInputs) (π : BatchProof) :
+    verifyBatch cfgKey pi π = Verdict.accept ↔
+        (Dregg2.Circuit.ExtFieldChallenge.verifyAlgoUnifiedFaithfulExt
+          cfgPerm cfgRATE cfgToNat cfgParams cfgVk cfgCore cfgA cfgExtCore cfgExtA cfgExtW
+          cfgInitState cfgLogN (cfgView pi π).1 (cfgView pi π).2 (cfgExtView pi π)
+        && cfgExtra (cfgView pi π).1 (cfgView pi π).2) = true := by
+  rw [verifyBatch_accept_iff]
+  exact ⟨fun h => h.2, fun h => ⟨rfl, h⟩⟩
+
+/-- **The verdict separates keys.** Whenever the deployed configuration accepts a batch, the
+deployed key and any other key receive DIFFERENT verdicts on it: `verifyBatch` is not constant in
+its key argument on any accepted input. -/
+theorem verifyBatch_separates_keys {vk : VerifyKey} (hvk : vk ≠ cfgKey)
+    (pi : BatchPublicInputs) (π : BatchProof)
+    (hcfg : verifyBatch cfgKey pi π = Verdict.accept) :
+    verifyBatch vk pi π ≠ verifyBatch cfgKey pi π := by
+  rw [verifyBatch_rejects_foreign_key hvk, hcfg]
+  decide
 
 /-- The published-commitment view induced by a `BatchPublicInputs`. -/
 def BatchPublicInputs.toPublished (pi : BatchPublicInputs) : PublishedCommit :=
@@ -849,13 +908,46 @@ A verifying batch against the live registry's VK yields, for the descriptor the 
 (`R pi.effect`), a `Satisfied2` witness `t` (over SOME boundary) whose published OLD/NEW commitments
 are EXACTLY `pi.pre`/`pi.post`, at the turn `pi.turn` (i.e. `pi.toPublished`). This is the FRI/p3
 verify⟹∃witness extraction: REALIZABLE and audited, but NOT provable in Lean — introduced as a clean
-class so the apex carries it explicitly instead of assuming it silently. -/
+class so the apex carries it explicitly instead of assuming it silently.
+
+The hypothesis depends on `R` through its key: `verifyBatch (vkOfRegistry R)` accepts only when
+`vkOfRegistry R = cfgKey`. So the class is contentless for a registry the deployed configuration
+was not validated for (`starkSound_of_foreign_key`) and is exactly the extraction over the
+configuration's accept set at the deployed key (`starkSound_iff_at_cfgKey`). -/
 class StarkSound (hash : List ℤ → ℤ) (R : Registry) : Prop where
   extract : ∀ (pi : BatchPublicInputs) (π : BatchProof),
     verifyBatch (vkOfRegistry R) pi π = accept →
     ∃ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace),
       Satisfied2 hash (R pi.effect) minit mfin maddrs t ∧
         tracePublishedCommit t = pi.toPublished
+
+/-- **`StarkSound` has content only at the deployed key.** For a registry whose key is NOT the
+deployed one, the verifier rejects everything under that key, so the extraction is owed for no
+batch and the class holds with no content. This is the honest floor of a one-configuration
+verifier: one deployed configuration, one VK. -/
+theorem starkSound_of_foreign_key (hash : List ℤ → ℤ) (R : Registry)
+    (hR : vkOfRegistry R ≠ cfgKey) : StarkSound hash R where
+  extract := fun pi π hacc => by
+    rw [verifyBatch_rejects_foreign_key hR] at hacc
+    exact absurd hacc (by decide)
+
+/-- **At the deployed key, `StarkSound` is exactly the extraction over the configuration's
+accept set.** For a registry committed by `cfgKey`, `StarkSound hash R` holds iff every batch the
+deployed configuration accepts has a `Satisfied2` witness of `R pi.effect` publishing `pi` — the
+real obligation, now visibly indexed by `R` through its key. -/
+theorem starkSound_iff_at_cfgKey (hash : List ℤ → ℤ) (R : Registry)
+    (hR : vkOfRegistry R = cfgKey) :
+    StarkSound hash R ↔
+      ∀ (pi : BatchPublicInputs) (π : BatchProof),
+        verifyBatch cfgKey pi π = accept →
+        ∃ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace),
+          Satisfied2 hash (R pi.effect) minit mfin maddrs t ∧
+            tracePublishedCommit t = pi.toPublished := by
+  constructor
+  · intro h pi π hacc
+    exact h.extract pi π (by rw [hR]; exact hacc)
+  · intro h
+    exact ⟨fun pi π hacc => h pi π (by rw [hR] at hacc; exact hacc)⟩
 
 /-! ## §6 — the apex: `lightclient_unfoolable`.
 
@@ -1638,6 +1730,12 @@ example (LH : List Turn → ℤ) (hLog : logHashInjective LH)
    Dregg2.Circuit.Poseidon2Binding.Poseidon2SpongeCR]
 #assert_axioms stateDecodeChain_frame_continuous
 #assert_axioms lightclient_unfoolable
+#assert_axioms verifyBatch_accept_iff
+#assert_axioms verifyBatch_rejects_foreign_key
+#assert_axioms verifyBatch_cfgKey_accept_iff
+#assert_axioms verifyBatch_separates_keys
+#assert_axioms starkSound_of_foreign_key
+#assert_axioms starkSound_iff_at_cfgKey
 #assert_axioms lightclient_turn_unfoolable
 #assert_axioms turnDecodeChain_seam_kernel_derived
 #assert_axioms turnDecodeChain_refines_turnSpec

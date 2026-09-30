@@ -85,7 +85,7 @@ open Dregg2.Circuit.FriVerifier
 open Dregg2.Circuit.CircuitSoundness
   (BatchPublicInputs BatchProof Registry StarkSound Verdict VerifyKey vkOfRegistry verifyBatch
    tracePublishedCommit cfgPerm cfgRATE cfgToNat cfgParams cfgVk cfgCore cfgA cfgExtCore cfgExtA
-   cfgExtW cfgInitState cfgLogN cfgView cfgExtView cfgExtra cfgChecks)
+   cfgExtW cfgInitState cfgLogN cfgView cfgExtView cfgExtra cfgChecks verifyBatch_accept_iff)
 open Dregg2.Circuit.DescriptorIR2 (VmTrace EffectVmDescriptor2 envAt VmConstraint2 Satisfied2)
 open Dregg2.Circuit.AirChecksSatisfied (MainAirAcceptF isArith)
 open Dregg2.Circuit.RotatedKernelRefinement (transferV3)
@@ -599,16 +599,8 @@ theorem starkSound_of_friLdtExtractFaithful_transferV3
         (verifyAlgoUnifiedFaithfulExt cfgPerm cfgRATE cfgToNat cfgParams cfgVk cfgCore cfgA
               cfgExtCore cfgExtA cfgExtW cfgInitState cfgLogN
               (cfgView pi π).1 (cfgView pi π).2 (cfgExtView pi π)
-          && cfgExtra (cfgView pi π).1 (cfgView pi π).2) = true := by
-      unfold verifyBatch at hacc
-      by_cases h :
-          (verifyAlgoUnifiedFaithfulExt cfgPerm cfgRATE cfgToNat cfgParams cfgVk cfgCore cfgA
-                cfgExtCore cfgExtA cfgExtW cfgInitState cfgLogN
-                (cfgView pi π).1 (cfgView pi π).2 (cfgExtView pi π)
-            && cfgExtra (cfgView pi π).1 (cfgView pi π).2) = true
-      · exact h
-      · rw [if_neg h] at hacc
-        exact absurd hacc (by decide)
+          && cfgExtra (cfgView pi π).1 (cfgView pi π).2) = true :=
+      ((verifyBatch_accept_iff _ pi π).mp hacc).2
     have hExt := (Bool.and_eq_true _ _).mp hboth |>.1
     -- …and therefore also `verifyAlgo` acceptance, through the landed strengthening chain.
     have hAlgo : verifyAlgo cfgPerm cfgRATE cfgToNat cfgParams cfgVk cfgChecks cfgInitState cfgLogN

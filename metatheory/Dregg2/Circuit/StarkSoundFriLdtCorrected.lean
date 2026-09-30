@@ -85,7 +85,7 @@ namespace Dregg2.Circuit.StarkSoundFriLdtCorrected
 open Dregg2.Circuit.CircuitSoundness
   (BatchPublicInputs BatchProof Registry StarkSound Verdict VerifyKey verifyBatch vkOfRegistry
    cfgPerm cfgRATE cfgToNat cfgParams cfgVk cfgCore cfgA cfgExtCore cfgExtA cfgExtW
-   cfgInitState cfgLogN cfgView cfgExtView cfgExtra)
+   cfgInitState cfgLogN cfgView cfgExtView cfgExtra verifyBatch_accept_iff)
 open Dregg2.Circuit.RotatedKernelRefinement (transferV3)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Circuit.AlgoStarkSoundTransferV3 (FriLdtExtractV3)
@@ -99,23 +99,15 @@ open Dregg2.Circuit.FriLdtExtractDeployed
 /-! ## §1 — the deployed acceptance unfolding, shared by everything below. -/
 
 /-- `verifyBatch` accepted ⇒ the predicate it evaluates, `verifyAlgoUnifiedFaithfulExt` at the
-deployed arguments on the deployed view, returned `true`. (`verifyBatch` ignores its key argument;
-the acceptance branch is the conjunction of the extension-faithful verifier and `cfgExtra`.) -/
+deployed arguments on the deployed view, returned `true`. (Acceptance is `vkey = cfgKey` AND the
+conjunction of the extension-faithful verifier and `cfgExtra`; see `verifyBatch_accept_iff`.) -/
 theorem verifyBatch_accept_imp_faithfulExt
     (vkey : VerifyKey) (pi : BatchPublicInputs) (π : BatchProof)
     (hacc : verifyBatch vkey pi π = Verdict.accept) :
     verifyAlgoUnifiedFaithfulExt cfgPerm cfgRATE cfgToNat cfgParams cfgVk cfgCore cfgA
       cfgExtCore cfgExtA cfgExtW cfgInitState cfgLogN
       (cfgView pi π).1 (cfgView pi π).2 (cfgExtView pi π) = true := by
-  unfold verifyBatch at hacc
-  by_cases h :
-      (verifyAlgoUnifiedFaithfulExt cfgPerm cfgRATE cfgToNat cfgParams cfgVk cfgCore cfgA
-            cfgExtCore cfgExtA cfgExtW cfgInitState cfgLogN
-            (cfgView pi π).1 (cfgView pi π).2 (cfgExtView pi π)
-        && cfgExtra (cfgView pi π).1 (cfgView pi π).2) = true
-  · exact ((Bool.and_eq_true _ _).mp h).1
-  · rw [if_neg h] at hacc
-    exact absurd hacc (by decide)
+  exact ((Bool.and_eq_true _ _).mp ((verifyBatch_accept_iff vkey pi π).mp hacc).2).1
 
 /-! ## §2 — the REPLACEMENT apexes, and their relation to the landed one. -/
 
