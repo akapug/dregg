@@ -2486,31 +2486,66 @@ mod tests {
         let com = rw::empty_commitments_root_8();
 
         let mut revoked = dregg_cell::revoked_set::RevokedSet::new();
-        revoked.insert([0x5A; 32], 7).expect("a fresh revocation key inserts");
+        revoked
+            .insert([0x5A; 32], 7)
+            .expect("a fresh revocation key inserts");
         let live = revoked.root8();
         let empty = rw::empty_revoked_root_8();
-        assert_ne!(live, empty, "the live set must be non-empty for this to test anything");
+        assert_ne!(
+            live, empty,
+            "the live set must be non-empty for this to test anything"
+        );
 
         let mut ctx_ledger = dregg_cell::Ledger::new();
         let _ = ctx_ledger.insert_cell(before_cell.clone());
         let material = dregg_cell::commitment::RotationCarrierMaterial::default();
-        let expect_before =
-            rw::produce(&before_cell, &ctx_ledger, &nul, &com, &live, &receipt_hashes, &material);
-        let expect_after =
-            rw::produce(&after_cell, &ctx_ledger, &nul, &com, &live, &receipt_hashes, &material);
+        let expect_before = rw::produce(
+            &before_cell,
+            &ctx_ledger,
+            &nul,
+            &com,
+            &live,
+            &receipt_hashes,
+            &material,
+        );
+        let expect_after = rw::produce(
+            &after_cell,
+            &ctx_ledger,
+            &nul,
+            &com,
+            &live,
+            &receipt_hashes,
+            &material,
+        );
 
         let sovereign = |revoked_root| {
             rotation_witness_for_self_sovereign_with_root(
-                pre_balance, 0, &before_cell, &after_cell, &receipt_hashes, &effects, &nul, &com,
+                pre_balance,
+                0,
+                &before_cell,
+                &after_cell,
+                &receipt_hashes,
+                &effects,
+                &nul,
+                &com,
                 revoked_root,
             )
             .expect("a pristine transfer turn rotates")
         };
-        let cap_root = dregg_cell::compute_canonical_capability_root_felt(&before_cell.capabilities);
+        let cap_root =
+            dregg_cell::compute_canonical_capability_root_felt(&before_cell.capabilities);
         let capability = |revoked_root| {
             rotation_witness_for_capability_with_root(
-                pre_balance, 0, cap_root, &before_cell, &after_cell, &receipt_hashes, &effects,
-                &nul, &com, revoked_root,
+                pre_balance,
+                0,
+                cap_root,
+                &before_cell,
+                &after_cell,
+                &receipt_hashes,
+                &effects,
+                &nul,
+                &com,
+                revoked_root,
             )
             .expect("a transfer turn with a matching cap root rotates")
         };
@@ -2519,8 +2554,14 @@ mod tests {
             ("self-sovereign", sovereign(&live), sovereign(&empty)),
             ("capability", capability(&live), capability(&empty)),
         ] {
-            assert_eq!(with_live.before.pre_limbs, expect_before.pre_limbs, "{name}: BEFORE block");
-            assert_eq!(with_live.after.pre_limbs, expect_after.pre_limbs, "{name}: AFTER block");
+            assert_eq!(
+                with_live.before.pre_limbs, expect_before.pre_limbs,
+                "{name}: BEFORE block"
+            );
+            assert_eq!(
+                with_live.after.pre_limbs, expect_after.pre_limbs,
+                "{name}: AFTER block"
+            );
             assert_ne!(
                 with_live.before.pre_limbs, with_empty.before.pre_limbs,
                 "{name}: the live revoked root must move the committed BEFORE limbs"

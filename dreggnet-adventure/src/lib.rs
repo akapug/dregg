@@ -1436,13 +1436,14 @@ impl Adventure {
         let relic = forged.relic;
         let mut market = TradeWorld::with_assets(forged.forge.into_assets());
         market.fund_dregg(BUYER, 100);
-        let mut trade = market.open_trade(
-            hero.holder_label(),
-            LegSpec::Asset(relic),
-            BUYER,
-            LegSpec::Dregg(50),
-        )
-        .map_err(|error| AdventureError::at("trade", format!("open: {error:?}")))?;
+        let mut trade = market
+            .open_trade(
+                hero.holder_label(),
+                LegSpec::Asset(relic),
+                BUYER,
+                LegSpec::Dregg(50),
+            )
+            .map_err(|error| AdventureError::at("trade", format!("open: {error:?}")))?;
         market
             .deposit(&mut trade, TradeSide::A)
             .map_err(|error| AdventureError::at("trade", format!("seller: {error:?}")))?;

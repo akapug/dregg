@@ -212,7 +212,10 @@ impl std::fmt::Display for TradeError {
             TradeError::AlreadyDeposited(s) => write!(f, "leg {s:?} is already deposited"),
             TradeError::ZeroDreggAmount => write!(f, "a $DREGG amount of 0 cannot be traded"),
             TradeError::DreggAmountTooLarge { amount } => {
-                write!(f, "$DREGG amount {amount} exceeds the value layer's i64::MAX")
+                write!(
+                    f,
+                    "$DREGG amount {amount} exceeds the value layer's i64::MAX"
+                )
             }
             TradeError::DreggMoveRefused { amount } => {
                 write!(f, "the value layer refused to move {amount} $DREGG")

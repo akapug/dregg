@@ -14241,7 +14241,8 @@ mod tests {
             let secret = s.cclerk.derive_symmetric_key(TURN_UNSEALER_DOMAIN);
             (
                 crate::executor_setup::federation_id_for_executor(&s),
-                *x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(secret)).as_bytes(),
+                *x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(secret))
+                    .as_bytes(),
             )
         };
         let unsigned = Action {
@@ -14321,7 +14322,9 @@ mod tests {
                 solo.height,
                 solo.nullifier_log.len(),
                 solo.nullifier_log.contains(&turn_hash_bytes),
-                s.ledger.get(&agent).map(|c| (c.state.balance(), c.state.nonce())),
+                s.ledger
+                    .get(&agent)
+                    .map(|c| (c.state.balance(), c.state.nonce())),
                 s.cclerk.receipt_chain_length(),
             )
         };
@@ -14335,11 +14338,20 @@ mod tests {
             snapshot(&*s)
         };
         let json = submit(envelope.clone()).await;
-        assert_eq!(json["accepted"], false, "a refused append must refuse the turn: {json}");
+        assert_eq!(
+            json["accepted"], false,
+            "a refused append must refuse the turn: {json}"
+        );
         let reason = json["error"].as_str().expect("error string").to_string();
         assert!(reason.starts_with("receipt append refused: "), "{json}");
-        assert!(reason.contains("injected: durable receipt store refused"), "{json}");
-        assert_eq!(json["turn_hash"], serde_json::json!(format!("rejected: {reason}")));
+        assert!(
+            reason.contains("injected: durable receipt store refused"),
+            "{json}"
+        );
+        assert_eq!(
+            json["turn_hash"],
+            serde_json::json!(format!("rejected: {reason}"))
+        );
         assert_eq!(
             snapshot(&*state.read().await),
             before,
@@ -14355,13 +14367,27 @@ mod tests {
             .cclerk
             .set_receipt_persist(std::sync::Arc::new(|_, _| Ok(())));
         let json = submit(envelope).await;
-        assert_eq!(json["accepted"], true, "the retried turn must commit: {json}");
-        assert_eq!(json["turn_hash"], serde_json::json!(hex_encode(&turn_hash_bytes)));
+        assert_eq!(
+            json["accepted"], true,
+            "the retried turn must commit: {json}"
+        );
+        assert_eq!(
+            json["turn_hash"],
+            serde_json::json!(hex_encode(&turn_hash_bytes))
+        );
         let (height, log_len, logged, cell, chain_len) = snapshot(&*state.read().await);
-        assert_eq!(height, before.0 + 1, "one committed turn advances the solo height once");
+        assert_eq!(
+            height,
+            before.0 + 1,
+            "one committed turn advances the solo height once"
+        );
         assert_eq!(log_len, before.1 + 1);
         assert!(logged, "the committed turn is in the nullifier log");
-        assert_eq!(cell.map(|(_, nonce)| nonce), Some(1), "the nonce ticked exactly once");
+        assert_eq!(
+            cell.map(|(_, nonce)| nonce),
+            Some(1),
+            "the nonce ticked exactly once"
+        );
         assert_ne!(cell, before.3, "the transfer and fee landed on the retry");
         assert_eq!(chain_len, before.4 + 1);
     }

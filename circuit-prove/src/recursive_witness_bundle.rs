@@ -151,10 +151,22 @@ pub const RECURSIVE_VERIFIER_SURFACE: [(&str, &[u8]); 5] = [
         "circuit-prove/src/recursive_witness_bundle.rs",
         include_bytes!("recursive_witness_bundle.rs"),
     ),
-    ("circuit-prove/src/effect_vm_p3_air.rs", include_bytes!("effect_vm_p3_air.rs")),
-    ("circuit-prove/src/plonky3_recursion_impl.rs", include_bytes!("plonky3_recursion_impl.rs")),
-    ("recursion-verify/src/verify.rs", include_bytes!("../../recursion-verify/src/verify.rs")),
-    ("recursion-verify/src/config.rs", include_bytes!("../../recursion-verify/src/config.rs")),
+    (
+        "circuit-prove/src/effect_vm_p3_air.rs",
+        include_bytes!("effect_vm_p3_air.rs"),
+    ),
+    (
+        "circuit-prove/src/plonky3_recursion_impl.rs",
+        include_bytes!("plonky3_recursion_impl.rs"),
+    ),
+    (
+        "recursion-verify/src/verify.rs",
+        include_bytes!("../../recursion-verify/src/verify.rs"),
+    ),
+    (
+        "recursion-verify/src/config.rs",
+        include_bytes!("../../recursion-verify/src/config.rs"),
+    ),
 ];
 
 /// BLAKE3 over a verifier surface: each file's workspace path and bytes, length-prefixed, in order.
@@ -613,9 +625,15 @@ mod tests {
             "the hand-bumped string hash is gone"
         );
         for i in 0..RECURSIVE_VERIFIER_SURFACE.len() {
-            let mut edited: Vec<Vec<u8>> =
-                RECURSIVE_VERIFIER_SURFACE.iter().map(|(_, b)| b.to_vec()).collect();
-            assert!(!edited[i].is_empty(), "{} is empty", RECURSIVE_VERIFIER_SURFACE[i].0);
+            let mut edited: Vec<Vec<u8>> = RECURSIVE_VERIFIER_SURFACE
+                .iter()
+                .map(|(_, b)| b.to_vec())
+                .collect();
+            assert!(
+                !edited[i].is_empty(),
+                "{} is empty",
+                RECURSIVE_VERIFIER_SURFACE[i].0
+            );
             let mid = edited[i].len() / 2;
             edited[i][mid] ^= 0x01;
             let surface: Vec<(&str, &[u8])> = RECURSIVE_VERIFIER_SURFACE
@@ -641,7 +659,11 @@ mod tests {
         let root = concat!(env!("CARGO_MANIFEST_DIR"), "/..");
         for (path, bytes) in RECURSIVE_VERIFIER_SURFACE {
             let on_disk = std::fs::read(format!("{root}/{path}")).expect(path);
-            assert_eq!(on_disk.as_slice(), bytes, "{path}: compiled-in bytes differ from disk");
+            assert_eq!(
+                on_disk.as_slice(),
+                bytes,
+                "{path}: compiled-in bytes differ from disk"
+            );
         }
         let listed = |p: &str| RECURSIVE_VERIFIER_SURFACE.iter().any(|(q, _)| *q == p);
         let non_test = |bytes: &[u8]| {
@@ -666,7 +688,10 @@ mod tests {
         let crate_modules = modules_after(&bundle, "crate::");
         assert!(crate_modules.iter().any(|m| m == "plonky3_recursion_impl"));
         for m in crate_modules {
-            assert!(listed(&format!("circuit-prove/src/{m}.rs")), "crate::{m} is not in the surface");
+            assert!(
+                listed(&format!("circuit-prove/src/{m}.rs")),
+                "crate::{m} is not in the surface"
+            );
         }
         let seam = non_test(RECURSIVE_VERIFIER_SURFACE[2].1);
         let verify_modules = modules_after(&seam, "dregg_recursion_verify::");

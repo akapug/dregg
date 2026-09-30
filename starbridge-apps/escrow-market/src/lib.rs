@@ -143,7 +143,10 @@ impl std::fmt::Display for MarketError {
             }
             MarketError::AssetMismatch => write!(f, "wallet asset does not match the leg asset"),
             MarketError::NonPositiveAmount { amount } => {
-                write!(f, "a leg of {amount} cannot be moved (legs must be positive)")
+                write!(
+                    f,
+                    "a leg of {amount} cannot be moved (legs must be positive)"
+                )
             }
         }
     }
