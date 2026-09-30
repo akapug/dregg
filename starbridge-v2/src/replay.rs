@@ -1679,14 +1679,18 @@ mod tests {
     fn fixture() -> (History, Ledger, CellId, CellId) {
         let mut h = History::new(1_700_000_000);
         let mut l = Ledger::new();
-        let ex = h.fresh_executor();
+        let mut ex = h.fresh_executor();
         let a = h.record_genesis(&mut l, make_open_cell(1, 1_000));
         let b = h.record_genesis(&mut l, make_open_cell(2, 0));
         let nonce = |l: &Ledger, id: &CellId| l.get(id).map(|c| c.state.nonce()).unwrap_or(0);
+        // Each commit runs one height above the last, as `World::commit_turn` does: `fork_at(k)`
+        // runs its alternate turn at `height_at(k) + 1`, the height the mainline's next step ran at.
         let t1 = bare_turn(a, nonce(&l, &a), vec![transfer(a, b, 100)], 0);
         assert!(h.record_commit(&ex, &mut l, t1).is_some());
+        ex.set_block_height(2);
         let t2 = bare_turn(a, nonce(&l, &a), vec![transfer(a, b, 50)], 0);
         assert!(h.record_commit(&ex, &mut l, t2).is_some());
+        ex.set_block_height(3);
         let t3 = bare_turn(b, nonce(&l, &b), vec![transfer(b, a, 30)], 0);
         assert!(h.record_commit(&ex, &mut l, t3).is_some());
         (h, l, a, b)
@@ -1980,7 +1984,7 @@ mod tests {
     #[test]
     fn paid_rejected_fork_retains_the_exact_branch_point() {
         let mut history = History::with_costs(1_700_000_000, ComputronCosts::default_costs());
-        let executor = history.fresh_executor();
+        let mut executor = history.fresh_executor();
         let mut ledger = Ledger::new();
         let a = history.record_genesis(&mut ledger, make_open_cell(0x75, 100_000));
         let b = history.record_genesis(&mut ledger, make_open_cell(0x76, 0));
@@ -2008,6 +2012,9 @@ mod tests {
         next.fee = 1_000;
         let predicted = history.fork_at(branch, next.clone()).unwrap();
         assert!(predicted.outcome.is_committed());
+        // The mainline records its next step one height up, as `World::commit_turn` does, which
+        // is the height `fork_at` predicted it at.
+        executor.set_block_height(2);
         history.record_commit(&executor, &mut ledger, next).unwrap();
         assert_eq!(predicted.fork_root, ledger.root());
         assert_eq!(ledger.get(&a).unwrap().state.balance(), 97_970);
