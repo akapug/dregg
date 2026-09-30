@@ -638,88 +638,109 @@ pub(crate) mod provider_door {
     const RET_USER_NOTIF: u32 = 0x7fc0_0000; // SECCOMP_RET_USER_NOTIF
     const RET_KILL_PROCESS: u32 = 0x8000_0000; // SECCOMP_RET_KILL_PROCESS
 
+    /// One syscall admitted ONLY when a single argument equals one exact value
+    /// (e.g. `ioctl` with request `FIONBIO`). The full 64-bit argument is compared
+    /// (both 32-bit halves), so a request that matches in its low word only is
+    /// still denied.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct ArgAllow {
+        pub nr: i64,
+        /// Index into `seccomp_data.args` (0..6).
+        pub arg: u32,
+        pub value: u64,
+    }
+
+    /// `seccomp_data.args[i]` low / high 32-bit word offsets (little-endian:
+    /// x86_64 and aarch64, the only arches this filter is built for).
+    const fn arg_lo(i: u32) -> u32 {
+        16 + 8 * i
+    }
+    const fn arg_hi(i: u32) -> u32 {
+        20 + 8 * i
+    }
+
+    fn jump(from: usize, to: usize) -> u8 {
+        u8::try_from(to - from - 1).expect("seccomp cBPF jump exceeds 255 instructions")
+    }
+
     /// Build the connect-notify seccomp cBPF program: guard the arch, then for each
     /// `allow_nr` return `ALLOW`, for `notify_nr` (`connect`) return `USER_NOTIF`
-    /// (trap to the supervisor), and for everything else return `EPERM`. A syscall
-    /// under a foreign arch token is killed. This mirrors the sealed allow-list but
-    /// (a) ADDS `socket` (so the child can create the socket the supervisor will
-    /// connect) and (b) routes `connect` to the notification listener instead of
-    /// denying it.
-    pub fn build_connect_seccomp_bpf(arch: u32, allow_nrs: &[i64], notify_nr: i64) -> Vec<BpfInsn> {
+    /// (trap to the supervisor), for each `arg_allows` entry return `ALLOW` only when
+    /// the syscall AND its named argument both match exactly, and for everything
+    /// else return `EPERM`. A syscall under a foreign arch token is killed. This
+    /// mirrors the sealed allow-list but (a) ADDS `socket` (so the child can create
+    /// the socket the supervisor will connect) and (b) routes `connect` to the
+    /// notification listener instead of denying it.
+    pub fn build_connect_seccomp_bpf(
+        arch: u32,
+        allow_nrs: &[i64],
+        notify_nr: i64,
+        arg_allows: &[ArgAllow],
+    ) -> Vec<BpfInsn> {
         // Layout: [0]=load arch, [1]=arch guard, [2]=load nr,
-        //         [3 .. 3+cmp)=comparisons, then DENY, ALLOW, NOTIFY, KILL.
+        //         [3 .. 3+cmp)=nr comparisons,
+        //         then 6 insns per arg-allow, then DENY, ALLOW, NOTIFY, KILL.
         let cmp = allow_nrs.len() + 1; // one JEQ per allow + one for connect.
-        let deny_i = 3 + cmp;
+        let arg_base = 3 + cmp;
+        let deny_i = arg_base + 6 * arg_allows.len();
         let allow_i = deny_i + 1;
         let notify_i = allow_i + 1;
         let kill_i = notify_i + 1;
 
-        let mut v = Vec::with_capacity(kill_i + 1);
-        // [0] A = seccomp_data.arch
-        v.push(BpfInsn {
+        let ld = |k: u32| BpfInsn {
             code: BPF_LD_W_ABS,
             jt: 0,
             jf: 0,
-            k: OFF_ARCH,
-        });
-        // [1] if A == arch fall through (jt=0); else jump to KILL.
-        v.push(BpfInsn {
+            k,
+        };
+        let jeq = |k: u32, jt: u8, jf: u8| BpfInsn {
             code: BPF_JMP_JEQ_K,
-            jt: 0,
-            jf: (kill_i - 2) as u8, // from index 1 to kill_i: kill_i - 1 - 1
-            k: arch,
-        });
-        // [2] A = seccomp_data.nr
-        v.push(BpfInsn {
-            code: BPF_LD_W_ABS,
+            jt,
+            jf,
+            k,
+        };
+        let ret = |k: u32| BpfInsn {
+            code: BPF_RET_K,
             jt: 0,
             jf: 0,
-            k: OFF_NR,
-        });
-        // comparisons — each allow-nr jumps forward to ALLOW; connect to NOTIFY.
+            k,
+        };
+
+        let mut v = Vec::with_capacity(kill_i + 1);
+        // [0] A = seccomp_data.arch; [1] if A == arch fall through, else KILL.
+        v.push(ld(OFF_ARCH));
+        v.push(jeq(arch, 0, jump(1, kill_i)));
+        // [2] A = seccomp_data.nr
+        v.push(ld(OFF_NR));
+        // nr comparisons — each allow-nr jumps forward to ALLOW; connect to NOTIFY.
         for (p, &nr) in allow_nrs.iter().enumerate() {
-            let abs = 3 + p;
-            v.push(BpfInsn {
-                code: BPF_JMP_JEQ_K,
-                jt: (allow_i - abs - 1) as u8,
-                jf: 0,
-                k: nr as u32,
-            });
+            v.push(jeq(nr as u32, jump(3 + p, allow_i), 0));
         }
-        {
-            let abs = 3 + allow_nrs.len();
-            v.push(BpfInsn {
-                code: BPF_JMP_JEQ_K,
-                jt: (notify_i - abs - 1) as u8,
-                jf: 0,
-                k: notify_nr as u32,
-            });
+        v.push(jeq(
+            notify_nr as u32,
+            jump(3 + allow_nrs.len(), notify_i),
+            0,
+        ));
+        // Arg-filtered allows. Block b (6 insns, A = nr on entry and on exit):
+        //   b+0: nr match ? fall : next block
+        //   b+1: A = args[i].lo    b+2: lo match ? fall : b+5
+        //   b+3: A = args[i].hi    b+4: hi match ? ALLOW : fall
+        //   b+5: A = nr (reload, so the next block compares the syscall again)
+        for (j, a) in arg_allows.iter().enumerate() {
+            let b = arg_base + 6 * j;
+            v.push(jeq(a.nr as u32, 0, jump(b, b + 6)));
+            v.push(ld(arg_lo(a.arg)));
+            v.push(jeq(a.value as u32, 0, jump(b + 2, b + 5)));
+            v.push(ld(arg_hi(a.arg)));
+            v.push(jeq((a.value >> 32) as u32, jump(b + 4, allow_i), 0));
+            v.push(ld(OFF_NR));
         }
         // DENY (fall-through) / ALLOW / NOTIFY / KILL.
-        v.push(BpfInsn {
-            code: BPF_RET_K,
-            jt: 0,
-            jf: 0,
-            k: RET_ERRNO_EPERM,
-        });
-        v.push(BpfInsn {
-            code: BPF_RET_K,
-            jt: 0,
-            jf: 0,
-            k: RET_ALLOW,
-        });
-        v.push(BpfInsn {
-            code: BPF_RET_K,
-            jt: 0,
-            jf: 0,
-            k: RET_USER_NOTIF,
-        });
-        v.push(BpfInsn {
-            code: BPF_RET_K,
-            jt: 0,
-            jf: 0,
-            k: RET_KILL_PROCESS,
-        });
+        v.push(ret(RET_ERRNO_EPERM));
+        v.push(ret(RET_ALLOW));
+        v.push(ret(RET_USER_NOTIF));
+        v.push(ret(RET_KILL_PROCESS));
+        debug_assert_eq!(v.len(), kill_i + 1);
         v
     }
 }
@@ -1313,8 +1334,8 @@ mod linux {
 
     /// Install the connect-notify seccomp filter and return the notification
     /// LISTENER fd (via `SECCOMP_FILTER_FLAG_NEW_LISTENER`). Allows the sealed
-    /// allow-list PLUS `socket` + the socket-management syscalls, and routes
-    /// `connect` to `USER_NOTIF`; everything else is `EPERM`.
+    /// allow-list PLUS `socket` + the socket-management syscalls + `ioctl(FIONBIO)`,
+    /// and routes `connect` to `USER_NOTIF`; everything else is `EPERM`.
     fn install_connect_notify_seccomp() -> Result<RawFd, ConfineError> {
         #[cfg(target_arch = "x86_64")]
         let arch = provider_door::AUDIT_ARCH_X86_64;
@@ -1363,7 +1384,17 @@ mod linux {
             libc::SYS_epoll_pwait,
             libc::SYS_pselect6,
         ];
-        let insns = provider_door::build_connect_seccomp_bpf(arch, allow, libc::SYS_connect);
+        // `ioctl` is admitted for exactly one request: `FIONBIO` (set/clear
+        // O_NONBLOCK on an fd the body already holds). `std`'s
+        // `TcpStream::connect_timeout` and `set_nonblocking` issue it; every other
+        // ioctl request stays EPERM.
+        let arg_allows = [provider_door::ArgAllow {
+            nr: libc::SYS_ioctl,
+            arg: 1,
+            value: libc::FIONBIO as u64,
+        }];
+        let insns =
+            provider_door::build_connect_seccomp_bpf(arch, allow, libc::SYS_connect, &arg_allows);
         let prog: Vec<libc::sock_filter> = insns
             .iter()
             .map(|i| libc::sock_filter {
@@ -1865,7 +1896,8 @@ mod tests {
     fn connect_seccomp_bpf_has_the_right_shape() {
         let allow: &[i64] = &[0x1122, 0x3344]; // stand-in nrs (socket, read, …).
         let notify_nr: i64 = 0x2a; // stand-in connect nr.
-        let prog = provider_door::build_connect_seccomp_bpf(AUDIT_ARCH_X86_64, allow, notify_nr);
+        let prog =
+            provider_door::build_connect_seccomp_bpf(AUDIT_ARCH_X86_64, allow, notify_nr, &[]);
         // [0] loads arch (offset 4), [1] guards it against the arch token.
         assert_eq!(prog[0].code, 0x20);
         assert_eq!(prog[0].k, 4, "first insn loads seccomp_data.arch");
@@ -1892,6 +1924,115 @@ mod tests {
         assert!(
             prog.iter().any(|i| i.code == 0x06 && i.k == 0x7fc0_0000),
             "USER_NOTIF (connect traps to the supervisor)"
+        );
+    }
+
+    /// Run a connect-notify program over one `seccomp_data` (nr, arch, args) —
+    /// a cBPF interpreter for exactly the opcodes the builder emits — and return
+    /// the seccomp action. Any other opcode is a builder regression.
+    fn run_bpf(prog: &[provider_door::BpfInsn], arch: u32, nr: i64, args: [u64; 6]) -> u32 {
+        let word = |off: u32| -> u32 {
+            match off {
+                0 => nr as u32,
+                4 => arch,
+                o if (16..64).contains(&o) => {
+                    let a = args[((o - 16) / 8) as usize];
+                    if (o - 16) % 8 == 0 {
+                        a as u32
+                    } else {
+                        (a >> 32) as u32
+                    }
+                }
+                o => panic!("load from unexpected seccomp_data offset {o}"),
+            }
+        };
+        let (mut pc, mut acc) = (0usize, 0u32);
+        loop {
+            let i = prog[pc];
+            match i.code {
+                0x20 => {
+                    acc = word(i.k);
+                    pc += 1;
+                }
+                0x15 => pc += 1 + if acc == i.k { i.jt } else { i.jf } as usize,
+                0x06 => return i.k,
+                c => panic!("unexpected cBPF opcode {c:#x}"),
+            }
+        }
+    }
+
+    // The egress door admits `ioctl` for exactly ONE request, FIONBIO, compared
+    // over the full 64-bit argument; every other request, and every other
+    // syscall outside the lists, is EPERM.
+    #[test]
+    fn connect_seccomp_bpf_admits_ioctl_only_for_the_named_request() {
+        const EPERM: u32 = 0x0005_0001;
+        const ALLOW: u32 = 0x7fff_0000;
+        const NOTIF: u32 = 0x7fc0_0000;
+        const KILL: u32 = 0x8000_0000;
+        let (read_nr, ioctl_nr, connect_nr, other_nr) = (0x11_i64, 0x10_i64, 0x2a_i64, 0x99_i64);
+        let fionbio: u64 = 0x5421;
+        let prog = provider_door::build_connect_seccomp_bpf(
+            AUDIT_ARCH_X86_64,
+            &[read_nr],
+            connect_nr,
+            &[provider_door::ArgAllow {
+                nr: ioctl_nr,
+                arg: 1,
+                value: fionbio,
+            }],
+        );
+        let run = |nr, a1| run_bpf(&prog, AUDIT_ARCH_X86_64, nr, [3, a1, 0, 0, 0, 0]);
+        assert_eq!(run(ioctl_nr, fionbio), ALLOW, "ioctl(FIONBIO) admitted");
+        assert_eq!(run(ioctl_nr, 0x5451), EPERM, "ioctl(FIOCLEX) denied");
+        assert_eq!(run(ioctl_nr, 0x5413), EPERM, "ioctl(TIOCGWINSZ) denied");
+        assert_eq!(
+            run(ioctl_nr, fionbio | (1 << 32)),
+            EPERM,
+            "high word is compared too"
+        );
+        assert_eq!(
+            run_bpf(&prog, AUDIT_ARCH_X86_64, ioctl_nr, [3, 0, fionbio, 0, 0, 0]),
+            EPERM,
+            "the value must sit in the named argument"
+        );
+        assert_eq!(run(read_nr, 0), ALLOW, "plain allow-list unchanged");
+        assert_eq!(
+            run(connect_nr, 0),
+            NOTIF,
+            "connect still traps to the supervisor"
+        );
+        assert_eq!(
+            run(other_nr, fionbio),
+            EPERM,
+            "the arg alone admits nothing"
+        );
+        assert_eq!(
+            run_bpf(
+                &prog,
+                provider_door::AUDIT_ARCH_AARCH64,
+                ioctl_nr,
+                [3, fionbio, 0, 0, 0, 0]
+            ),
+            KILL,
+            "foreign arch killed"
+        );
+        // Without the arg-allow, ioctl(FIONBIO) is denied: the widening is exactly
+        // the one entry.
+        let sealed = provider_door::build_connect_seccomp_bpf(
+            AUDIT_ARCH_X86_64,
+            &[read_nr],
+            connect_nr,
+            &[],
+        );
+        assert_eq!(
+            run_bpf(
+                &sealed,
+                AUDIT_ARCH_X86_64,
+                ioctl_nr,
+                [3, fionbio, 0, 0, 0, 0]
+            ),
+            EPERM
         );
     }
 }
