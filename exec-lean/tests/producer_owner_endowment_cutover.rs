@@ -132,7 +132,7 @@ fn owner_endowment_is_verified_and_commits() {
          models it; if this is false a fence was re-introduced somewhere"
     );
 
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let (result, outcome) = produce_via_lean(&executor, &turn, &mut ledger);
 
     // BY VARIANT — never `is_ok()`. A `Fallback` (of any reason) must not satisfy this.
@@ -210,7 +210,7 @@ fn cross_cell_grant_without_a_held_edge_is_still_the_verified_kernels_refusal() 
          refuse an edgeless cross-cell grant"
     );
 
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let pre_root = ledger.root();
     let (result, outcome) = produce_via_lean(&executor, &turn, &mut ledger);
 
@@ -333,7 +333,7 @@ fn endowment_is_no_longer_fenced_out_of_the_covered_set() {
     let (ledger, _door_id, _player_id, turn) = owner_endowment_fixture();
 
     // Rust's verdict on the SAME turn, from the same pre-state.
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut rust_ledger = ledger.clone();
     assert!(
         executor.execute(&turn, &mut rust_ledger).is_committed(),

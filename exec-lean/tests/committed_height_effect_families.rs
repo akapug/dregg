@@ -36,7 +36,9 @@ use dregg_turn::{
     turn::Turn,
 };
 
-const HEIGHTS: &[u64] = &[0, 1, 7, 1_048_576];
+// No 0: `valid_until` is a block height and height 0 is "no height", so both executors refuse
+// every deadline-bearing turn there (pinned by `deadline_window_parity`).
+const HEIGHTS: &[u64] = &[1, 7, 1_048_576];
 
 fn open_permissions() -> Permissions {
     Permissions {
@@ -94,9 +96,10 @@ fn single_effect_turn(agent: CellId, target: CellId, effect: Effect) -> Turn {
         call_forest: forest,
         fee: 0,
         memo: None,
-        // Above the largest test height (1_048_576) so the turn is never expiry-rejected — the
-        // matrix must isolate the committed-height limb, not a `valid_until < block_height` refusal.
-        valid_until: Some(1 << 40),
+        // Inside the admission window at EVERY test height (1, 7, 1_048_576): at least the
+        // largest, and at most the smallest + MAX_TURN_VALIDITY_HORIZON_BLOCKS (1 + 2^20), so the
+        // matrix isolates the committed-height limb, not a deadline refusal.
+        valid_until: Some(1_048_577),
         previous_receipt_hash: None,
         depends_on: vec![],
         conservation_proof: None,
@@ -181,7 +184,7 @@ fn ledgers_agree(rust: &mut Ledger, lean: &mut Ledger, ids: &[CellId]) -> Result
 fn run_family_at(fx: &Fixture, block_height: u64) -> Result<(), String> {
     // RUST reference: the chain height set to `block_height`; the executor stamps
     // `committed_height = self.block_height` onto every forest-touched (journaled) cell.
-    let mut executor = TurnExecutor::new(ComputronCosts::zero());
+    let mut executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     executor.set_block_height(block_height);
     let mut rust_ledger = fx.pre.clone();
     let rust_result = executor.execute(&fx.turn, &mut rust_ledger);
@@ -503,7 +506,7 @@ fn skip_no_lean() -> bool {
     )
 }
 
-/// THE GAP-1 RESIDUAL MATRIX. Every cell-touching effect family × {0, 1, 7, 1_048_576}. A family
+/// THE GAP-1 RESIDUAL MATRIX. Every cell-touching effect family × {1, 7, 1_048_576}. A family
 /// that agrees at height 0 but diverges at height > 0 is a residual committed-height-class bug.
 #[test]
 fn committed_height_agrees_across_effect_families_and_heights() {

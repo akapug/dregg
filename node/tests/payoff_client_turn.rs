@@ -426,14 +426,12 @@ fn fresh_client_attested_turn_finalizes_cross_node_on_verified_n4() {
         v
     };
     turn.memo = Some(format!("att:{}", hex_encode(&attestation_blob)));
-    // Far-future validity so the wire marshal accepts the envelope on every node.
-    turn.valid_until = Some(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0)
-            + 3600,
-    );
+    // A block-height deadline, so the wire marshal accepts the envelope on every node: the
+    // default horizon from height 0, far above a fresh test federation's height.
+    turn.valid_until = Some(dregg_turn::valid_until_at(
+        0,
+        dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+    ));
     let signed = client.sign_turn(&turn);
     let turn_hash_hex = hex_encode(&turn.hash());
     let wire = postcard::to_stdvec(&signed).expect("encode SignedTurn");

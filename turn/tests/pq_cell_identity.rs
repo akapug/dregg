@@ -67,7 +67,10 @@ fn turn(agent: CellId, nonce: u64, action: Action) -> Turn {
         nonce,
         fee: 0,
         memo: Some("canonical-pq-cell-identity".into()),
-        valid_until: Some(i64::MAX / 2),
+        valid_until: Some(dregg_turn::valid_until_at(
+            0,
+            dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+        )),
         call_forest,
         depends_on: Vec::new(),
         previous_receipt_hash: None,
@@ -107,7 +110,7 @@ fn create_rotate_and_hostile_rollback_use_only_the_live_cell_anchor() {
         pq_possession_signature: child_pq.sign(&creation_message).expect("possession proof"),
     };
 
-    let mut executor = TurnExecutor::new(ComputronCosts::zero());
+    let mut executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     executor.set_local_federation_id(FEDERATION);
     executor.set_require_pq(true);
     assert!(executor.enrolled_pq_identity(&sponsor_id).is_none());

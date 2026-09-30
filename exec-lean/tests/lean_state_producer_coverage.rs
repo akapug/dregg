@@ -197,7 +197,7 @@ fn ledgers_agree(rust: &mut Ledger, lean: &mut Ledger, ids: &[CellId]) -> Result
 /// Run both producers; `Ok(())` on full agreement, `Err(why)` on the first divergence (incl. a
 /// commit-bit divergence). Both must commit; an ineligible turn is reported as a GAP.
 fn diff(pre: Ledger, turn: Turn, ids: &[CellId]) -> Result<(), String> {
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut rust_ledger = pre.clone();
     let rust_result = executor.execute(&turn, &mut rust_ledger);
     if !rust_result.is_committed() {
@@ -329,7 +329,7 @@ fn revoke_delegation_round_trips_epoch_closed() {
 
     // Confirm Rust really commits AND bumps A's delegation_epoch (so the close is genuinely about
     // the epoch commitment field).
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut rust_ledger = pre.clone();
     let res = executor.execute(
         &single_effect_turn(a_id, a_id, 0, Effect::RevokeDelegation { child: b_id }),
@@ -420,7 +420,7 @@ fn revoke_of_non_delegated_child_rejected_by_rust_surfaced_not_replayed() {
 
     let turn = single_effect_turn(a_id, a_id, 0, Effect::RevokeDelegation { child: b_id });
 
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut rust_ledger = pre.clone();
     assert!(
         !executor.execute(&turn, &mut rust_ledger).is_committed(),
@@ -448,7 +448,7 @@ fn revoke_of_non_delegated_child_rejected_by_rust_surfaced_not_replayed() {
     // post-state. For this turn the replay mutated nothing, so the authoritative state == pre-state
     // regardless of the commit bit — the committed root must be the pre-state root, and the OUTCOME
     // is `LeanAuthoritative` (never the removed Rust-wins `CoveredDivergence`).
-    let executor2 = TurnExecutor::new(ComputronCosts::zero());
+    let executor2 = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut ledger = pre.clone();
     let (result, outcome) = produce_via_lean(&executor2, &turn, &mut ledger);
     assert_eq!(
@@ -596,7 +596,7 @@ fn unauthorized_cross_cell_set_permissions_rejected_by_both() {
         },
     );
 
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut rust_ledger = pre.clone();
     assert!(
         !executor.execute(&turn, &mut rust_ledger).is_committed(),
@@ -696,7 +696,7 @@ fn unauthorized_cross_cell_set_verification_key_rejected_by_both() {
         },
     );
 
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut rust_ledger = pre.clone();
     assert!(
         !executor.execute(&turn, &mut rust_ledger).is_committed(),
@@ -735,7 +735,7 @@ fn make_sovereign_round_trips_structural_closed() {
     let turn = single_effect_turn(a_id, a_id, 0, Effect::MakeSovereign { cell: a_id });
 
     // Confirm Rust really removed the cell (so the close is structural, not a no-commit).
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut rust_ledger = pre.clone();
     assert!(
         executor.execute(&turn, &mut rust_ledger).is_committed(),
@@ -787,7 +787,7 @@ fn cross_cell_make_sovereign_rejected_by_both() {
     // Action targets A; the rebind aims at B.
     let turn = single_effect_turn(a_id, a_id, 0, Effect::MakeSovereign { cell: b_id });
 
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut rust_ledger = pre.clone();
     assert!(
         !executor.execute(&turn, &mut rust_ledger).is_committed(),
@@ -881,7 +881,7 @@ fn attenuate_capability_round_trips_cap_fidelity_closed() {
     );
 
     // Confirm Rust really narrowed the held cap (so the gap is genuinely about cap fidelity).
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut rust_ledger = pre.clone();
     assert!(
         executor.execute(&turn, &mut rust_ledger).is_committed(),
@@ -1086,7 +1086,7 @@ fn note_create_fallback_receipt_binds_the_actual_post_accumulator_root() {
     use dregg_exec_lean::lean_apply::{ProducerOutcome, produce_via_lean};
 
     let (mut ledger, a_id) = one_open_cell();
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let pre_root = executor.consensus_state_commitment(&ledger, &a_id);
     let turn = single_effect_turn(
         a_id,
@@ -1144,7 +1144,7 @@ fn produce_via_lean_installs_verified_state_on_covered_transfer() {
     pre.insert_cell(b).unwrap();
 
     // Independent Rust-only run to know the expected committed post-state.
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let turn = single_effect_turn(
         a_id,
         a_id,
@@ -1163,7 +1163,7 @@ fn produce_via_lean_installs_verified_state_on_covered_transfer() {
     let expected_root = rust_only.root();
 
     // Producer mode: this is the live commit-path call.
-    let executor2 = TurnExecutor::new(ComputronCosts::zero());
+    let executor2 = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut ledger = pre.clone();
     let (result, outcome) = produce_via_lean(&executor2, &turn, &mut ledger);
     assert!(result.is_committed(), "producer-mode Transfer commits");
@@ -1217,7 +1217,7 @@ fn produce_via_lean_installs_verified_state_on_covered_refusal() {
     let turn = single_refusal_turn(a_id, a_id, 0, [3u8; 32], RefusalReason::Declined);
 
     // Expected Rust post-state (the reference the verified producer must reproduce).
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut rust_only = pre.clone();
     assert!(
         executor.execute(&turn, &mut rust_only).is_committed(),
@@ -1225,7 +1225,7 @@ fn produce_via_lean_installs_verified_state_on_covered_refusal() {
     );
     let expected_root = rust_only.root();
 
-    let executor2 = TurnExecutor::new(ComputronCosts::zero());
+    let executor2 = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut ledger = pre.clone();
     let (result, outcome) = produce_via_lean(&executor2, &turn, &mut ledger);
     assert!(
@@ -1313,7 +1313,7 @@ fn covered_disagreement_resolves_to_lean_not_rust() {
     );
 
     // Confirm the two producers genuinely DISAGREE on the commit bit (Rust rejects, Lean commits).
-    let ref_executor = TurnExecutor::new(ComputronCosts::zero());
+    let ref_executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut rust_only = pre.clone();
     let rust_committed = ref_executor.execute(&turn, &mut rust_only).is_committed();
     assert!(
@@ -1333,7 +1333,7 @@ fn covered_disagreement_resolves_to_lean_not_rust() {
     let lean_image_root = lean_only.root();
 
     // THE INVERSION: drive the live commit-path helper; the verified verdict must WIN.
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
 
     // THE ANCHOR the receipt must carry: `dregg_turn::state_commit::consensus_state_commitment` of
     // the VERIFIED post-state under this executor — computed EXACTLY as `produce_via_lean` does

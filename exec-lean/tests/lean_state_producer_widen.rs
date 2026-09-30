@@ -167,7 +167,7 @@ fn ledgers_agree(rust: &mut Ledger, lean: &mut Ledger, ids: &[CellId]) -> Result
 /// Both producers MUST commit (a commit-bit divergence is itself a divergence). Used by both the
 /// round-trip families (which expect Ok) and the swap-gap families (which expect a SPECIFIC Err).
 fn diff(pre: Ledger, turn: Turn, ids: &[CellId]) -> Result<(), String> {
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut rust_ledger = pre.clone();
     let rust_result = executor.execute(&turn, &mut rust_ledger);
     if !rust_result.is_committed() {
@@ -382,7 +382,7 @@ fn cell_seal_round_trips_lifecycle_closed() {
     );
 
     // Confirm Rust really sealed with the full payload (so the close is about the payload bytes).
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut rust_ledger = pre.clone();
     assert!(
         executor.execute(&turn, &mut rust_ledger).is_committed(),
@@ -430,7 +430,7 @@ fn unauthorized_cross_cell_seal_rejected_by_both() {
         },
     );
 
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut rust_ledger = pre.clone();
     assert!(
         !executor.execute(&turn, &mut rust_ledger).is_committed(),
@@ -496,7 +496,7 @@ fn cell_destroy_round_trips_lifecycle_closed() {
         },
     );
 
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut rust_ledger = pre.clone();
     assert!(
         executor.execute(&turn, &mut rust_ledger).is_committed(),
@@ -552,7 +552,7 @@ fn unauthorized_cross_cell_destroy_rejected_by_both() {
         },
     );
 
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut rust_ledger = pre.clone();
     assert!(
         !executor.execute(&turn, &mut rust_ledger).is_committed(),
@@ -603,7 +603,7 @@ fn cell_unseal_round_trips() {
     pre.insert_cell(a).unwrap();
 
     // Confirm Rust unseals to Live (so the close is about a real Sealed→Live transition).
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut rust_ledger = pre.clone();
     assert!(
         executor
@@ -670,7 +670,7 @@ fn grant_capability_round_trips_cap_fidelity_closed() {
 
     // Confirm Rust granted the FULL (non-None, breadstuff'd) cap to B (so the round-trip is
     // genuinely about cap fidelity, not a vacuous None-vs-None coincidence).
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut rust_ledger = pre.clone();
     assert!(executor.execute(&turn, &mut rust_ledger).is_committed());
     let b_caps = &rust_ledger.get(&b_id).unwrap().capabilities;
@@ -730,7 +730,7 @@ fn grant_capability_amplification_does_not_install_divergent_state() {
     );
 
     // Rust rejects (A holds no cap to C). The Lean producer reconstitutes the unchanged pre-state.
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut rust_ledger = pre.clone();
     let committed = executor.execute(&turn, &mut rust_ledger).is_committed();
     assert!(
@@ -782,7 +782,7 @@ fn attenuate_capability_round_trips_cap_fidelity_closed() {
     );
 
     // Confirm Rust narrowed slot 0 (non-vacuous: the leaf actually moved).
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut rust_ledger = pre.clone();
     assert!(executor.execute(&turn, &mut rust_ledger).is_committed());
     let a_cap = rust_ledger
@@ -837,7 +837,7 @@ fn introduce_round_trips_cap_fidelity_closed() {
     );
 
     // Rust commits and installs a cap over T into R's c-list with a host-derived expiry.
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut rust_ledger = pre.clone();
     if executor.execute(&turn, &mut rust_ledger).is_committed() {
         let r_caps = &rust_ledger.get(&r_id).unwrap().capabilities;

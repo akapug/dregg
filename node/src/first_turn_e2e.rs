@@ -135,13 +135,12 @@ async fn client_transfer_turn(
     );
     let mut turn = client.make_turn(action);
     turn.fee = fee;
-    turn.valid_until = Some(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0)
-            + 3_600,
-    );
+    // A block-height deadline: the default horizon from height 0, far above a test node's
+    // height.
+    turn.valid_until = Some(dregg_turn::valid_until_at(
+        0,
+        dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+    ));
     client.sign_turn(&turn)
 }
 
@@ -577,13 +576,12 @@ async fn client_emit_turn(state: &NodeState, client: &AgentCipherclerk) -> dregg
     let action = client.make_action(actor, "helm.chat", vec![emit], &federation_id);
     let mut turn = client.make_turn(action);
     turn.fee = 0;
-    turn.valid_until = Some(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0)
-            + 3_600,
-    );
+    // A block-height deadline: the default horizon from height 0, far above a test node's
+    // height.
+    turn.valid_until = Some(dregg_turn::valid_until_at(
+        0,
+        dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+    ));
     client.sign_turn(&turn)
 }
 

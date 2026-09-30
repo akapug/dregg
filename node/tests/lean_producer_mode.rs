@@ -154,7 +154,7 @@ fn run_producer_mode(pre: Ledger, turn: Turn, expected_committed: bool, ids: &[C
     // Independent Rust producer (the reference). Run it on its OWN executor + copy of the pre-state
     // — a SEPARATE executor so its committed receipt does not pollute the producer-mode executor's
     // receipt-chain head (which would make the verified ChainHead leg reject the producer turn).
-    let ref_executor = TurnExecutor::new(ComputronCosts::zero());
+    let ref_executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut rust_ledger = pre.clone();
     let rust_result = ref_executor.execute(&turn, &mut rust_ledger);
     assert_eq!(
@@ -165,7 +165,7 @@ fn run_producer_mode(pre: Ledger, turn: Turn, expected_committed: bool, ids: &[C
 
     // PRODUCER MODE: `produce_via_lean` installs the VERIFIED Lean post-state into `ledger`. Use a
     // FRESH executor (matching the node, which builds one per finalized turn).
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut ledger = pre.clone();
     let (_rust_result_inner, outcome) = lean_apply::produce_via_lean(&executor, &turn, &mut ledger);
 

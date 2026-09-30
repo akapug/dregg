@@ -53,7 +53,8 @@ fn covered_commit_records_exact_receipt_head_and_budget_slice() {
     let executor = TurnExecutor::with_budget_gate(
         ComputronCosts::zero(),
         BudgetGate::new(17, BudgetSlice::new(100)),
-    );
+    )
+    .at_block_height(1);
     let action = ActionBuilder::new_unchecked_for_tests(agent_id, "transfer", agent_id)
         .effect_transfer(agent_id, recipient_id, 10)
         .build();

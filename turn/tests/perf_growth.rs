@@ -163,7 +163,7 @@ fn per_turn_submit_is_flat_in_ledger_size() {
         let mut builder = TurnBuilder::new(ids[0], 0);
         builder.add_action(action);
         let turn = builder.fee(0).valid_until(1000).build();
-        let executor = TurnExecutor::new(ComputronCosts::zero());
+        let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
 
         // The executor `execute` is ~1.5 µs — too fine to time singly on a loaded box
         // (µs-scale swings 3× on cache/scheduler noise). AMPLIFY: pre-clone a BATCH of

@@ -13992,7 +13992,10 @@ mod tests {
             nonce: 0,
             fee: 0,
             memo: Some("invalid exact proof must ACK".into()),
-            valid_until: Some(i64::MAX / 2),
+            valid_until: Some(dregg_turn::valid_until_at(
+                0,
+                dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+            )),
             call_forest: forest,
             depends_on: Vec::new(),
             previous_receipt_hash: None,
@@ -14314,7 +14317,8 @@ mod tests {
         // A `fee: 0` made every amount>0 Transfer reject as BudgetExceeded
         // (limit=0, used=100). The estimator and the applying executor both use
         // `ComputronCosts::default()`, so estimate == charged cost.
-        let est = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+        let est =
+            dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default()).at_block_height(1);
         turn.fee = est.estimate_cost(&turn);
         cclerk.sign_turn(&turn)
     }
@@ -14362,7 +14366,8 @@ mod tests {
             cross_effect_dependencies: vec![],
             effect_witness_index_map: vec![],
         };
-        let estimator = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+        let estimator =
+            dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default()).at_block_height(1);
         turn.fee = estimator.estimate_cost(&turn);
         cclerk.sign_turn(&turn)
     }
@@ -14653,7 +14658,8 @@ mod tests {
         );
         // Deterministic cross-node provisioning (the function under test).
         provision_transfer_destinations(ledger, &signed.turn.call_forest);
-        let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+        let executor =
+            dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default()).at_block_height(1);
         match executor.execute(&signed.turn, ledger) {
             dregg_turn::TurnResult::Committed { .. } => {}
             other => panic!("finalized turn must commit on every node, got: {other:?}"),
@@ -14747,7 +14753,8 @@ mod tests {
         // every node (the nonce already advanced), so a duplicate finalized
         // delivery cannot move value twice or diverge the ledger.
         for ledger in &mut ledgers {
-            let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+            let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default())
+                .at_block_height(1);
             // The destination already exists now; provisioning is a no-op.
             provision_transfer_destinations(ledger, &signed.turn.call_forest);
             match executor.execute(&signed.turn, ledger) {
@@ -14950,7 +14957,10 @@ mod tests {
                 nonce: 0,
                 fee: 0,
                 memo: None,
-                valid_until: Some(i64::MAX / 2),
+                valid_until: Some(dregg_turn::valid_until_at(
+                    0,
+                    dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+                )),
                 call_forest,
                 depends_on: vec![],
                 previous_receipt_hash: None,
@@ -14965,6 +14975,7 @@ mod tests {
                 effect_witness_index_map: vec![],
             };
             turn.fee = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default())
+                .at_block_height(1)
                 .estimate_cost(&turn);
             agent_cclerk.sign_turn(&turn)
         };
@@ -15219,7 +15230,10 @@ mod tests {
                 nonce: before_nonce,
                 fee: 0,
                 memo: Some("byzantine proposer victim-fee attempt".to_string()),
-                valid_until: Some(i64::MAX / 2),
+                valid_until: Some(dregg_turn::valid_until_at(
+                    0,
+                    dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+                )),
                 call_forest: forest,
                 depends_on: vec![],
                 previous_receipt_hash: None,
@@ -15308,7 +15322,10 @@ mod tests {
                 nonce: before_nonce,
                 fee: 60_000,
                 memo: None,
-                valid_until: Some(i64::MAX / 2),
+                valid_until: Some(dregg_turn::valid_until_at(
+                    0,
+                    dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+                )),
                 call_forest: dregg_turn::CallForest::new(),
                 depends_on: vec![],
                 previous_receipt_hash: None,
@@ -15501,7 +15518,10 @@ mod tests {
                 nonce,
                 fee: 0,
                 memo: None,
-                valid_until: Some(i64::MAX / 2),
+                valid_until: Some(dregg_turn::valid_until_at(
+                    0,
+                    dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+                )),
                 call_forest,
                 depends_on: vec![],
                 previous_receipt_hash,
@@ -15515,7 +15535,8 @@ mod tests {
                 cross_effect_dependencies: vec![],
                 effect_witness_index_map: vec![],
             };
-            let estimator = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+            let estimator = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default())
+                .at_block_height(1);
             turn.fee = estimator.estimate_cost(&turn);
             clerk.sign_turn(&turn)
         }
@@ -16826,7 +16847,8 @@ mod tests {
         let pre_ledger = authoritative.clone();
         let mut exec_ledger = authoritative.clone();
         provision_transfer_destinations(&mut exec_ledger, &signed.turn.call_forest);
-        let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+        let executor =
+            dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default()).at_block_height(1);
         match crate::executor_setup::execute_via_producer(
             &executor,
             &signed.turn,

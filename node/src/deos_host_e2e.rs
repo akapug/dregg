@@ -260,7 +260,10 @@ async fn headless_node_hosts_deos_server_client_discovers_and_fires() {
             nonce,
             fee: 0,
             memo: Some("player_knock".to_string()),
-            valid_until: Some(i64::MAX / 2),
+            valid_until: Some(dregg_turn::valid_until_at(
+                0,
+                dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+            )),
             call_forest,
             depends_on: vec![],
             previous_receipt_hash: prev,

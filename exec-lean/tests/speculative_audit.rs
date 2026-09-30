@@ -190,7 +190,7 @@ fn speculative_audit_confirms_agreement_and_measures() {
     // The divergence sink — a latch that MUST stay empty on the clean run.
     let divergences: Arc<Mutex<Vec<DivergenceReport>>> = Arc::new(Mutex::new(Vec::new()));
     let sink_div = Arc::clone(&divergences);
-    let audit = SpeculativeAudit::new(TurnExecutor::new(ComputronCosts::zero()))
+    let audit = SpeculativeAudit::new(TurnExecutor::new(ComputronCosts::zero()).at_block_height(1))
         .with_divergence_sink(Arc::new(move |r: &DivergenceReport| {
             sink_div.lock().unwrap().push(r.clone());
         }));
@@ -200,7 +200,7 @@ fn speculative_audit_confirms_agreement_and_measures() {
     // pays. Run on a throwaway ledger clone so the measured `audit` run below starts clean.
     {
         let mut bare = ledger.clone();
-        let bare_exec = TurnExecutor::new(ComputronCosts::zero());
+        let bare_exec = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
         let t = Instant::now();
         for turn in &turns {
             let _ = bare_exec.execute(turn, &mut bare);
@@ -309,11 +309,12 @@ fn speculative_audit_catches_injected_fault() {
     let caught_sink = Arc::clone(&caught);
     let last_report: Arc<Mutex<Option<DivergenceReport>>> = Arc::new(Mutex::new(None));
     let last_sink = Arc::clone(&last_report);
-    let mut audit = SpeculativeAudit::new(TurnExecutor::new(ComputronCosts::zero()))
-        .with_divergence_sink(Arc::new(move |r: &DivergenceReport| {
-            caught_sink.fetch_add(1, Ordering::Relaxed);
-            *last_sink.lock().unwrap() = Some(r.clone());
-        }));
+    let mut audit =
+        SpeculativeAudit::new(TurnExecutor::new(ComputronCosts::zero()).at_block_height(1))
+            .with_divergence_sink(Arc::new(move |r: &DivergenceReport| {
+                caught_sink.fetch_add(1, Ordering::Relaxed);
+                *last_sink.lock().unwrap() = Some(r.clone());
+            }));
 
     // Turn 0: a HONEST transfer (the audit should agree).
     let t0 = single_effect_turn(
@@ -431,10 +432,11 @@ fn speculative_audit_background_worker_drains() {
 
     let divergences: Arc<Mutex<Vec<DivergenceReport>>> = Arc::new(Mutex::new(Vec::new()));
     let sink_div = Arc::clone(&divergences);
-    let mut audit = SpeculativeAudit::new(TurnExecutor::new(ComputronCosts::zero()))
-        .with_divergence_sink(Arc::new(move |r: &DivergenceReport| {
-            sink_div.lock().unwrap().push(r.clone());
-        }));
+    let mut audit =
+        SpeculativeAudit::new(TurnExecutor::new(ComputronCosts::zero()).at_block_height(1))
+            .with_divergence_sink(Arc::new(move |r: &DivergenceReport| {
+                sink_div.lock().unwrap().push(r.clone());
+            }));
 
     // Spawn the eager background audit worker BEFORE the live stream — it drains concurrently.
     let worker = audit.spawn_worker();

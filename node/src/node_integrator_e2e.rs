@@ -108,7 +108,10 @@ fn build_signed_transfer(
         // coordinate carried by the consensus block. Keep this fixture live at
         // every deployment anchor instead of relying on the old implicit `0`
         // executor timestamp.
-        valid_until: Some(i64::MAX / 2),
+        valid_until: Some(dregg_turn::valid_until_at(
+            0,
+            dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+        )),
         call_forest,
         depends_on: vec![],
         previous_receipt_hash: state

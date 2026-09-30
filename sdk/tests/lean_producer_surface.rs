@@ -122,7 +122,7 @@ fn producer_actually_runs_not_fallback() {
         },
     );
 
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let (_rust_result, outcome) = lean_apply::produce_via_lean(&executor, &turn, &mut ledger);
 
     match outcome {

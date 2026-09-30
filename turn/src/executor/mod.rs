@@ -2328,6 +2328,13 @@ impl TurnExecutor {
         self.block_height = height;
     }
 
+    /// Builder form of [`Self::set_block_height`], for constructing an executor in one
+    /// expression (`TurnExecutor::new(costs).at_block_height(h)`).
+    pub fn at_block_height(mut self, height: u64) -> Self {
+        self.block_height = height;
+        self
+    }
+
     /// Set the block proposer cell (receives 50% of fees).
     ///
     /// When set, 50% of each turn's fee is credited to this cell's balance

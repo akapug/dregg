@@ -573,7 +573,10 @@ mod tests {
                 .nonce(),
             fee: 0,
             memo: None,
-            valid_until: Some(i64::MAX / 2),
+            valid_until: Some(dregg_turn::valid_until_at(
+                0,
+                dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+            )),
             call_forest,
             depends_on: vec![],
             previous_receipt_hash: s.cclerk.agent_receipt_head_hash(&operator),
@@ -637,7 +640,10 @@ mod tests {
                 .nonce(),
             fee: 0,
             memo: None,
-            valid_until: Some(i64::MAX / 2),
+            valid_until: Some(dregg_turn::valid_until_at(
+                0,
+                dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+            )),
             call_forest,
             depends_on: vec![],
             previous_receipt_hash: s.cclerk.agent_receipt_head_hash(&operator),
@@ -1067,10 +1073,6 @@ mod tests {
             );
             let mut call_forest = dregg_turn::CallForest::new();
             call_forest.add_root(action);
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
             let mut turn = dregg_turn::Turn {
                 agent: operator,
                 nonce: s
@@ -1080,7 +1082,10 @@ mod tests {
                     .unwrap_or(0),
                 fee: 0,
                 memo: None,
-                valid_until: Some(now + 3600),
+                valid_until: Some(dregg_turn::valid_until_at(
+                    0,
+                    dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+                )),
                 call_forest,
                 depends_on: vec![],
                 previous_receipt_hash: None,

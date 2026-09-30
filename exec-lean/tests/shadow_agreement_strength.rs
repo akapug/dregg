@@ -113,7 +113,7 @@ fn skip_no_lean() -> bool {
 /// Run the Rust executor to get the honest post-state, then ask for the shadow agreement over
 /// (pre, post) — the same shape `TurnExecutor::execute` hands the observer.
 fn agreement_for(pre: &Ledger, turn: &Turn) -> (bool, ShadowAgreement) {
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     // ⚠ The host ctx must be the EXECUTOR'S OWN — the same one `produce_via_lean` builds and the
     // same one the production observer is handed. It carries the block height the reconstitution
     // stamps into every forest-touched cell (`apply_committed_height`), so a host that disagrees

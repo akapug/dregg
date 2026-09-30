@@ -97,7 +97,7 @@ fn microbench_where_the_cost_lives() {
         .map(|&s| transfer_turn(s, recip_id))
         .collect();
 
-    let exec = TurnExecutor::new(ComputronCosts::zero());
+    let exec = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
 
     // (1) full execute stream (matches the demo's bare baseline).
     let mut l1 = ledger.clone();
@@ -250,7 +250,7 @@ fn microbench_turn_proper_phase_profile() {
         .iter()
         .map(|&s| transfer_turn(s, recip_id))
         .collect();
-    let exec = TurnExecutor::new(ComputronCosts::zero());
+    let exec = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
 
     // SAFETY: single-threaded test; set the gate around this window only. The cached `enabled()`
     // latch reads the env on its FIRST call, which is the first `execute` below — so set it first.

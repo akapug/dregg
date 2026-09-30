@@ -40,6 +40,7 @@ use dregg_turn::{
 /// `node::executor_setup::new_submit_executor` does.
 fn node_shaped_executor() -> TurnExecutor {
     TurnExecutor::new(ComputronCosts::zero())
+        .at_block_height(1)
         .with_shadow_observer(dregg_exec_lean::LeanShadowObserver::arc())
 }
 
@@ -202,7 +203,7 @@ fn verified_rejection_overrides_the_rust_commit_and_surfaces_the_bug() {
     // not agreeing with a rejection Rust would have made anyway.
     {
         let (mut ledger, agent) = one_cell_ledger(100);
-        let rust_only = TurnExecutor::new(ComputronCosts::zero());
+        let rust_only = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
         let r = rust_only.execute(&burn_10(agent, None), &mut ledger);
         assert!(
             r.is_committed(),

@@ -151,7 +151,7 @@ fn hole_agent_targets_unreachable_cell_is_fenced() {
     // Rust reference alone: this is a genuine rejection (CapabilityNotHeld). Note `execute` mutates
     // its ledger in place even on the reject path (the producer snapshots pre-state precisely for
     // this reason), so we assert only the VERDICT here, not the reference ledger's root.
-    let ref_exec = TurnExecutor::new(ComputronCosts::zero());
+    let ref_exec = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut rust_only = pre.clone();
     assert!(
         !ref_exec.execute(&turn, &mut rust_only).is_committed(),
@@ -160,7 +160,7 @@ fn hole_agent_targets_unreachable_cell_is_fenced() {
     let pre_root = pre.root();
 
     // The LIVE producer path: must NOT commit — fenced to Rust, matching the rejection.
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut ledger = pre.clone();
     let (result, outcome) = produce_via_lean(&executor, &turn, &mut ledger);
 
@@ -208,7 +208,7 @@ fn legit_self_write_still_commits() {
         "a self-write (agent == target) must remain root-agreeing (no over-rejection)"
     );
 
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut ledger = pre.clone();
     let (result, outcome) = produce_via_lean(&executor, &turn, &mut ledger);
 
@@ -257,7 +257,7 @@ fn legit_cross_cell_with_cap_edge_still_commits() {
     let turn = set_field_turn(w_id, r_id, r_id);
 
     // Rust accepts this — the agent HOLDS the edge.
-    let ref_exec = TurnExecutor::new(ComputronCosts::zero());
+    let ref_exec = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut rust_only = pre.clone();
     assert!(
         ref_exec.execute(&turn, &mut rust_only).is_committed(),
@@ -265,7 +265,7 @@ fn legit_cross_cell_with_cap_edge_still_commits() {
     );
 
     // The producer fences it to Rust (agent≠target non-bearer) — but it STILL commits.
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut ledger = pre.clone();
     let (result, outcome) = produce_via_lean(&executor, &turn, &mut ledger);
 

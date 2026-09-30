@@ -73,6 +73,7 @@ use dregg_turn::{
 /// The executor a native node builds (`node::executor_setup::new_submit_executor`).
 fn node_shaped_executor() -> TurnExecutor {
     TurnExecutor::new(ComputronCosts::zero())
+        .at_block_height(1)
         .with_shadow_observer(dregg_exec_lean::LeanShadowObserver::arc())
 }
 
@@ -203,7 +204,7 @@ fn the_exhibit_is_a_fold_sibling_built_in_one_operation() {
 #[test]
 fn the_rust_reference_alone_refuses_the_fold_sibling() {
     let (mut ledger, agent) = one_cell_ledger(100);
-    let rust_only = TurnExecutor::new(ComputronCosts::zero());
+    let rust_only = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     rust_only.set_last_receipt_hash(agent, TRUE_HEAD);
 
     let sibling = fold_sibling(TRUE_HEAD);
@@ -224,7 +225,7 @@ fn the_rust_reference_alone_refuses_the_fold_sibling() {
 
     // …and it COMMITS the honest head, so the refusal above is about the head and nothing else.
     let (mut ledger2, agent2) = one_cell_ledger(100);
-    let rust_only2 = TurnExecutor::new(ComputronCosts::zero());
+    let rust_only2 = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     rust_only2.set_last_receipt_hash(agent2, TRUE_HEAD);
     let ok = rust_only2.execute(&set_field(agent2, 0, Some(TRUE_HEAD)), &mut ledger2);
     assert!(

@@ -153,7 +153,7 @@ fn ledgers_agree(rust: &mut Ledger, lean: &mut Ledger, ids: &[CellId]) -> Result
 /// executor (reconstituting its produced post-state), and assert both ledgers agree.
 fn run_differential(pre: Ledger, turn: Turn, ids: &[CellId]) {
     // (1) Legacy Rust producer.
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut rust_ledger = pre.clone();
     let rust_result = executor.execute(&turn, &mut rust_ledger);
     assert!(

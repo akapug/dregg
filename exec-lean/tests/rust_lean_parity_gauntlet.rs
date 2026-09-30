@@ -170,8 +170,8 @@ fn turn_with_auth(
         call_forest: forest,
         fee: 0,
         memo: None,
-        // The wire marshaller REQUIRES valid_until; the diagnostic host clock is 0, so any future
-        // expiry admits.
+        // The wire marshaller REQUIRES valid_until; it is a block height, and the diagnostic host
+        // and the executor run at height 1, so 1_000 is inside the admission window.
         valid_until: Some(1_000),
         previous_receipt_hash: None,
         depends_on: vec![],
@@ -313,7 +313,7 @@ struct Case {
 /// Run both executors over a case; return `(verdict, detail)`.
 fn run_case(case: &Case) -> (Verdict, String) {
     // (1) Rust executor (apply.rs). Fresh executor so each turn is first in its receipt chain.
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut rust_ledger = case.ledger.clone();
     let rust_committed = executor
         .execute(&case.turn, &mut rust_ledger)

@@ -72,7 +72,7 @@ fn skip_no_lean() -> bool {
 ///   * agent `0` is present and Live            → `NoSuchAgent` / `DeadAgent` pass;
 ///   * turn nonce `7` == cell 0's `nonce` field  → `NonceMismatch` passes;
 ///   * fee `5` ≤ cell 0's `balance` 100          → `NegativeFee` / `Underfunded` pass;
-///   * `valid_until` 1000 ≥ host `now` 0         → `Expired` passes;
+///   * `valid_until` 1000 inside [1, 1 + 2^20] (host `now` 1) → the expiry leg passes;
 ///   * host `frozen` is empty                    → `AgentFrozen` / `WriteSetFrozen` pass;
 ///   * `prev = 0` == host `stored_head = 0`      → `ChainHeadMismatch` passes (`prevReceiptOf 0 = none`,
 ///                                                 `Dregg2/Exec/AdmissionWire.lean:98`);

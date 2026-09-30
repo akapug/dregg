@@ -564,12 +564,11 @@ fn rust_lean_divergence_finder() {
     // the finder wrote its markdown ledger and asserted nothing. The real condition is whether the
     // verified executor is LINKED, which is what the flag's own label always claimed to report.
     let lean_linked = dregg_lean_ffi::lean_available();
-    // block_height 0 ⇒ the marshaller omits the optional `block_height` wire field (the
-    // executor falls back to `now`/`valid_until` for expiry). We run at 0 so the corpus is
-    // marshalled with the SAME envelope shape the byte-exact `marshal_roundtrip` gate proves
-    // correct; the block_height>0 wire path is exercised separately by the FFI's own
-    // `full_turn_differential` over execFullTurn.
-    let block_height = 0u64;
+    // Height 1, the height each fresh executor below runs at. It used to be 0, which made the
+    // marshaller omit the optional `block_height` wire field; since `valid_until` became a
+    // block height, 0 means "no height" and both executors refuse every corpus turn (each
+    // carries a deadline), which would turn this finder into a census of agreeing refusals.
+    let block_height = 1u64;
 
     let mut per_effect: BTreeMap<String, EffectStat> = BTreeMap::new();
     let mut rows: Vec<String> = Vec::new();
@@ -592,7 +591,7 @@ fn rust_lean_divergence_finder() {
         // `previous_receipt_hash: None` would be rejected with `ReceiptChainMismatch` — a
         // harness artefact, NOT a kernel divergence, since the Lean shadow does not model the
         // receipt chain. The fresh executor isolates the per-effect state transition under test.)
-        let executor = TurnExecutor::new(ComputronCosts::zero());
+        let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
         let result = executor.execute(&case.turn, &mut case.ledger);
         let rust_committed = result.is_committed();
         let rust_reason = match &result {

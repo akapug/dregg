@@ -924,7 +924,10 @@ mod tests {
             nonce: 0,
             fee: 0,
             memo: None,
-            valid_until: Some(i64::MAX / 2),
+            valid_until: Some(dregg_turn::valid_until_at(
+                0,
+                dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+            )),
             call_forest: CallForest::new(),
             depends_on: vec![],
             previous_receipt_hash: None,
@@ -956,14 +959,14 @@ mod tests {
     }
 
     fn required_executor() -> TurnExecutor {
-        let executor = TurnExecutor::new(ComputronCosts::default());
+        let executor = TurnExecutor::new(ComputronCosts::default()).at_block_height(1);
         executor.set_require_pq(true);
         executor
     }
 
     /// The explicitly unaudited classical posture: no PQ half required.
     fn classical_executor() -> TurnExecutor {
-        let executor = TurnExecutor::new(ComputronCosts::default());
+        let executor = TurnExecutor::new(ComputronCosts::default()).at_block_height(1);
         executor.set_require_pq(false);
         executor
     }
@@ -1029,7 +1032,7 @@ mod tests {
         // its own keys; only the signer→agent authority relation is false.
         let attacker = AgentCipherclerk::from_key_bytes(zeroize::Zeroizing::new([9; 32]));
         signed = attacker.sign_turn(&signed.turn);
-        let executor = TurnExecutor::new(ComputronCosts::default());
+        let executor = TurnExecutor::new(ComputronCosts::default()).at_block_height(1);
         executor.set_require_pq(true);
         let err = validate_signed_turn(&signed, &executor, Some(&victim)).unwrap_err();
         assert_eq!(err, SignedTurnValidationError::AgentSignerMismatch);
@@ -1258,15 +1261,23 @@ mod tests {
         );
 
         let mut ledger = dregg_cell::Ledger::new();
-        ledger.insert_cell(key_bound).expect("insert the key-bound cell");
+        ledger
+            .insert_cell(key_bound)
+            .expect("insert the key-bound cell");
         assert_eq!(
             claim_signer_actor_cell(&mut ledger, &signed, &executor),
             ActorCellClaim::PqIdentityAnchored
         );
         let anchored = ledger.get(&actor).expect("the cell is still there");
         assert_eq!(*anchored.public_key(), signed.signer.0);
-        assert_eq!(anchored.state.balance(), 7_000, "nothing minted, nothing burned");
-        let identity = anchored.pq_identity().expect("the ML-DSA anchor is committed");
+        assert_eq!(
+            anchored.state.balance(),
+            7_000,
+            "nothing minted, nothing burned"
+        );
+        let identity = anchored
+            .pq_identity()
+            .expect("the ML-DSA anchor is committed");
         assert_eq!(
             identity.ml_dsa_key_commitment,
             dregg_cell::ml_dsa_public_key_commitment(&signed.pq_signer).expect("canonical key"),
@@ -1296,7 +1307,11 @@ mod tests {
             .expect("enroll a different ML-DSA key");
         let mut ledger = dregg_cell::Ledger::new();
         ledger
-            .insert_cell(dregg_cell::Cell::with_balance(signed.signer.0, default_token, 0))
+            .insert_cell(dregg_cell::Cell::with_balance(
+                signed.signer.0,
+                default_token,
+                0,
+            ))
             .expect("insert the key-bound cell");
         assert_eq!(
             claim_signer_actor_cell(&mut ledger, &signed, &executor),
@@ -1328,7 +1343,11 @@ mod tests {
         signed.pq_signature[0] ^= 0x80;
         let mut ledger = dregg_cell::Ledger::new();
         ledger
-            .insert_cell(dregg_cell::Cell::with_balance(signed.signer.0, default_token, 0))
+            .insert_cell(dregg_cell::Cell::with_balance(
+                signed.signer.0,
+                default_token,
+                0,
+            ))
             .expect("insert the key-bound cell");
         assert_eq!(
             claim_signer_actor_cell(&mut ledger, &signed, &executor),

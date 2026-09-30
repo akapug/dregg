@@ -247,7 +247,7 @@ fn run_faucet_at(amount: u64, fee: u64, block_height: u64) -> Result<(), String>
 
     // RUST reference: zero computron costs + a fee well + the chain height set to `block_height`
     // (the executor stamps `committed_height = self.block_height` onto every forest-touched cell).
-    let mut executor = TurnExecutor::new(ComputronCosts::zero());
+    let mut executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     executor.set_fee_well_cell(fee_well_id);
     executor.set_block_height(block_height);
     let mut rust_ledger = pre.clone();
@@ -322,12 +322,12 @@ fn run_faucet(amount: u64, fee: u64) -> Result<(), String> {
     let turn = transfer_turn(faucet_id, faucet_id, recipient_id, amount, fee);
 
     // RUST reference: zero computron costs (so the fee-as-budget cap never trips) + a fee well —
-    // THE EPOCH §5 fee config every node installs. Block height 0 matches the n=5 devnet
-    // (`latest_height: 0`), so the `committed_height` commitment limb (stamped only when
-    // `block_height != old_height`) stays 0 on both sides and the FEE is the sole divergence —
-    // exactly the reported faucet bug. (The height>0 `committed_height` reconstitution is a
-    // separate, broader matter, moot at devnet height 0.)
-    let mut executor = TurnExecutor::new(ComputronCosts::zero());
+    // THE EPOCH §5 fee config every node installs. Height 1 on both sides: the node's submit
+    // executor at attested 0 runs at 1, and height 0 would refuse the turn's deadline (a block
+    // height). The `committed_height` limb is stamped identically on both sides at 1
+    // (`committed_height_family_agrees` pins the reconstitution across heights), so the FEE is
+    // still the sole divergence this test isolates.
+    let mut executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     executor.set_fee_well_cell(fee_well_id);
     let mut rust_ledger = pre.clone();
     let rust_result = executor.execute(&turn, &mut rust_ledger);
@@ -338,7 +338,7 @@ fn run_faucet(amount: u64, fee: u64) -> Result<(), String> {
     // LEAN producer: the host ctx carries the SAME fee well (the seam the fix threads) so the
     // reconstitution replays the identical host fee move.
     let host = ShadowHostCtx {
-        block_height: 0,
+        block_height: 1,
         fee_well_cell: Some(fee_well_id),
         ..ShadowHostCtx::diag()
     };
@@ -462,21 +462,25 @@ fn low_balance_recipient_top_up_commits_then_chat_send_commits() {
     let payload = b"This next chat-sized send must commit after the faucet top-up has actually raised the existing cell balance.";
     let costs = ComputronCosts::default();
     let mut chat = chat_turn(recipient_id, payload, 0);
-    chat.fee = TurnExecutor::new(costs.clone()).estimate_cost(&chat);
+    chat.fee = TurnExecutor::new(costs.clone())
+        .at_block_height(1)
+        .estimate_cost(&chat);
     assert!(
         chat.fee > 90 && chat.fee < 5_000,
         "test must be load-bearing: chat fee {} must exceed the depleted balance but fit after top-up",
         chat.fee
     );
     let mut depleted = ledger.clone();
-    let rejected = TurnExecutor::new(costs.clone()).execute(&chat, &mut depleted);
+    let rejected = TurnExecutor::new(costs.clone())
+        .at_block_height(1)
+        .execute(&chat, &mut depleted);
     assert!(
         !rejected.is_committed(),
         "depleted precondition must genuinely reject the chat turn: {rejected:?}"
     );
 
     let top_up = transfer_turn(faucet_id, faucet_id, recipient_id, 4_910, 0);
-    let top_up_executor = TurnExecutor::new(ComputronCosts::zero());
+    let top_up_executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let (top_up_result, top_up_outcome) = produce_via_lean(&top_up_executor, &top_up, &mut ledger);
     assert!(top_up_result.is_committed(), "faucet top-up must commit");
     assert_producer_agreed(top_up_outcome, "existing-recipient faucet top-up");
@@ -486,7 +490,7 @@ fn low_balance_recipient_top_up_commits_then_chat_send_commits() {
         "committed top-up must raise the existing recipient balance"
     );
 
-    let mut chat_executor = TurnExecutor::new(costs);
+    let mut chat_executor = TurnExecutor::new(costs).at_block_height(1);
     chat_executor.set_fee_well_cell(fee_well_id);
     let (chat_result, chat_outcome) = produce_via_lean(&chat_executor, &chat, &mut ledger);
     assert!(

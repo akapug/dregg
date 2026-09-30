@@ -13428,7 +13428,7 @@ mod tests {
                 .insert_cell(recipient_cell)
                 .expect("recipient provision");
 
-            let executor = TurnExecutor::new(ComputronCosts::default());
+            let executor = TurnExecutor::new(ComputronCosts::default()).at_block_height(1);
             for nonce in 0u64..2 {
                 let prev = s.cclerk.receipt_head().map(|r| r.receipt_hash());
                 let mut forest = CallForest::new();
@@ -13631,7 +13631,7 @@ mod tests {
     fn receipt_chain_head_served_and_bites_under_persistent_executor() {
         // ONE executor instance across every turn below — the non-fresh path the
         // realm/MUD work needs, where the chain actually has to hold.
-        let executor = dregg_turn::TurnExecutor::new(ComputronCosts::default());
+        let executor = dregg_turn::TurnExecutor::new(ComputronCosts::default()).at_block_height(1);
 
         // A no-auth agent cell: `Authorization::Unchecked` + `Permissions::None`
         // isolates the RECEIPT-CHAIN gate (which runs before auth in `execute`),
@@ -13797,7 +13797,7 @@ mod tests {
         ledger.insert_cell(cell).expect("insert agent cell");
         let pre_ledger = ledger.clone();
         let turn = projectable_http_test_turn(agent);
-        let executor = dregg_turn::TurnExecutor::new(ComputronCosts::default());
+        let executor = dregg_turn::TurnExecutor::new(ComputronCosts::default()).at_block_height(1);
         let (_, receipt, _) = executor.execute(&turn, &mut ledger).unwrap_committed();
 
         // PATH-PRESERVE Phase 5b: the executor already validated + committed; the
@@ -14048,10 +14048,6 @@ mod tests {
         let mut forest = CallForest::new();
         forest.add_root(action);
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
         let turn = Turn {
             agent,
             nonce: 0,
@@ -14059,7 +14055,10 @@ mod tests {
             memo: None,
             // The remote SDK ALWAYS stamps valid_until (executor expiry gate +
             // the verified Lean producer's wire marshal).
-            valid_until: Some(now + 3600),
+            valid_until: Some(dregg_turn::valid_until_at(
+                0,
+                dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+            )),
             call_forest: forest,
             depends_on: vec![],
             previous_receipt_hash: expected_prev,
@@ -14286,10 +14285,6 @@ mod tests {
         let [(a, clerk_a), (b, clerk_b)] = [(cells[0], &clerks[0]), (cells[1], &clerks[1])];
         let recipient = cells[2];
         let fed_id = crate::executor_setup::federation_id_for_executor(&*state.read().await);
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
 
         // One hybrid-signed transfer turn by `agent` at its current nonce,
         // threading `prev`, submitted through the real ingress.
@@ -14320,7 +14315,10 @@ mod tests {
                 nonce,
                 fee: 1_000,
                 memo: None,
-                valid_until: Some(now + 3600),
+                valid_until: Some(dregg_turn::valid_until_at(
+                    0,
+                    dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+                )),
                 call_forest: forest,
                 depends_on: vec![],
                 previous_receipt_hash: prev,
@@ -15006,7 +15004,7 @@ mod tests {
             effect_witness_index_map: Vec::new(),
         };
 
-        let executor = dregg_turn::TurnExecutor::new(ComputronCosts::default());
+        let executor = dregg_turn::TurnExecutor::new(ComputronCosts::default()).at_block_height(1);
         let result = executor.execute(&turn, &mut ledger);
         assert!(
             matches!(result, dregg_turn::TurnResult::Committed { .. }),

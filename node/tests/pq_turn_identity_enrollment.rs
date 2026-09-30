@@ -240,7 +240,10 @@ fn required_pq_rejects_forged_ed25519_plus_attacker_owned_valid_ml_dsa() {
         nonce: 0,
         fee: 0,
         memo: Some("hostile-pq-key-substitution".to_string()),
-        valid_until: Some(i64::MAX / 2),
+        valid_until: Some(dregg_turn::valid_until_at(
+            0,
+            dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+        )),
         call_forest: forest,
         depends_on: Vec::new(),
         previous_receipt_hash: None,
@@ -255,7 +258,7 @@ fn required_pq_rejects_forged_ed25519_plus_attacker_owned_valid_ml_dsa() {
         effect_witness_index_map: Vec::new(),
     };
 
-    let mut executor = TurnExecutor::new(ComputronCosts::zero());
+    let mut executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     executor.set_local_federation_id(fed);
     executor.set_require_pq(true);
     assert!(executor.enrolled_pq_identity(&target_id).is_none());

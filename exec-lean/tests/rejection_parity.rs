@@ -205,7 +205,7 @@ impl Verdict {
 /// where `lean_status` is `Some(committed)` or `None` for a wire gap.
 fn run_case(case: &Case) -> (bool, Option<bool>, Verdict) {
     // --- (1) Rust executor (apply.rs). Fresh executor so each turn is first in its receipt chain. ---
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut rust_ledger = case.ledger.clone();
     let rust_committed = executor
         .execute(&case.turn, &mut rust_ledger)

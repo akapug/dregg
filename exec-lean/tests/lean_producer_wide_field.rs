@@ -160,7 +160,7 @@ fn a_full_width_setfield_is_lean_executed_and_the_lean_state_is_installed() {
     ledger.insert_cell(agent).unwrap();
 
     let turn = set_field_turn(agent_id, wide_field());
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let (result, outcome) = produce_via_lean(&executor, &turn, &mut ledger);
 
     // (1) The VERIFIED executor decided it — not a fallback.
@@ -223,7 +223,7 @@ fn a_narrow_setfield_still_commits_through_the_verified_producer() {
     narrow[24..32].copy_from_slice(&42u64.to_be_bytes());
     let turn = set_field_turn(agent_id, narrow);
 
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let (result, outcome) = produce_via_lean(&executor, &turn, &mut ledger);
     assert!(result.is_committed(), "the narrow write still commits");
     match outcome {

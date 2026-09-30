@@ -395,8 +395,7 @@ pub async fn arm_private_dependent_turn(
         // A pre-check stricter than finalization is how an armed first turn gets
         // refused here and accepted there.
         let live = state.ledger.get(&signed.turn.agent);
-        let claimed =
-            crate::signed_turn_validation::claimed_actor_cell(live, &signed, &executor);
+        let claimed = crate::signed_turn_validation::claimed_actor_cell(live, &signed, &executor);
         crate::signed_turn_validation::validate_signed_turn(
             &signed,
             &executor,
@@ -622,8 +621,7 @@ async fn submit_claimed_turn(
         // against the cell the first-turn claim would write, so this agrees with
         // the ingress that will actually apply the turn.
         let live = state.ledger.get(&signed.turn.agent);
-        let claimed =
-            crate::signed_turn_validation::claimed_actor_cell(live, &signed, &executor);
+        let claimed = crate::signed_turn_validation::claimed_actor_cell(live, &signed, &executor);
         crate::signed_turn_validation::validate_signed_turn(
             &signed,
             &executor,
@@ -794,7 +792,10 @@ mod tests {
                 nonce: inner.ledger.get(&operator).unwrap().state.nonce(),
                 fee: 0,
                 memo: None,
-                valid_until: Some(i64::MAX / 2),
+                valid_until: Some(dregg_turn::valid_until_at(
+                    0,
+                    dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+                )),
                 call_forest: dregg_turn::CallForest::new(),
                 depends_on: vec![],
                 previous_receipt_hash: inner.cclerk.agent_receipt_head_hash(&operator),

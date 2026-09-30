@@ -185,7 +185,7 @@ fn assert_denotational_and_conservation(
     let pre_supply = scalar_total_supply(&pre);
 
     // (1) Rust producer.
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut rust_ledger = pre.clone();
     let rust_result = executor.execute(&turn, &mut rust_ledger);
     assert!(
@@ -560,7 +560,7 @@ fn census_introduce() {
     // Introduce commits only when Rust's stricter recipient-access legs are also satisfied (they are
     // by this fixture). Guard the census on Rust committing so the conservation/denotational check is
     // only asserted on a genuinely committed turn.
-    let probe = TurnExecutor::new(ComputronCosts::zero());
+    let probe = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut probe_ledger = pre.clone();
     let committed = probe
         .execute(
@@ -1138,7 +1138,7 @@ fn conservation_check_is_non_vacuous() {
     let pre_sum = scalar_total_supply(&pre);
     assert_eq!(pre_sum, 105, "fixture: A=100 + B=5");
 
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let mut post = pre.clone();
     assert!(
         executor

@@ -168,7 +168,7 @@ fn zero_fee_coordination_turn_agrees_across_producers() {
     // `turn/tests/coordination_fee_exempt.rs`); with it, it commits.
     let mut costs = ComputronCosts::default_costs();
     costs.coordination_exempt = true;
-    let executor = TurnExecutor::new(costs);
+    let executor = TurnExecutor::new(costs).at_block_height(1);
     let mut rust_ledger = pre.clone();
     let rust_result = executor.execute(&turn, &mut rust_ledger);
     assert!(
@@ -179,8 +179,10 @@ fn zero_fee_coordination_turn_agrees_across_producers() {
     // LEAN: the verified producer on the SAME turn. fee=0 is the historically
     // locked differential shape — the exemption changes Rust ADMISSION only,
     // so the producers must agree exactly.
+    // Height 1 on both sides (the executor above runs at 1): at 0 both would refuse the
+    // turn's deadline, which is a block height.
     let host = ShadowHostCtx {
-        block_height: 0,
+        block_height: 1,
         ..ShadowHostCtx::diag()
     };
     let (mut lean_ledger, lean_committed) = execute_via_lean(&turn, &pre, &host)

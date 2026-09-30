@@ -319,7 +319,7 @@ pub fn executor_transfer_turn() -> (Ledger, Turn) {
 /// A fresh zero-cost executor (the cheapest configuration — the executor logic,
 /// not the fee accounting, is what we time).
 pub fn fresh_executor() -> TurnExecutor {
-    TurnExecutor::new(dregg_turn::ComputronCosts::zero())
+    TurnExecutor::new(dregg_turn::ComputronCosts::zero()).at_block_height(1)
 }
 
 // ---------------------------------------------------------------------------

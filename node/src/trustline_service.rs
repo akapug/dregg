@@ -1980,7 +1980,10 @@ mod tests {
                 nonce: live_nonce,
                 fee: ADOPT_TURN_FEE,
                 memo: None,
-                valid_until: Some(i64::MAX / 2),
+                valid_until: Some(dregg_turn::valid_until_at(
+                    0,
+                    dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+                )),
                 call_forest: forest,
                 depends_on: vec![],
                 previous_receipt_hash: s.cclerk.agent_receipt_head_hash(&cell),

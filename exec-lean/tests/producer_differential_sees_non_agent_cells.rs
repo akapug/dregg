@@ -119,7 +119,7 @@ fn ledgers_differing_only_in_a_non_agent_cell() -> (CellId, CellId, Ledger, Ledg
 #[test]
 fn the_anchor_cannot_see_a_non_agent_cell() {
     let (agent, bystander, lean_side, rust_side) = ledgers_differing_only_in_a_non_agent_cell();
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
 
     assert_ne!(
         lean_side.get(&bystander),
@@ -145,7 +145,7 @@ fn the_anchor_cannot_see_a_non_agent_cell() {
 #[test]
 fn a_non_agent_cell_divergence_is_caught_by_the_post_state_leg() {
     let (agent, bystander, lean_side, rust_side) = ledgers_differing_only_in_a_non_agent_cell();
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let lean_root = executor.consensus_state_commitment(&lean_side, &agent);
     let rust_root = executor.consensus_state_commitment(&rust_side, &agent);
 
@@ -187,7 +187,7 @@ fn a_non_agent_cell_divergence_is_caught_by_the_post_state_leg() {
 fn agreeing_post_states_are_agreement() {
     let (agent, _bystander, lean_side, _rust_side) = ledgers_differing_only_in_a_non_agent_cell();
     let same = lean_side.clone();
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let root = executor.consensus_state_commitment(&lean_side, &agent);
 
     assert_eq!(
@@ -203,7 +203,7 @@ fn agreeing_post_states_are_agreement() {
 #[test]
 fn the_coarse_legs_take_precedence_and_are_named() {
     let (agent, _b, lean_side, rust_side) = ledgers_differing_only_in_a_non_agent_cell();
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let lean_root = executor.consensus_state_commitment(&lean_side, &agent);
 
     assert_eq!(
@@ -239,6 +239,7 @@ const WIRE_CARRIABLE_FIELD: [u8; 32] = {
 
 fn node_shaped_executor() -> TurnExecutor {
     TurnExecutor::new(ComputronCosts::zero())
+        .at_block_height(1)
         .with_shadow_observer(dregg_exec_lean::LeanShadowObserver::arc())
 }
 
@@ -365,7 +366,7 @@ fn a_verified_refusal_is_decided_as_a_commit_bit_divergence() {
     // both executors happening to refuse.
     {
         let mut ledger = ledger_of(&[agent.clone()]);
-        let rust_only = TurnExecutor::new(ComputronCosts::zero());
+        let rust_only = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
         let r = rust_only.execute(
             &turn_with(
                 agent_id,

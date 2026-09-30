@@ -59,7 +59,7 @@ fn make_cell(seed: u8, balance: i64, perms: Permissions) -> Cell {
 }
 
 fn executor() -> TurnExecutor {
-    let mut e = TurnExecutor::new(ComputronCosts::zero());
+    let mut e = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     e.set_local_federation_id(LOCAL_FED);
     e
 }
