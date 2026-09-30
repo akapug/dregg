@@ -442,6 +442,34 @@ pub const COMMITTEE_LIVENESS_WINDOW: Duration = Duration::from_secs(60);
 /// only once it is real rather than on a slow round.
 pub const FINALITY_STALL_THRESHOLD: Duration = Duration::from_secs(90);
 
+/// How many idle-heartbeat intervals a node may go without any block crossing
+/// quorum before the stall leg fires, when that is longer than
+/// [`FINALITY_STALL_THRESHOLD`].
+///
+/// An idle node's only blocks are its heartbeats, and a heartbeat block reaches
+/// `tau` finality only once a successor closes its wave — so on an idle node the
+/// gap between two quorum crossings is up to TWO heartbeat intervals. Three is
+/// that plus one interval of slack. At the devnet's 2 s heartbeat the 90 s floor
+/// governs; at the 120 s code default the window is 360 s, where a flat 90 s
+/// would call every idle node stalled between heartbeats.
+pub const FINALITY_STALL_HEARTBEATS: u32 = 3;
+
+/// The stall window for a node with this block cadence and idle heartbeat.
+///
+/// A node that produces no idle heartbeats (`--block-cadence-ms 0` or
+/// `--idle-heartbeat-ms 0`) gets the flat [`FINALITY_STALL_THRESHOLD`]: it has
+/// opted out of the one mechanism by which an idle node proves that its
+/// finality pipeline still runs, so after 90 s without a quorum it is reported
+/// stalled whether it is idle or wedged. That is the reading at every committee
+/// size, as it already was above threshold 1.
+pub fn finality_stall_window(block_cadence_ms: u64, idle_heartbeat_ms: u64) -> Duration {
+    if block_cadence_ms == 0 || idle_heartbeat_ms == 0 {
+        return FINALITY_STALL_THRESHOLD;
+    }
+    FINALITY_STALL_THRESHOLD
+        .max(Duration::from_millis(idle_heartbeat_ms).saturating_mul(FINALITY_STALL_HEARTBEATS))
+}
+
 /// Upper bound on remembered in-flight turns. Reaching it means turns are being
 /// submitted far faster than they finalize; the map is cleared wholesale rather
 /// than grown (the same bounded-memory posture as `metrics::FINALITY_T0`). A
@@ -469,19 +497,28 @@ pub struct FederationLiveness {
     /// any quorum exists, so "never finalized anything" reports as a stall
     /// instead of as an absence of evidence.
     started: std::time::Instant,
+    /// How long without a quorum crossing counts as a stall
+    /// ([`finality_stall_window`] of this node's cadence).
+    stall_window: Duration,
 }
 
 impl Default for FederationLiveness {
     fn default() -> Self {
-        Self {
-            voter_last_seen: std::sync::Mutex::new(HashMap::new()),
-            last_quorum: std::sync::Mutex::new(None),
-            started: std::time::Instant::now(),
-        }
+        Self::with_stall_window(FINALITY_STALL_THRESHOLD)
     }
 }
 
 impl FederationLiveness {
+    /// A tracker whose stall leg fires after `stall_window` without a quorum.
+    pub fn with_stall_window(stall_window: Duration) -> Self {
+        Self {
+            voter_last_seen: std::sync::Mutex::new(HashMap::new()),
+            last_quorum: std::sync::Mutex::new(None),
+            started: std::time::Instant::now(),
+            stall_window,
+        }
+    }
+
     /// A verified, member-signed finalization vote from `voter` was recorded.
     pub fn note_vote(&self, voter: &[u8; 32]) {
         self.voter_last_seen
@@ -498,8 +535,7 @@ impl FederationLiveness {
 
     /// Distinct committee identities OTHER than `self_key` whose vote landed
     /// within [`COMMITTEE_LIVENESS_WINDOW`].
-    fn live_remote_voters(&self, self_key: &[u8; 32]) -> usize {
-        let now = std::time::Instant::now();
+    fn live_remote_voters(&self, self_key: &[u8; 32], now: std::time::Instant) -> usize {
         self.voter_last_seen
             .lock()
             .unwrap_or_else(|p| p.into_inner())
@@ -510,9 +546,9 @@ impl FederationLiveness {
             .count()
     }
 
-    fn since_quorum(&self) -> Duration {
+    fn since_quorum(&self, now: std::time::Instant) -> Duration {
         let last = *self.last_quorum.lock().unwrap_or_else(|p| p.into_inner());
-        std::time::Instant::now().duration_since(last.unwrap_or(self.started))
+        now.saturating_duration_since(last.unwrap_or(self.started))
     }
 
     fn ever_reached_quorum(&self) -> bool {
@@ -533,17 +569,48 @@ impl FederationLiveness {
         quorum_threshold: usize,
         connected_peers: usize,
     ) -> FederationLivenessSnapshot {
-        let live_committee_voters = self.live_remote_voters(self_key);
+        self.snapshot_at(
+            std::time::Instant::now(),
+            self_key,
+            quorum_threshold,
+            connected_peers,
+        )
+    }
+
+    /// [`Self::snapshot`] read at `now` — the clock is a parameter so the stall
+    /// pole is exhibitable in a test without sleeping through the window.
+    fn snapshot_at(
+        &self,
+        now: std::time::Instant,
+        self_key: &[u8; 32],
+        quorum_threshold: usize,
+        connected_peers: usize,
+    ) -> FederationLivenessSnapshot {
+        let live_committee_voters = self.live_remote_voters(self_key, now);
         // This node counts toward its own quorum: it signs its own finalization
         // votes. A threshold of 1 is therefore always reachable alone, which is
         // exactly right for a solo/collapsed deployment.
         let quorum_reachable = live_committee_voters + 1 >= quorum_threshold;
-        let since_quorum = self.since_quorum();
-        // With no cross-node quorum to lose there is no stall to detect: a
-        // threshold-1 node finalizes on its own signature, and some solo paths
-        // never route a vote through the collector at all. Reporting a stall
-        // there would be a false alarm, not a stricter check.
-        let finality_stalled = quorum_threshold > 1 && since_quorum > FINALITY_STALL_THRESHOLD;
+        let since_quorum = self.since_quorum(now);
+        // ⚑ AT EVERY THRESHOLD, including 1. This leg used to read
+        // `quorum_threshold > 1 && ...`, on the argument that a threshold-1 node
+        // "has no cross-node quorum to lose" and that some solo paths never
+        // route a vote through the collector. Both halves were wrong:
+        //  * every block the finality loop acknowledges — turn, membership,
+        //    inert heartbeat — emits this node's own vote through
+        //    `record_finalization_vote`, which calls `note_quorum` on the vote
+        //    that crosses the threshold; at threshold 1 that is the self-vote.
+        //    A solo node whose finality loop runs therefore notes a quorum on
+        //    every finalized block, and one whose loop has stopped does not.
+        //  * the exemption is exactly the blind spot of the live outage: the
+        //    deployment was collapsed to ONE validator on 2026-08-05, and a
+        //    threshold-1 node then reported `healthy: true` with
+        //    `latest_height: 0` against `dag_height: 2561`. Every conjunct was a
+        //    constant once the first block existed.
+        // What the flat 90 s DID get wrong at threshold 1 is cadence: an idle
+        // node finalizes only as often as its heartbeat closes a wave. That is a
+        // window to size, not a leg to switch off — see `finality_stall_window`.
+        let finality_stalled = since_quorum > self.stall_window;
         FederationLivenessSnapshot {
             live_committee_voters,
             quorum_threshold,
@@ -551,6 +618,7 @@ impl FederationLiveness {
             connected_peers,
             ever_reached_quorum: self.ever_reached_quorum(),
             seconds_since_quorum: since_quorum.as_secs(),
+            finality_stall_window_secs: self.stall_window.as_secs(),
             finality_stalled,
         }
     }
@@ -576,9 +644,59 @@ pub struct FederationLivenessSnapshot {
     /// Seconds since the last consensus-wide quorum — or since this handle
     /// started, if there has never been one.
     pub seconds_since_quorum: u64,
-    /// `seconds_since_quorum` past [`FINALITY_STALL_THRESHOLD`] on a federation
-    /// with a real (>1) threshold.
+    /// The stall window this node runs with ([`finality_stall_window`]).
+    pub finality_stall_window_secs: u64,
+    /// `seconds_since_quorum` past the stall window, at every threshold.
     pub finality_stalled: bool,
+}
+
+/// How far the DAG has run ahead of TURN finality, in `dag_height` units.
+///
+/// ⚑ F1. `latest_height` (the attested-root height) advances only when a turn
+/// commits; `dag_height` advances on every block, heartbeats included. Both were
+/// published on `/status` and neither was ever compared, so the live solo node
+/// read `latest_height: 0`, `dag_height: 2561`, `healthy: true`.
+///
+/// Each `/status` read calls [`Self::observe`] with the two heights. When
+/// `latest_height` differs from the last observation, turn finality moved and
+/// the anchor is re-set to the current `dag_height`; the lag is the DAG's growth
+/// since. The anchor is set at the first read AFTER an advance, so the lag can
+/// under-count by the blocks produced between the advance and that read — at
+/// most one polling interval, and only toward "less lag".
+///
+/// `latest_height == 0` anchors at 0: a node that has never finalized a turn is
+/// behind by its whole DAG, whatever the first observation saw. A node restarted
+/// with `latest_height > 0` gets a fresh anchor at its first read — process-local
+/// and in-memory, like [`FederationLiveness`].
+#[derive(Debug, Default)]
+pub struct TurnFinalityProgress {
+    anchor: std::sync::Mutex<Option<TurnFinalityAnchor>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TurnFinalityAnchor {
+    latest_height: u64,
+    dag_height: u64,
+}
+
+impl TurnFinalityProgress {
+    /// Record the current heights and return how many `dag_height` units the
+    /// DAG has advanced since turn finality last moved.
+    pub fn observe(&self, latest_height: u64, dag_height: u64) -> u64 {
+        let mut anchor = self.anchor.lock().unwrap_or_else(|p| p.into_inner());
+        let current = match *anchor {
+            Some(a) if a.latest_height == latest_height => a,
+            _ => {
+                let a = TurnFinalityAnchor {
+                    latest_height,
+                    dag_height: if latest_height == 0 { 0 } else { dag_height },
+                };
+                *anchor = Some(a);
+                a
+            }
+        };
+        dag_height.saturating_sub(current.dag_height)
+    }
 }
 
 /// Turn hashes this node has accepted for consensus and not yet seen a durable
@@ -941,6 +1059,9 @@ pub struct BlocklaceHandle {
     /// Turns this node took on and has not yet resolved, so a client polling by
     /// turn hash can be told "pending" instead of nothing. See [`InFlightTurns`].
     pub in_flight_turns: Arc<InFlightTurns>,
+    /// Where `dag_height` stood when turn finality last advanced, so `/status`
+    /// can say how far the DAG has run ahead of it. See [`TurnFinalityProgress`].
+    pub turn_finality: Arc<TurnFinalityProgress>,
 }
 
 /// A read-only view of one blocklace block, shaped to mirror the wasm
@@ -5121,8 +5242,11 @@ pub(crate) async fn run_blocklace_sync_with_membership_policy(
         pending_payloads: Arc::new(RwLock::new(std::collections::VecDeque::new())),
         last_order_fingerprint: Arc::new(RwLock::new(None)),
         last_lean_order: Arc::new(RwLock::new(None)),
-        liveness: Arc::new(FederationLiveness::default()),
+        liveness: Arc::new(FederationLiveness::with_stall_window(
+            finality_stall_window(block_cadence_ms, idle_heartbeat_ms),
+        )),
         in_flight_turns: Arc::new(InFlightTurns::default()),
+        turn_finality: Arc::new(TurnFinalityProgress::default()),
     };
 
     info!("blocklace gossip layer initialized, processing messages");
@@ -12275,8 +12399,10 @@ mod tests {
         assert_eq!(alone.live_committee_voters, 0);
         assert!(!alone.quorum_reachable);
         assert!(!alone.ever_reached_quorum);
-        // ... and a threshold-1 (solo / collapsed) deployment is unaffected: it
-        // finalizes on its own signature and must not be called unhealthy.
+        // ... and a FRESH threshold-1 (solo / collapsed) deployment is reachable
+        // on its own signature and not yet stalled — its clock runs from
+        // `started`. (That it CAN stall is pinned by
+        // `a_threshold_one_node_that_stops_finalizing_is_stalled`.)
         let solo = liveness.snapshot(&me, 1, 0);
         assert!(solo.quorum_reachable);
         assert!(!solo.finality_stalled);
@@ -12308,6 +12434,79 @@ mod tests {
         assert!(!quorate.finality_stalled);
         liveness.note_quorum();
         assert!(liveness.snapshot(&me, 3, 2).ever_reached_quorum);
+    }
+
+    /// The turn-finality anchor moves exactly when `latest_height` does, and a
+    /// node that never finalized a turn is behind by its whole DAG.
+    #[test]
+    fn turn_finality_progress_measures_dag_growth_since_the_last_finalized_turn() {
+        let never = TurnFinalityProgress::default();
+        // First observation of the 2026-08-05 shape: the whole DAG is the lag,
+        // not zero — the first read must not launder an old stall.
+        assert_eq!(never.observe(0, 2561), 2561);
+        assert_eq!(never.observe(0, 2600), 2600);
+
+        let p = TurnFinalityProgress::default();
+        assert_eq!(p.observe(5, 1000), 0, "a node restarted mid-life anchors at first read");
+        assert_eq!(p.observe(5, 1040), 40);
+        assert_eq!(p.observe(6, 1050), 0, "turn finality advanced: re-anchor");
+        assert_eq!(p.observe(6, 1300), 250);
+        // A re-genesis (height moves DOWN) is a change too, and at 0 anchors at 0.
+        assert_eq!(p.observe(0, 20), 20);
+    }
+
+    /// ⚑ F1 — the stall leg at threshold 1. It used to read
+    /// `quorum_threshold > 1 && since_quorum > 90 s`, which is the constant
+    /// `false` on the single-validator deployment the devnet was collapsed to on
+    /// 2026-08-05. The pre-fix formula is evaluated on the SAME facts first, so
+    /// this test cannot pass by exhibiting some other failure.
+    #[test]
+    fn a_threshold_one_node_that_stops_finalizing_is_stalled() {
+        let me = [0x01u8; 32];
+        let window = finality_stall_window(2_000, 2_000);
+        assert_eq!(window, FINALITY_STALL_THRESHOLD, "2 s heartbeat: the 90 s floor governs");
+        let liveness = FederationLiveness::with_stall_window(window);
+        let t0 = std::time::Instant::now();
+
+        // A solo node finalizing normally: its self-vote crosses quorum 1.
+        liveness.note_quorum();
+        let finalizing = liveness.snapshot_at(t0 + Duration::from_secs(1), &me, 1, 0);
+        assert!(finalizing.quorum_reachable);
+        assert!(!finalizing.finality_stalled);
+
+        // The same node, its finality loop silent past the window.
+        let later = t0 + window + Duration::from_secs(5);
+        let threshold = 1usize;
+        let stuck = liveness.snapshot_at(later, &me, threshold, 0);
+        let since = Duration::from_secs(stuck.seconds_since_quorum);
+        let pre_fix = threshold > 1 && since > FINALITY_STALL_THRESHOLD;
+        assert!(since > window, "the mutation is present: the clock is past the window");
+        assert!(!pre_fix, "the pre-fix leg is blind to this at threshold 1");
+        assert!(stuck.finality_stalled, "threshold 1 must not exempt a stalled node");
+
+        // Threshold > 1 still stalls on the same clock.
+        assert!(liveness.snapshot_at(later, &me, 3, 2).finality_stalled);
+    }
+
+    /// The stall window follows the heartbeat: an idle node finalizes only as
+    /// often as its heartbeat closes a wave, so a flat 90 s against the 120 s
+    /// default heartbeat would call every idle solo node stalled.
+    #[test]
+    fn finality_stall_window_scales_with_the_idle_heartbeat() {
+        assert_eq!(finality_stall_window(2_000, 120_000), Duration::from_secs(360));
+        assert_eq!(finality_stall_window(2_000, 2_000), FINALITY_STALL_THRESHOLD);
+        // No idle heartbeats: the flat floor, not an unbounded window.
+        assert_eq!(finality_stall_window(0, 120_000), FINALITY_STALL_THRESHOLD);
+        assert_eq!(finality_stall_window(2_000, 0), FINALITY_STALL_THRESHOLD);
+
+        let me = [0x01u8; 32];
+        let liveness = FederationLiveness::with_stall_window(finality_stall_window(2_000, 120_000));
+        liveness.note_quorum();
+        let t0 = std::time::Instant::now();
+        // Two idle heartbeats without a quorum is an idle node, not a stall ...
+        assert!(!liveness.snapshot_at(t0 + Duration::from_secs(240), &me, 1, 0).finality_stalled);
+        // ... four is a stall.
+        assert!(liveness.snapshot_at(t0 + Duration::from_secs(480), &me, 1, 0).finality_stalled);
     }
 
     /// A submitted turn has a name for the window between "accepted for
@@ -17169,6 +17368,7 @@ mod tests {
             last_lean_order: Arc::new(RwLock::new(None)),
             liveness: Arc::new(FederationLiveness::default()),
             in_flight_turns: Arc::new(InFlightTurns::default()),
+            turn_finality: Arc::new(TurnFinalityProgress::default()),
         }
     }
 

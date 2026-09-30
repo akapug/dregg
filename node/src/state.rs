@@ -544,7 +544,7 @@ pub struct NodeStateInner {
     pub mcp_cap_enforce: bool,
     /// Cached PIR intent index. Invalidated on intent pool mutations.
     /// Avoids O(n) rebuild on every PIR request (prevents CPU DoS).
-    pub pir_index_cache: Option<dregg_intent::pir::IntentIndex>,
+    pub pir_index_cache: Option<std::sync::Arc<dregg_intent::pir::IntentIndex>>,
 
     /// Persistent discharge gateway instance for replay prevention.
     /// SECURITY: This MUST persist across requests so the `issued` set actually
