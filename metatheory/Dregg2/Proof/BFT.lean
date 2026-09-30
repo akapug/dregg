@@ -18,7 +18,10 @@
 `World.lean` delivers the two BFT obligations only weakly:
   * O1: `quorum_intersection_safety` proves the bare pigeonhole (two quorums share a voter),
     without the adversary/honesty model needed to turn that shared voter into a contradiction.
-  * O2: `liveness_after_gst` assumes `World.gst_liveness` as an oracle field.
+  * O2: `liveness_after_gst` is derived from the `World.gst_delivery` delivery law (DLS88
+    GST/Δ). (It formerly restated its own conclusion as an oracle field `World.gst_liveness`,
+    provable by instantiation; that field is deleted.) The `gst_liveness` names below refer to
+    that conclusion SHAPE, not to a field.
 
 This file adds the adversary/honesty model as an explicit structure (`BFTModel`) and proves:
 

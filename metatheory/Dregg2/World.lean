@@ -49,6 +49,33 @@ structure Vote where
   block : Nat
   deriving DecidableEq, Repr
 
+/-! ## Partial synchrony — the delivery law, stated about data.
+
+DLS88's partial-synchrony model: there is an (unknown) global stabilization time `gst` and an
+(unknown) delay bound `Δ` such that a message sent by round `r` is received by round
+`max r gst + Δ`. Before GST the adversary may hold any message; it must release it within `Δ` of
+GST. The law relates two logs — what was SENT and what was RECEIVED — so it can fail: a network
+that never delivers a sent message refutes it (`not_partialSynchrony_silent`), and one that
+delivers everything at once satisfies it (`partialSynchrony_self`). -/
+
+/-- **`PartialSynchrony sent recv`** — ∃ `gst`, `Δ`: every message in the send log by round `r`
+is in the receive log by round `max r gst + Δ`. -/
+def PartialSynchrony {Msg : Type} (sent recv : Nat → List Msg) : Prop :=
+  ∃ gst Δ : Nat, ∀ (r : Nat) (m : Msg), m ∈ sent r → m ∈ recv (max r gst + Δ)
+
+/-- Satisfiable pole: a network that receives each round exactly what was sent by it is
+partially synchronous (`gst = Δ = 0`). -/
+theorem partialSynchrony_self {Msg : Type} (log : Nat → List Msg) :
+    PartialSynchrony log log :=
+  ⟨0, 0, fun r m h => by simpa using h⟩
+
+/-- Refutable pole: a network that never delivers a message that was sent at round 0 is not
+partially synchronous, whatever `gst` and `Δ` are chosen. The fully-asynchronous adversary. -/
+theorem not_partialSynchrony_silent {Msg : Type} (m : Msg) :
+    ¬ PartialSynchrony (fun _ => [m]) (fun _ => ([] : List Msg)) := by
+  rintro ⟨gst, Δ, h⟩
+  exact absurd (h 0 m (by simp)) (by simp)
+
 /-! ## The `World` interface — the network/clock/randomness oracle. -/
 
 /-- **The `World` interface.** The sibling of `CryptoKernel`: `Msg` (the generic network
@@ -82,37 +109,24 @@ class World (Msg : Type) where
   retracted: a later round has received (at least) everything an earlier round did. This is
   the only network guarantee Lean relies on — the message log grows; the adversary may
   delay and reorder but cannot make a delivered message *un*-happen. The runtime discharges
-  it (an append-only receive log). (Asynchrony / GST liveness is NOT here — that needs the
-  protocol; see the OPEN below.) -/
+  it (an append-only receive log). (The GST/Δ delivery bound is the separate
+  law `gst_delivery` below.) -/
   recv_mono : ∀ {r r' : Nat}, r ≤ r' → List.Sublist (recv r) (recv r')
-  /-- **LAW — GST liveness (partial-synchrony progress oracle).** After the global
-  stabilization time the network is no longer fully asynchronous: it is the assumed
-  obligation of a *partial-synchrony* runtime that progress is eventually made. The premise
-  `hlive` is the honest precondition this oracle quantifies under — the GST + honest-quorum
-  hypothesis, abstracted as "for this vote-reading `votesOf` and config `cfg`, there really
-  IS a round whose delivered votes meet the threshold for some block" (a fully-asynchronous
-  adversary that delays everything forever, or an unsatisfiable config, simply does not
-  supply `hlive`, and then the law says nothing). Under that premise the law commits the
-  runtime to *exhibiting* such a round. This is the honest counterpart to `recv_mono`: NOT
-  provable from the bare network oracle (FLP forbids unconditional liveness), so — exactly as
-  crypto laws like `hash_inj` and the network law `recv_mono` are *assumed*, never proved, in
-  Lean — it is carried here as a stated field, the progress guarantee the runtime's GST/Δ
-  delivery bound discharges. A partially-synchronous network (and the reference instance
-  below, whose growing schedule eventually meets any reached threshold) inhabits it. Because
-  it is a class FIELD (a hypothesis), theorems using it stay kernel-clean — it never appears
-  in `#print axioms`. -/
-  gst_liveness : ∀ (votesOf : List Msg → List Vote) (cfg : Finality.Config) (block : Nat),
-    -- `hprod` — the GST + honest-quorum precondition, abstracted: for this block the count of
-    -- distinct voters delivered grows without bound (an honest supermajority keeps voting
-    -- and, after GST, those votes are delivered). A fully-asynchronous adversary that
-    -- silences voters never supplies this; a partially-synchronous runtime does. (The
-    -- distinct-voter count is spelled out inline — `votersFor`/`quorumReached` are defined
-    -- below the class, so the law cannot forward-reference them by name; the `quorumRule`
-    -- and theorems prove these inline forms are definitionally those names.)
-    (∀ k : Nat, ∃ r : Nat,
-      k ≤ ((((votesOf (recv r)).filter (fun v => v.block = block)).map (·.voter)).dedup).length) →
-    ∃ (r : Nat), cfg.threshold ≤
-      ((((votesOf (recv r)).filter (fun v => v.block = block)).map (·.voter)).dedup).length
+  /-- **The send log (specification-side).** `sent r` is every message broadcast, by any
+  participant, by round `r`. It is not a runtime oracle — the local node cannot observe other
+  participants' sends — but the object the delivery law below is ABOUT: partial synchrony is a
+  relation between what was sent and what was received. -/
+  sent : Nat → List Msg
+  /-- **LAW — partial-synchrony delivery (DLS88 GST/Δ).** There are a GST and a delay bound Δ
+  such that every message sent by round `r` is received by round `max r gst + Δ`. This is the
+  assumption a partially-synchronous runtime must meet, and it can fail: a network that holds a
+  sent message forever refutes it (`not_partialSynchrony_silent`). Liveness is DERIVED from it
+  plus an honest-sending premise (`liveness_after_gst`), not restated as a field.
+
+  An earlier revision carried `gst_liveness : (∀ k, ∃ r, k ≤ count r) → ∃ r, threshold ≤ count r`
+  here — provable by instantiating `k := threshold`, so it assumed nothing and described a law it
+  did not state. -/
+  gst_delivery : PartialSynchrony sent recv
 
 variable {Msg : Type}
 
@@ -271,9 +285,9 @@ voter — is pure counting from the `½(n+f)` threshold and a participant-member
 it is proved here with no external paper. The *full* honest-vote-once safety (a shared voter
 is a CONTRADICTION because an honest node never double-votes) needs the adversary/honesty
 model and Malkhi–Reiter; that part stays an explicit scope-note, not a discharged claim. Liveness after
-GST is discharged from a NAMED assumed `World` oracle law (`gst_liveness`), the
-partial-synchrony obligation the network layer satisfies — the same honest pattern as
-`recv_mono`, not an axiom. -/
+GST is derived from the NAMED assumed `World` law `gst_delivery` (DLS88 partial synchrony: sent
+messages arrive within Δ of `max(send, GST)`) plus an honest-sending premise — the same pattern
+as `recv_mono`, not an axiom. -/
 
 /-- **Quorum intersection (pigeonhole).** If `cfg.threshold` is the lifted
 `halfQuorum = ⌊(n+f)/2⌋+1` and two quorums for blocks `b₁`, `b₂` have both formed over a
@@ -330,30 +344,55 @@ theorem quorum_intersection_safety
   rw [Finset.mem_inter, List.mem_toFinset, List.mem_toFinset] at hv
   exact ⟨v, hv.1, hv.2⟩
 
-/-- **Liveness after GST (discharged from the `gst_liveness` oracle law).** Under the
-GST + honest-quorum precondition `hprod` (for some `block`, the distinct-voter count delivered
-grows without bound — an honest supermajority keeps voting and, after GST, their votes are
-delivered), the network reaches a round where `committedByQuorum` holds — the τ-BFT progress
-guarantee. UNCONDITIONAL liveness is FALSE for a fully-asynchronous network (FLP: the
-adversary may delay all votes forever), so this cannot be proved from the bare oracle; the
-honest move — matching how `recv_mono` supplies the only network safety guarantee — is to
-discharge it from the NAMED assumed partial-synchrony law `World.gst_liveness` (the GST/Δ
-delivery obligation the runtime satisfies). `hprod` is exactly the FLP escape hatch the
-fully-asynchronous adversary refuses to grant. This is a hypothesis (a class field), not an
-axiom — so this theorem stays kernel-clean (`#print axioms` shows none beyond Lean's own). -/
+/-- **Distinct-voter count is monotone under message-set inclusion** (helper). If every vote
+of `votes₁` is a vote of `votes₂`, the distinct voters for `block` in `votes₁` are no more
+numerous than in `votes₂`. Membership, not sublist: delivery may reorder. -/
+theorem votersFor_length_le_of_subset {votes₁ votes₂ : List Vote}
+    (h : ∀ v ∈ votes₁, v ∈ votes₂) (block : Nat) :
+    (votersFor votes₁ block).length ≤ (votersFor votes₂ block).length := by
+  have hsub : votersFor votes₁ block ⊆ votersFor votes₂ block := by
+    intro a ha
+    simp only [votersFor, List.mem_dedup, List.mem_map, List.mem_filter] at ha ⊢
+    obtain ⟨v, ⟨hv, hb⟩, rfl⟩ := ha
+    exact ⟨v, ⟨h v hv, hb⟩, rfl⟩
+  exact (List.subperm_of_subset (List.nodup_dedup _) hsub).length_le
+
+/-- **The delivery step, over raw logs.** If the logs are partially synchronous, `votesOf` reads
+votes pointwise (a superset of messages yields a superset of votes), and by some round `r` at
+least `cfg.threshold` distinct voters have SENT a vote for `block`, then some round RECEIVES that
+many distinct voters for `block`: round `max r gst + Δ`. -/
+theorem quorum_received_of_partialSynchrony (sent recv : Nat → List Msg)
+    (hps : PartialSynchrony sent recv)
+    (votesOf : List Msg → List Vote)
+    (hvotesOf : ∀ {m₁ m₂ : List Msg}, (∀ x ∈ m₁, x ∈ m₂) → ∀ v ∈ votesOf m₁, v ∈ votesOf m₂)
+    (cfg : Finality.Config) (block : BlockId)
+    (hsent : ∃ r, cfg.threshold ≤ (votersFor (votesOf (sent r)) block).length) :
+    ∃ r, cfg.threshold ≤ (votersFor (votesOf (recv r)) block).length := by
+  obtain ⟨gst, Δ, hdel⟩ := hps
+  obtain ⟨r, hr⟩ := hsent
+  exact ⟨max r gst + Δ, le_trans hr
+    (votersFor_length_le_of_subset (hvotesOf (fun m hm => hdel r m hm)) block)⟩
+
+/-- **Liveness after GST (derived from the `gst_delivery` law).** If, by some round, at least
+`cfg.threshold` distinct voters have broadcast a vote for `block` (the honest-supermajority
+sending premise `hsent`), then under the partial-synchrony delivery law `World.gst_delivery` the
+network reaches a round where `committedByQuorum` holds. UNCONDITIONAL liveness is FALSE for a
+fully-asynchronous network (FLP): `silent_*` in `Reference` exhibits logs satisfying `hsent` and
+`recv_mono` on which no round ever reaches the quorum, and on which `PartialSynchrony` fails — the
+delivery law is what carries the conclusion. `hvotesOf` says votes are read pointwise from
+messages (satisfied by any `filterMap`-style decoder). -/
 theorem liveness_after_gst [World Msg]
-    (votesOf : List Msg → List Vote) (cfg : Finality.Config) (block : BlockId)
-    (hprod : ∀ k : Nat, ∃ r : Nat, k ≤ (votersFor (votesOf (World.recv r)) block).length) :
+    (votesOf : List Msg → List Vote)
+    (hvotesOf : ∀ {m₁ m₂ : List Msg}, (∀ x ∈ m₁, x ∈ m₂) → ∀ v ∈ votesOf m₁, v ∈ votesOf m₂)
+    (cfg : Finality.Config) (block : BlockId)
+    (hsent : ∃ r, cfg.threshold ≤ (votersFor (votesOf (World.sent r)) block).length) :
     ∃ (r : Nat), committedByQuorum votesOf r cfg block := by
-  -- the partial-synchrony oracle law, fed the productivity precondition, gives a round at
-  -- which a quorum has formed; unfold `committedByQuorum` to expose it IS that quorum.
-  obtain ⟨r, hq⟩ := World.gst_liveness (Msg := Msg) votesOf cfg block hprod
+  obtain ⟨r, hq⟩ := quorum_received_of_partialSynchrony World.sent World.recv
+    (World.gst_delivery (Msg := Msg)) votesOf hvotesOf cfg block hsent
   refine ⟨r, ?_⟩
-  -- `hq : cfg.threshold ≤ (votersFor …).length` (the field's inline conclusion); package it
-  -- back into `committedByQuorum`'s `quorumReached … = true`.
   show committedByQuorum votesOf r cfg block
   unfold committedByQuorum
-  simp only [quorumReached, votersFor, decide_eq_true_eq]
+  simp only [quorumReached, decide_eq_true_eq]
   exact hq
 
 /-! ## A reference (test) `World` — the Lean-as-host realization.
@@ -386,16 +425,8 @@ instance : World M where
       rw [List.take_take, hmin]
     rw [this]
     exact List.take_sublist r (fixedVotes.take r')
-  gst_liveness := by
-    -- The reference network discharges the GST law from the productivity premise alone: feed
-    -- `hprod` the threshold to obtain a round whose delivered votes already meet it. (This is
-    -- the honest shape — the trivial test net supplies no *unconditional* liveness; it
-    -- relays the partial-synchrony precondition, exactly as a real GST runtime would.)
-    intro votesOf cfg block hprod
-    obtain ⟨r, hr⟩ := hprod cfg.threshold
-    -- the field's conclusion is the inline `cfg.threshold ≤ …length`, exactly what `hprod`
-    -- at `k = cfg.threshold` supplies.
-    exact ⟨r, hr⟩
+  sent := fun r => fixedVotes.take r
+  gst_delivery := partialSynchrony_self _
 
 /-- The reference world is lawful and the parametric defs compute: by round 3 the fixed
 schedule has delivered 3 distinct voters (0,1,2) for block 7, meeting a threshold of 3. -/
@@ -403,14 +434,61 @@ example :
     quorumReached ((World.recv (Msg := M) 3)) ⟨3, 0, 3⟩ 7 = true := by
   decide
 
+/-- The reference quorum config: `n = 3`, `f = 0`, threshold `3`. -/
+def cfg3 : Finality.Config := ⟨3, 0, 3⟩
+
+/-- **Satisfying pole — liveness follows.** On the reference world (partially synchronous by
+`partialSynchrony_self`), three distinct voters have sent a vote for block `7` by round `3`, and
+`liveness_after_gst` concludes a committed round. Derived through the theorem, not by evaluation
+of the conclusion. -/
+theorem reference_liveness :
+    ∃ r, committedByQuorum (Msg := M) id r cfg3 7 :=
+  liveness_after_gst (Msg := M) id (fun h v hv => h v hv) cfg3 7 ⟨3, by decide⟩
+
+/-- The adversarial send log: every vote of `fixedVotes` is broadcast at round 0. -/
+def silentSent : Nat → List M := fun _ => fixedVotes
+
+/-- The adversarial receive log: nothing is ever delivered. -/
+def silentRecv : Nat → List M := fun _ => []
+
+/-- The adversarial logs meet the honest-sending premise: three distinct voters sent for `7`. -/
+theorem silent_sends_quorum :
+    ∃ r, cfg3.threshold ≤ (votersFor (id (silentSent r)) 7).length :=
+  ⟨0, by decide⟩
+
+/-- The adversarial receive log satisfies the other network law, `recv_mono`. -/
+theorem silent_recv_mono {r r' : Nat} (_ : r ≤ r') :
+    List.Sublist (silentRecv r) (silentRecv r') :=
+  List.Sublist.slnil
+
+/-- **Refuting pole — the law fails.** The adversarial logs are not partially synchronous. -/
+theorem silent_not_partialSynchrony : ¬ PartialSynchrony silentSent silentRecv := by
+  rintro ⟨gst, Δ, h⟩
+  exact absurd (h 0 ⟨0, 7⟩ (by decide)) (by simp [silentRecv])
+
+/-- **Refuting pole — liveness fails.** On the adversarial logs no round ever receives a
+quorum, although the sending premise holds: without `gst_delivery`, liveness is not derivable. -/
+theorem silent_no_liveness :
+    ¬ ∃ r, cfg3.threshold ≤ (votersFor (id (silentRecv r)) 7).length := by
+  rintro ⟨r, h⟩
+  simp [silentRecv, votersFor, cfg3] at h
+
 end Reference
 
 /-! ## Axiom hygiene.
 
-`quorum_intersection_safety` is a real pigeonhole proof; `liveness_after_gst` reduces to
-`World.gst_liveness` (a class field / hypothesis, not an `axiom`). Neither pulls in
+`quorum_intersection_safety` is a real pigeonhole proof; `liveness_after_gst` is derived from
+`World.gst_delivery` (a class field / hypothesis, not an `axiom`) plus the sending premise. Neither pulls in
 a faked-green axiom — `collectAxioms` sees only the three standard kernel axioms. -/
 #assert_axioms quorum_intersection_safety
 #assert_axioms liveness_after_gst
+#assert_axioms partialSynchrony_self
+#assert_axioms not_partialSynchrony_silent
+#assert_axioms votersFor_length_le_of_subset
+#assert_axioms quorum_received_of_partialSynchrony
+#assert_axioms Reference.reference_liveness
+#assert_axioms Reference.silent_sends_quorum
+#assert_axioms Reference.silent_not_partialSynchrony
+#assert_axioms Reference.silent_no_liveness
 
 end Dregg2.World
