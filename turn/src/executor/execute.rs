@@ -18,16 +18,18 @@ use super::*;
 /// hypotheses hold on the deployed chain, where genesis always configures
 /// the well).
 ///
-/// THE FEE LOOP (revolving fund): on devnet the fee well POINTS AT the faucet
-/// cell (genesis-less backfill at `node/src/lib.rs`, and `fee_well: faucet_id`
-/// in `node/src/genesis.rs`). So the `fee - delivered` credit here recirculates
-/// straight back into the pool the faucet pays out of — closing the loop that
-/// otherwise drained the faucet monotonically. NO fee is zeroed: the debit +
-/// budget gate + faucet 1/min rate-limit remain the oversight leash.
+/// THE FEE LOOP (revolving fund): a genesis-less devnet node points the fee
+/// well at the faucet cell (`node/src/lib.rs`, only when that cell is in the
+/// ledger), so the `fee - delivered` credit here recirculates into the pool the
+/// faucet pays out of instead of burning.
 ///
-/// With no fee well configured the undelivered remainder is burned — the legacy
-/// pre-epoch semantics, kept only for well-less tests (every deployed boot mode
-/// now configures the well, so this fallback is test-only).
+/// With no fee well configured the undelivered remainder is burned (the
+/// well-less executor that tests build; a node that cannot set a well says so
+/// at boot). A well that names a cell absent from the ledger, or a credit that
+/// fails because the well's balance would overflow, also burns it, and each is
+/// logged at `error!`: both break the zero-sum the epoch §5 books depend on
+/// while the operator believes a well is configured. The log does not refuse
+/// the turn; the fee is already debited and the commit semantics are unchanged.
 fn distribute_fee_shares(
     ledger: &mut Ledger,
     proposer: Option<&CellId>,
@@ -59,9 +61,25 @@ fn distribute_fee_shares(
     }
     // The move that closes the books: whatever was not delivered above goes
     // to the fee well (fee - delivered ≥ fee*2/10 by construction).
+    let remainder = fee - delivered;
     if let Some(wid) = fee_well {
-        if let Some(w) = ledger.get_mut(wid) {
-            let _ = w.state.credit_balance(fee - delivered);
+        match ledger.get_mut(wid) {
+            Some(w) => {
+                if !w.state.credit_balance(remainder) {
+                    tracing::error!(
+                        fee_well = %wid,
+                        remainder,
+                        "fee well credit failed (balance overflow): the fee remainder BURNS"
+                    );
+                }
+            }
+            None => {
+                tracing::error!(
+                    fee_well = %wid,
+                    remainder,
+                    "fee well cell is not in the ledger: the fee remainder BURNS"
+                );
+            }
         }
     }
 }

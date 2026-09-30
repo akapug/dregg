@@ -2547,26 +2547,33 @@ async fn run_node(
                 "starbridge devnet backfill seeding complete (default cell set)"
             );
         }
-        // THE FEE LOOP (revolving fund): a genesis-less devnet cave node never
-        // hits the `genesis.json`-exists branch above (lib.rs:1229-1236), so
-        // `s.fee_well` is still None here — which means every per-turn fee
-        // remainder BURNS (execute.rs distribute_fee_shares fallback), and the
-        // faucet, a pure payer-out, drains monotonically (~800-turn runway →
-        // "insufficient balance ... need 1254" → signing DEGRADED). Point the
-        // fee well at the FAUCET cell so each committed turn's fee move
-        // recirculates into the exact pool the faucet pays out of: the
-        // {agents + faucet} value set is now closed (no external sink), payouts
-        // out are offset by fees in, and the coordination-turn class stays
-        // fee-bearing (the debit + budget gate + 1/min faucet rate-limit remain
-        // the oversight leash — no fee is zeroed). Idempotent: only sets the
-        // well when unset, so a genesis-configured well is never overwritten.
+        // THE FEE LOOP (revolving fund): a data dir with no `genesis.json`
+        // never reaches the genesis branch above, so `s.fee_well` is still
+        // None here and `distribute_fee_shares` would burn every per-turn fee
+        // remainder while the faucet, a pure payer-out, drains monotonically.
+        // Point the fee well at the FAUCET cell so each committed turn's fee
+        // remainder recirculates into the pool the faucet pays out of.
+        //
+        // Two guards. A genesis-configured well is never overwritten. And the
+        // well is set only when the faucet cell is actually in the ledger: a
+        // well that names an absent cell burns the fee exactly as no well
+        // does, so pointing at one would make the log below assert the
+        // opposite of what happens. Such a data dir gets a warning instead.
         if s.fee_well.is_none() {
-            let faucet_cell_id = crate::api::faucet_cell_id();
-            info!(
-                fee_well = %faucet_cell_id,
-                "fee loop: genesis-less devnet fee well pointed at the faucet cell (recirculate, not burn)"
-            );
-            s.fee_well = Some(faucet_cell_id);
+            let faucet_cell_id = crate::genesis::devnet_faucet_cell_id();
+            if s.ledger.get(&faucet_cell_id).is_some() {
+                info!(
+                    fee_well = %faucet_cell_id,
+                    "fee loop: genesis-less devnet fee well pointed at the faucet cell (recirculate, not burn)"
+                );
+                s.fee_well = Some(faucet_cell_id);
+            } else {
+                warn!(
+                    faucet_cell = %faucet_cell_id,
+                    "fee loop: the faucet cell is not in this node's ledger, so no fee well is set \
+                     and every per-turn fee remainder will BURN"
+                );
+            }
         }
     }
 
