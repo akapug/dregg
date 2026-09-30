@@ -387,6 +387,7 @@ impl<'rt> McpToolHost<'rt> {
                     receipt,
                     receipts,
                     script_error: outcome.js_error,
+                    tool_error: None,
                     sandbox_verdict: None,
                     fires_committed: outcome.fires_committed,
                 }
@@ -482,6 +483,7 @@ impl<'rt> McpToolHost<'rt> {
                     receipt,
                     receipts,
                     script_error: outcome.js_error,
+                    tool_error: None,
                     sandbox_verdict: None,
                     fires_committed: outcome.fires_committed,
                 }
