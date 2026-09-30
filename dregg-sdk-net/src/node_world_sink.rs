@@ -224,6 +224,18 @@ impl NodeHttpClient {
             .map_err(|why| SdkError::Wire(format!("{url}: {why}")))
     }
 
+    /// `GET /status` → `latest_height`, the node's attested height: the base a
+    /// client adds its validity window to when it stamps `Turn::valid_until`,
+    /// which is a block height. A missing or non-integer field is an error.
+    pub async fn fetch_latest_height(&self) -> Result<u64, SdkError> {
+        let url = format!("{}/status", self.base_url);
+        let status: serde_json::Value = self.get_json(&url).await?;
+        status
+            .get("latest_height")
+            .and_then(|h| h.as_u64())
+            .ok_or_else(|| SdkError::Wire(format!("{url} carries no unsigned latest_height")))
+    }
+
     /// `GET /api/cell/{id}` → the cell's current nonce (the executor rejects a
     /// stale nonce, so a fire must use this fresh value).
     pub async fn fetch_cell_nonce(&self, cell: &CellId) -> Result<u64, SdkError> {

@@ -77,6 +77,11 @@ dregg-intent = { path = "../intent" }
 # `cfg(test)` installs are inert when they are compiled as dependencies here. Dev-only, and
 # a binary that never calls `install()` links nothing extra. See `dregg-pq-testkit`'s docs.
 dregg-pq-testkit = { path = "../dregg-pq-testkit" }
+# `demand_lean`: the dregg-client-sign composed arms panic, rather than pass, when the
+# verified ML-DSA cores they sign with are absent and DREGG_TEST_REQUIRE_LEAN is armed.
+dregg-lean-ffi = { path = "../dregg-lean-ffi" }
+# The composed arms' temp DREGG_HOME, removed when the arm ends.
+tempfile = { workspace = true }
 
 [[example]]
 name = "reactive_agent"

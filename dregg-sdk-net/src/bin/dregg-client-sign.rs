@@ -30,10 +30,11 @@
 //!          action. Exit 0 only when a receipt for EXACTLY this turn hash is
 //!          on the node's chain at an accepted finality.
 //!
-//! Env (flags win): DREGG_NODE_URL (default http://127.0.0.1:8899),
-//! DREGG_API_TOKEN (bearer for the protected ingress) or DREGG_NODE_PASSPHRASE
-//! (unlock fallback), DREGG_PROFILE / the profiles `ACTIVE` file (the SDK's
-//! own active-profile convention) when `--profile` is not given.
+//! Env (flags win): DREGG_NODE_URL (default http://127.0.0.1:8899); the bearer
+//! for the protected ingress from `--token-file` / DREGG_API_TOKEN_FILE (a file
+//! holding it) or DREGG_API_TOKEN, else DREGG_NODE_PASSPHRASE (unlock fallback),
+//! never from argv; DREGG_PROFILE / the profiles `ACTIVE` file (the SDK's own
+//! active-profile convention) when `--profile` is not given.
 
 use dregg_sdk::AgentCipherclerk;
 use dregg_sdk::profiles;
@@ -57,6 +58,18 @@ const LANE_BYTES: usize = 8;
 const FAUCET_MAX_GRANT: u64 = 10_000;
 /// One refill must cover a bounded burst inside the faucet's 60-second per-cell window.
 const SEND_FUNDING_HORIZON: u64 = 6;
+/// How many block heights past the node's `latest_height` a signed turn stays
+/// admissible. `Turn::valid_until` is a block HEIGHT (the unit the verified
+/// kernel reads, `Exec/Admission.lean`), so both verbs stamp
+/// `latest_height + TURN_VALID_FOR_HEIGHTS`: a transfer refused for a reason
+/// that leaves the nonce and head unchanged cannot be replayed once the node
+/// has moved this far on. The node's height advances on turn-bearing finality,
+/// so the window is counted in committed heights, not wall-clock time.
+const TURN_VALID_FOR_HEIGHTS: u64 = 64;
+/// The exit status when this build's linked archive does not export the
+/// verified ML-DSA sign or keygen core, so no turn can be signed or identity
+/// created. Distinct from `1` (a refusal or UNKNOWN) and `2` (usage).
+const EXIT_NO_VERIFIED_PQ_CORE: i32 = 3;
 
 fn pack_payload(payload: &[u8]) -> Vec<[u8; 32]> {
     payload
@@ -124,6 +137,7 @@ fn build_transfer_turn(
     amount: u64,
     federation_id: &[u8; 32],
     nonce: u64,
+    valid_until: i64,
 ) -> Turn {
     let effect = Effect::Transfer { from, to, amount };
     let action = clerk.sign_action_hybrid(
@@ -135,7 +149,7 @@ fn build_transfer_turn(
     turn.agent = from;
     turn.nonce = nonce;
     turn.memo = None;
-    turn.valid_until = Some(i64::MAX / 2);
+    turn.valid_until = Some(valid_until);
     turn
 }
 
@@ -159,12 +173,13 @@ fn chat_turn(
     action: Action,
     nonce: u64,
     payload: &str,
+    valid_until: i64,
 ) -> Turn {
     let mut turn = clerk.make_turn_with_actions(vec![action]);
     turn.agent = cell;
     turn.nonce = nonce;
     turn.memo = Some(payload.to_string());
-    turn.valid_until = Some(i64::MAX / 2);
+    turn.valid_until = Some(valid_until);
     turn
 }
 
@@ -175,9 +190,10 @@ fn build_chat_turn(
     payload: &str,
     federation_id: &[u8; 32],
     nonce: u64,
+    valid_until: i64,
 ) -> Turn {
     let action = clerk.sign_action_hybrid(chat_action(cell, topic, payload), federation_id, nonce);
-    chat_turn(clerk, cell, action, nonce, payload)
+    chat_turn(clerk, cell, action, nonce, payload, valid_until)
 }
 
 /// The fee `build_chat_turn` would declare, computed WITHOUT signing.
@@ -185,8 +201,8 @@ fn build_chat_turn(
 /// `TurnExecutor::estimate_cost` reads the coordination class (effects and
 /// `balance_change`), then per action `action_base`, the authorization
 /// VARIANT (`HybridSignature` costs `2 * signature_verify`) and each effect's
-/// cost. It never reads the nonce, the federation id, the memo or any
-/// signature byte. So a `HybridSignature` with empty placeholder halves
+/// cost. It never reads the nonce, the federation id, the memo, the deadline or
+/// any signature byte. So a `HybridSignature` with empty placeholder halves
 /// estimates exactly what the signed turn estimates, at any nonce. The test
 /// `unsigned_fee_estimate_equals_the_signed_turns_fee` holds that equality
 /// against a really signed turn, so a future fee rule that reads signature
@@ -206,7 +222,7 @@ fn chat_fee(
         },
         ..chat_action(cell, topic, payload)
     };
-    TurnExecutor::new(costs).estimate_cost(&chat_turn(clerk, cell, placeholder, 0, payload))
+    TurnExecutor::new(costs).estimate_cost(&chat_turn(clerk, cell, placeholder, 0, payload, 0))
 }
 
 /// The cost model the CLIENT estimates its declared `turn.fee` against: the
@@ -287,27 +303,73 @@ fn cores_are_healthy(
         && matches!(keygen, K::Installed | K::AlreadyInstalled)
 }
 
-/// EVERY EXIT AFTER THE SUBMISSION MAY HAVE REACHED THE NODE, in one shape.
+/// Which verb's turn went out, for the one thing a blind resubmission repeats.
+#[derive(Clone, Copy, Debug)]
+enum Submitted {
+    /// A transfer: a resubmission moves `amount` a second time.
+    Transfer { amount: u64 },
+    /// A send: it moves no value, but a resubmission posts the event again and
+    /// pays its fee again.
+    Send,
+}
+
+impl Submitted {
+    fn word(self) -> &'static str {
+        match self {
+            Submitted::Transfer { .. } => "transfer",
+            Submitted::Send => "send",
+        }
+    }
+
+    fn repeat(self) -> String {
+        match self {
+            Submitted::Transfer { amount } => format!("a second transfer moves {amount} again"),
+            Submitted::Send => {
+                "a second send posts the event again and pays its fee again".to_string()
+            }
+        }
+    }
+}
+
+/// EVERY EXIT AFTER THE SUBMISSION MAY HAVE REACHED THE NODE, in one shape,
+/// for both verbs.
 ///
 /// A nonzero exit is not proof of refusal. Once the POST has left this
 /// process, an HTTP status, a body this reader cannot parse, a missing or
-/// unbindable hash, a dropped connection and a failed receipt query all say
-/// the same thing about the money: UNKNOWN. A caller that reads any of them as
-/// a refusal resubmits, and a resubmission moves the amount a second time.
+/// unbindable hash, a dropped connection, a failed receipt query and a
+/// confirmation timeout all say the same thing: UNKNOWN. A caller that reads
+/// any of them as a refusal resubmits, and a resubmission repeats the turn: a
+/// transfer moves the amount a second time, a send pays a second fee.
 ///
 /// A refusal DECIDED BEFORE THE SUBMISSION — bad flags, a self-transfer, a
 /// source that cannot fund the turn — stays an ordinary error, because nothing
 /// was attempted and there is nothing to be uncertain about.
 fn unknown_after_submit(
     what: String,
-    amount: u64,
+    submitted: Submitted,
     confirm_url: &str,
 ) -> Box<dyn std::error::Error> {
     err(format!(
-        "{what}. This is UNKNOWN, not a refusal: the transfer may have \
-         committed. Do NOT resubmit — a second transfer moves {amount} again. \
-         Re-read the node with `curl '{confirm_url}'` and decide from that."
+        "{what}. This is UNKNOWN, not a refusal: the {} may have committed. \
+         Do NOT resubmit — {}. Re-read the node with `curl '{confirm_url}'` and \
+         decide from that.",
+        submitted.word(),
+        submitted.repeat()
     ))
+}
+
+/// `valid_until` for a turn signed now: the node's `latest_height` plus
+/// [`TURN_VALID_FOR_HEIGHTS`], read from `/status` just before signing.
+async fn turn_deadline(node: &NodeHttpClient) -> Result<i64> {
+    let height = node
+        .fetch_latest_height()
+        .await
+        .map_err(|e| err(format!("read the node's latest height for the turn deadline: {e}")))?;
+    let deadline = height
+        .checked_add(TURN_VALID_FOR_HEIGHTS)
+        .and_then(|h| i64::try_from(h).ok())
+        .ok_or_else(|| err(format!("latest_height {height} leaves no room for a deadline")))?;
+    Ok(deadline)
 }
 
 /// What a submit response says about the turn THIS process signed.
@@ -532,22 +594,42 @@ async fn get_json(http: &reqwest::Client, url: &str) -> Result<serde_json::Value
         .map_err(|e| err(format!("parse {url}: {e}")))
 }
 
-/// The bearer for the node's protected write surface: `--token` /
-/// `DREGG_API_TOKEN` directly, else unlock with `DREGG_NODE_PASSPHRASE`
+/// Read a bearer from `path`: the file's contents, trimmed. An unreadable or
+/// empty file is an error, never a fall-through to another source.
+fn read_token_file(path: &str) -> Result<String> {
+    let raw = std::fs::read_to_string(path)
+        .map_err(|e| err(format!("read the bearer token file {path}: {e}")))?;
+    let token = raw.trim();
+    if token.is_empty() {
+        return Err(err(format!("the bearer token file {path} is empty")));
+    }
+    Ok(token.to_string())
+}
+
+/// The bearer for the node's protected write surface. It never comes from
+/// argv, where `ps`, `/proc/*/cmdline` and shell history would show it: from
+/// the file named by `--token-file` or `DREGG_API_TOKEN_FILE`, else
+/// `DREGG_API_TOKEN`, else unlock with `DREGG_NODE_PASSPHRASE`
 /// (`POST /api/cipherclerk/unlock` — never a blind `.json()`: the node's
 /// rate-limited 429 carries an empty body).
 async fn ensure_token(
     http: &reqwest::Client,
     node_url: &str,
-    token_flag: Option<String>,
+    token_file: Option<&str>,
 ) -> Result<String> {
-    if let Some(t) = token_flag.or_else(|| env("DREGG_API_TOKEN")) {
+    if let Some(path) = token_file
+        .map(str::to_string)
+        .or_else(|| env("DREGG_API_TOKEN_FILE"))
+    {
+        return read_token_file(&path);
+    }
+    if let Some(t) = env("DREGG_API_TOKEN") {
         return Ok(t);
     }
     let passphrase = env("DREGG_NODE_PASSPHRASE").ok_or_else(|| {
         err(
-            "the node's /turns/submit is bearer-protected: set DREGG_API_TOKEN \
-             (or --token), or DREGG_NODE_PASSPHRASE to unlock"
+            "the node's /turns/submit is bearer-protected: pass --token-file, or set \
+             DREGG_API_TOKEN_FILE or DREGG_API_TOKEN, or DREGG_NODE_PASSPHRASE to unlock"
                 .to_string(),
         )
     })?;
@@ -778,7 +860,9 @@ fn resolve_clerk(profile_flag: Option<&str>, create: bool) -> Result<(String, Ag
 struct Flags {
     node_url: String,
     profile: Option<String>,
-    token: Option<String>,
+    /// A file holding the bearer (`--token-file`). The bearer itself is never
+    /// taken from argv.
+    token_file: Option<String>,
     topic: String,
     to: Option<String>,
     fund: u64,
@@ -791,7 +875,7 @@ fn parse_flags(argv: Vec<String>) -> Result<Flags> {
     let mut f = Flags {
         node_url: node_url_default(),
         profile: None,
-        token: None,
+        token_file: None,
         topic: "client-sign".to_string(),
         to: None,
         fund: 5000,
@@ -808,7 +892,17 @@ fn parse_flags(argv: Vec<String>) -> Result<Flags> {
         match flag.as_str() {
             "--node-url" => f.node_url = val("--node-url")?,
             "--profile" => f.profile = Some(val("--profile")?),
-            "--token" => f.token = Some(val("--token")?),
+            "--token-file" => f.token_file = Some(val("--token-file")?),
+            // Refused rather than unknown: an unknown word joins `send`'s
+            // payload, which would post the bearer on-chain. Its value is not
+            // read, so it is not echoed.
+            "--token" => {
+                return Err(err(
+                    "--token is not accepted: a bearer on argv is visible in ps and shell \
+                     history. Use --token-file, DREGG_API_TOKEN_FILE or DREGG_API_TOKEN"
+                        .to_string(),
+                ));
+            }
             "--topic" => f.topic = val("--topic")?,
             "--to" => f.to = Some(val("--to")?),
             "--fund" => {
@@ -838,17 +932,18 @@ fn parse_flags(argv: Vec<String>) -> Result<Flags> {
 const USAGE: &str = "dregg-client-sign: commit CLIENT-SIGNED turns to a dregg node as a named profile\n\n\
   join [--profile P] [--node-url U] [--fund N]\n\
        ensure the profile identity + a cell funded to at least N computrons\n\
-  send [--profile P] [--node-url U] [--token T] [--fund N] [--topic S] PAYLOAD...\n\
+  send [--profile P] [--node-url U] [--token-file F] [--fund N] [--topic S] PAYLOAD...\n\
        ensure at least N computrons, then commit ONE hybrid-signed EmitEvent; payload\n\
        rides in the signed turn (memo + event data words)\n\
-  transfer --to CELL_HEX --amount N [--profile P] [--node-url U] [--token T]\n\
+  transfer --to CELL_HEX --amount N [--profile P] [--node-url U] [--token-file F]\n\
            [--fund N] [--accept-tentative]\n\
        move N computrons from the profile's own cell to another cell. Exit 0 only\n\
        when a receipt for EXACTLY this turn hash is on the node's chain; the\n\
        printed `committed` is true only then. A solo-mode devnet marks every\n\
        receipt `tentative`, so accepting that level needs --accept-tentative\n\n\
-env (flags win): DREGG_NODE_URL, DREGG_API_TOKEN (or DREGG_NODE_PASSPHRASE\n\
-to unlock), DREGG_PROFILE (the SDK's active-profile convention)";
+env (flags win): DREGG_NODE_URL, DREGG_API_TOKEN_FILE or DREGG_API_TOKEN (or\n\
+DREGG_NODE_PASSPHRASE to unlock), DREGG_PROFILE (the SDK's active-profile convention).\n\
+Every turn is valid until the node's latest_height + 64.";
 
 async fn cmd_join(f: Flags) -> Result<()> {
     let http = reqwest::Client::new();
@@ -966,7 +1061,16 @@ async fn cmd_send(f: Flags) -> Result<()> {
         .fetch_cell_nonce(&cell)
         .await
         .map_err(|e| err(format!("fetch own-cell nonce after funding: {e}")))?;
-    let mut turn = build_chat_turn(&clerk, cell, &f.topic, &payload, &federation_id, nonce);
+    let valid_until = turn_deadline(&node).await?;
+    let mut turn = build_chat_turn(
+        &clerk,
+        cell,
+        &f.topic,
+        &payload,
+        &federation_id,
+        nonce,
+        valid_until,
+    );
     turn.fee = TurnExecutor::new(costs).estimate_cost(&turn);
     if turn.fee > funding.balance {
         return Err(err(format!(
@@ -983,7 +1087,7 @@ async fn cmd_send(f: Flags) -> Result<()> {
         .fetch_agent_receipt_head(&cell)
         .await
         .map_err(|e| err(format!("fetch own-cell receipt head after funding: {e}")))?;
-    let bearer = ensure_token(&http, &f.node_url, f.token.clone()).await?;
+    let bearer = ensure_token(&http, &f.node_url, f.token_file.as_deref()).await?;
 
     let signed = clerk.sign_turn(&turn);
     let bytes =
@@ -1002,7 +1106,14 @@ async fn cmd_send(f: Flags) -> Result<()> {
     // defect made another reachable, which is the cost of fixing an instance
     // and leaving its sibling.
     let turn_hash = hex::encode(signed.turn.hash());
+    let confirm_url = format!(
+        "{}/api/starbridge/receipts?limit=2&turn_hash={turn_hash}",
+        f.node_url
+    );
 
+    // EVERY EXIT FROM HERE ON IS UNKNOWN except a refusal that names this turn,
+    // as in `cmd_transfer`. A send moves no value, but it pays a fee, so a blind
+    // resend pays twice.
     let resp = http
         .post(format!("{}/turns/submit", f.node_url))
         .header("Content-Type", "application/octet-stream")
@@ -1010,28 +1121,31 @@ async fn cmd_send(f: Flags) -> Result<()> {
         .body(bytes)
         .send()
         .await
-        .map_err(|e| err(format!("POST /turns/submit: {e}")))?;
+        .map_err(|e| {
+            unknown_after_submit(format!("POST /turns/submit: {e}"), Submitted::Send, &confirm_url)
+        })?;
     let status = resp.status();
     if !status.is_success() {
-        return Err(err(format!("/turns/submit returned {status}")));
+        return Err(unknown_after_submit(
+            format!("/turns/submit returned {status}"),
+            Submitted::Send,
+            &confirm_url,
+        ));
     }
-    let verdict: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| err(format!("parse submit response: {e}")))?;
+    let verdict: serde_json::Value = resp.json().await.map_err(|e| {
+        unknown_after_submit(
+            format!("cannot parse the submit response: {e}"),
+            Submitted::Send,
+            &confirm_url,
+        )
+    })?;
     match bind_admission("send", &turn_hash, &verdict) {
         Admission::Took => {}
         Admission::Refused(why) => {
             return Err(err(format!("node refused the turn: {why}")));
         }
         Admission::Unknown(why) => {
-            return Err(err(format!(
-                "{why}. This is UNKNOWN, not a refusal: the turn may have \
-                 committed. Re-read the node with \
-                 `curl '{}/api/starbridge/receipts?limit=2&turn_hash={turn_hash}'` \
-                 and decide from that.",
-                f.node_url
-            )));
+            return Err(unknown_after_submit(why, Submitted::Send, &confirm_url));
         }
     }
     eprintln!("[client-sign] turn accepted: {turn_hash}; awaiting receipt...");
@@ -1050,17 +1164,16 @@ async fn cmd_send(f: Flags) -> Result<()> {
     // FINALITY IS REPORTED, NOT DECIDED, which is this verb's existing
     // contract and is deliberately unchanged: a solo-mode node marks every
     // committed receipt tentative, and an EmitEvent moves no balance.
-    let confirm_url = format!(
-        "{}/api/starbridge/receipts?limit=2&turn_hash={turn_hash}",
-        f.node_url
-    );
     for _ in 0..120 {
-        let receipts = get_json(&http, &confirm_url).await?;
+        let receipts = get_json(&http, &confirm_url)
+            .await
+            .map_err(|e| unknown_after_submit(format!("{e}"), Submitted::Send, &confirm_url))?;
         let found = exact_receipt(&turn_hash, &receipts).map_err(|why| {
-            err(format!(
-                "cannot tell whether turn {turn_hash} was receipted: {why}. \
-                 This is UNKNOWN, not a refusal."
-            ))
+            unknown_after_submit(
+                format!("cannot tell whether turn {turn_hash} was receipted: {why}"),
+                Submitted::Send,
+                &confirm_url,
+            )
         })?;
         if let Some(r) = found {
             println!(
@@ -1087,9 +1200,11 @@ async fn cmd_send(f: Flags) -> Result<()> {
         }
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     }
-    Err(err(format!(
-        "turn {turn_hash} accepted but not receipted within 30s"
-    )))
+    Err(unknown_after_submit(
+        format!("turn {turn_hash} was admitted but not receipted within 30s"),
+        Submitted::Send,
+        &confirm_url,
+    ))
 }
 
 
@@ -1142,6 +1257,7 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
         .fetch_cell_nonce(&from)
         .await
         .map_err(|e| err(format!("fetch own-cell nonce for fee estimate: {e}")))?;
+    // The deadline is fixed per signed build; the estimate ignores it.
     let mut turn = build_transfer_turn(
         &clerk,
         from,
@@ -1149,6 +1265,7 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
         amount,
         &federation_id,
         estimate_nonce,
+        0,
     );
     let costs = fee_cost_model(&node).await?;
     turn.fee = TurnExecutor::new(costs.clone()).estimate_cost(&turn);
@@ -1179,7 +1296,8 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
         .fetch_cell_nonce(&from)
         .await
         .map_err(|e| err(format!("refetch own-cell nonce after funding: {e}")))?;
-    turn = build_transfer_turn(&clerk, from, to, amount, &federation_id, nonce);
+    let valid_until = turn_deadline(&node).await?;
+    turn = build_transfer_turn(&clerk, from, to, amount, &federation_id, nonce, valid_until);
     turn.fee = TurnExecutor::new(costs).estimate_cost(&turn);
     let needed = amount.checked_add(turn.fee).ok_or_else(|| {
         err(format!(
@@ -1198,7 +1316,7 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
         .fetch_agent_receipt_head(&from)
         .await
         .map_err(|e| err(format!("fetch source-cell receipt head after funding: {e}")))?;
-    let bearer = ensure_token(&http, &f.node_url, f.token.clone()).await?;
+    let bearer = ensure_token(&http, &f.node_url, f.token_file.as_deref()).await?;
 
     let signed = clerk.sign_turn(&turn);
     let bytes =
@@ -1228,16 +1346,16 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
         .map_err(|e| {
             // The bytes may have arrived and the ANSWER been lost. Ambiguous.
             unknown_after_submit(
-                format!("POST /turns/submit: {e}"), amount, &confirm_url)
+                format!("POST /turns/submit: {e}"), Submitted::Transfer { amount }, &confirm_url)
         })?;
     let status = resp.status();
     if !status.is_success() {
         return Err(unknown_after_submit(
-            format!("/turns/submit returned {status}"), amount, &confirm_url));
+            format!("/turns/submit returned {status}"), Submitted::Transfer { amount }, &confirm_url));
     }
     let verdict: serde_json::Value = resp.json().await.map_err(|e| {
         unknown_after_submit(
-            format!("cannot parse the submit response: {e}"), amount, &confirm_url)
+            format!("cannot parse the submit response: {e}"), Submitted::Transfer { amount }, &confirm_url)
     })?;
     // THE LOCAL HASH IS WHAT THE RESPONSE IS CHECKED AGAINST, never the other
     // way round. This is the only place the submit answer is read.
@@ -1247,7 +1365,7 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
             return Err(err(format!("node refused the transfer: {why}")));
         }
         Admission::Unknown(why) => {
-            return Err(unknown_after_submit(why, amount, &confirm_url));
+            return Err(unknown_after_submit(why, Submitted::Transfer { amount }, &confirm_url));
         }
     }
     eprintln!("[client-sign] transfer admitted: {turn_hash}; confirming commitment...");
@@ -1261,7 +1379,7 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
     let mut last_below: Option<String> = None;
     for _ in 0..120 {
         let body = get_json(&http, &confirm_url).await.map_err(|e| {
-            unknown_after_submit(format!("{e}"), amount, &confirm_url)
+            unknown_after_submit(format!("{e}"), Submitted::Transfer { amount }, &confirm_url)
         })?;
         match classify_commitment(&turn_hash, &body, f.accept_tentative) {
             Commitment::Committed {
@@ -1303,7 +1421,7 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
                 return Err(unknown_after_submit(
                     format!("cannot tell whether transfer {turn_hash} \
                              committed: {why}"),
-                    amount, &confirm_url));
+                    Submitted::Transfer { amount }, &confirm_url));
             }
         }
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
@@ -1318,7 +1436,7 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
     Err(unknown_after_submit(
         format!("transfer {turn_hash} was admitted but not confirmed committed \
                  within 30s.{seen}"),
-        amount, &confirm_url))
+        Submitted::Transfer { amount }, &confirm_url))
 }
 
 #[tokio::main]
@@ -1349,6 +1467,18 @@ async fn main() {
     let cmd = argv.remove(0);
     let run = async {
         let flags = parse_flags(argv)?;
+        // EVERY VERB SIGNS OR CREATES A KEY, so a build whose archive does not
+        // export the verified cores stops here with a named error instead of
+        // dying on dregg-pq's audit-gate SIGABRT at the first sign or keygen.
+        if !cores_are_healthy(sign_core, keygen_core) {
+            eprintln!(
+                "[client-sign] error: this build's linked Lean archive does not export \
+                 the verified ML-DSA cores (sign {sign_core:?}, keygen {keygen_core:?}), \
+                 so it can neither sign a turn nor create an identity. Rebuild against \
+                 an archive that exports them (bash scripts/fetch-lean-seed.sh)."
+            );
+            std::process::exit(EXIT_NO_VERIFIED_PQ_CORE);
+        }
         match cmd.as_str() {
             "join" => cmd_join(flags).await,
             "send" => cmd_send(flags).await,
@@ -1432,7 +1562,7 @@ mod tests {
                 let fee = chat_fee(&clerk, costs.clone(), cell, "helm.chat", payload);
                 for nonce in [0u64, 1, 41] {
                     let signed =
-                        build_chat_turn(&clerk, cell, "helm.chat", payload, &federation_id, nonce);
+                        build_chat_turn(&clerk, cell, "helm.chat", payload, &federation_id, nonce, 70);
                     assert!(matches!(
                         signed.call_forest.roots[0].action.authorization,
                         Authorization::HybridSignature { .. }
@@ -1466,17 +1596,26 @@ mod tests {
         let head = Some([4u8; 32]);
 
         // OLD: sign at the estimate nonce, estimate, then rebuild at the fresh nonce.
-        let mut old = build_chat_turn(&clerk, cell, "helm.chat", payload, &federation_id, estimate_nonce);
+        let deadline = 70;
+        let mut old = build_chat_turn(
+            &clerk,
+            cell,
+            "helm.chat",
+            payload,
+            &federation_id,
+            estimate_nonce,
+            deadline,
+        );
         old.fee = TurnExecutor::new(costs.clone()).estimate_cost(&old);
         let old_funding_fee = old.fee;
-        old = build_chat_turn(&clerk, cell, "helm.chat", payload, &federation_id, nonce);
+        old = build_chat_turn(&clerk, cell, "helm.chat", payload, &federation_id, nonce, deadline);
         old.fee = TurnExecutor::new(costs.clone()).estimate_cost(&old);
         old.previous_receipt_hash = head;
         let old_signed = postcard::to_stdvec(&clerk.sign_turn(&old)).unwrap();
 
         // NEW: unsigned estimate, then the one signed build at the fresh nonce.
         let new_funding_fee = chat_fee(&clerk, costs.clone(), cell, "helm.chat", payload);
-        let mut new = build_chat_turn(&clerk, cell, "helm.chat", payload, &federation_id, nonce);
+        let mut new = build_chat_turn(&clerk, cell, "helm.chat", payload, &federation_id, nonce, deadline);
         new.fee = TurnExecutor::new(costs).estimate_cost(&new);
         new.previous_receipt_hash = head;
         let new_signed = postcard::to_stdvec(&clerk.sign_turn(&new)).unwrap();
@@ -2110,14 +2249,59 @@ mod tests {
     fn every_post_submit_unknown_carries_the_reread_and_the_warning() {
         // The guidance is the product here: a nonzero exit that does not say
         // this is the exit a caller resubmits on.
+        let url = "http://node/api/starbridge/receipts?turn_hash=abc";
         let e = unknown_after_submit(
-            "the answer was lost".to_string(), 100,
-            "http://node/api/starbridge/receipts?turn_hash=abc");
+            "the answer was lost".to_string(),
+            Submitted::Transfer { amount: 100 },
+            url,
+        );
         let text = e.to_string();
         assert!(text.contains("UNKNOWN, not a refusal"), "{text}");
+        assert!(text.contains("the transfer may have committed"), "{text}");
         assert!(text.contains("Do NOT resubmit"), "{text}");
         assert!(text.contains("moves 100 again"), "{text}");
         assert!(text.contains("starbridge/receipts?turn_hash=abc"), "{text}");
+        // A send moves no value, and still must not be resent blind: it pays.
+        let text = unknown_after_submit("the answer was lost".to_string(), Submitted::Send, url)
+            .to_string();
+        assert!(text.contains("the send may have committed"), "{text}");
+        assert!(text.contains("Do NOT resubmit"), "{text}");
+        assert!(text.contains("pays its fee again"), "{text}");
+        assert!(text.contains("starbridge/receipts?turn_hash=abc"), "{text}");
+    }
+
+    #[test]
+    fn a_bearer_on_argv_is_refused_without_being_echoed() {
+        let argv = ["send", "--token", "s3cret-bearer", "hello"].map(String::from).to_vec();
+        let e = match parse_flags(argv[1..].to_vec()) {
+            Ok(_) => panic!("--token must be refused, not parsed"),
+            Err(e) => e.to_string(),
+        };
+        assert!(e.contains("--token-file"), "{e}");
+        assert!(!e.contains("s3cret-bearer"), "the refusal must not echo the bearer: {e}");
+    }
+
+    #[test]
+    fn the_bearer_file_is_read_trimmed_and_an_empty_one_is_an_error() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let good = dir.path().join("bearer");
+        std::fs::write(&good, "  abc123\n").unwrap();
+        assert_eq!(read_token_file(good.to_str().unwrap()).unwrap(), "abc123");
+        let empty = dir.path().join("empty");
+        std::fs::write(&empty, "\n").unwrap();
+        assert!(read_token_file(empty.to_str().unwrap()).is_err());
+        assert!(read_token_file(dir.path().join("absent").to_str().unwrap()).is_err());
+    }
+
+    #[test]
+    fn both_verbs_stamp_the_deadline_they_are_given() {
+        let clerk = AgentCipherclerk::from_seed([9u8; 64]);
+        let cell = clerk.cell_id("default");
+        let chat = build_chat_turn(&clerk, cell, "t", "p", &[1u8; 32], 0, 1_064);
+        assert_eq!(chat.valid_until, Some(1_064));
+        let transfer =
+            build_transfer_turn(&clerk, cell, CellId([7u8; 32]), 5, &[1u8; 32], 0, 1_064);
+        assert_eq!(transfer.valid_until, Some(1_064));
     }
 
     // ── the composed transfer path, against a real-executor node ────────────
@@ -2133,13 +2317,6 @@ mod tests {
     // answer. DREGG_HOME points the profile loader at a temp identity so no
     // real key is touched.
 
-    #[test]
-    fn probe_which_verified_pq_cores_this_build_exports() {
-        eprintln!("PQPROBE sign={:?}", dregg_sdk::install_verified_mldsa_sign_core_real());
-        eprintln!("PQPROBE verify={:?}", dregg_sdk::install_verified_mldsa_verify_core());
-        eprintln!("PQPROBE keygen={:?}", dregg_sdk::install_verified_mldsa_keygen_core_real());
-    }
-
     #[cfg(feature = "test-support")]
     mod composed {
         use dregg_sdk_net::test_support::{SubmitFault, TestNode};
@@ -2148,11 +2325,11 @@ mod tests {
 
         const PROFILE: &str = "hc2-transfer-test";
 
-        fn transfer_flags(url: &str, to: &str) -> Flags {
+        fn transfer_flags(url: &str, to: &str, token_file: &std::path::Path) -> Flags {
             Flags {
                 node_url: url.trim_end_matches('/').to_string(),
                 profile: Some(PROFILE.to_string()),
-                token: Some("test-bearer".to_string()),
+                token_file: Some(token_file.to_string_lossy().into_owned()),
                 topic: "client-sign".to_string(),
                 to: Some(to.to_string()),
                 fund: 5000,
@@ -2162,10 +2339,41 @@ mod tests {
             }
         }
 
+        /// The process-global env seams one composed arm sets, restored to what
+        /// they were when the arm ends, however it ends.
+        struct EnvRestore(Vec<(&'static str, Option<std::ffi::OsString>)>);
+
+        impl EnvRestore {
+            fn set(vars: &[(&'static str, &std::ffi::OsStr)]) -> Self {
+                let saved = vars.iter().map(|(k, _)| (*k, std::env::var_os(k))).collect();
+                for (k, v) in vars {
+                    // SAFETY: every arm that touches these variables holds `ENV`.
+                    unsafe { std::env::set_var(k, v) };
+                }
+                EnvRestore(saved)
+            }
+        }
+
+        impl Drop for EnvRestore {
+            fn drop(&mut self) {
+                for (k, v) in &self.0 {
+                    // SAFETY: still under `ENV`; the guard drops before the lock.
+                    unsafe {
+                        match v {
+                            Some(v) => std::env::set_var(k, v),
+                            None => std::env::remove_var(k),
+                        }
+                    }
+                }
+            }
+        }
+
         /// The whole composed run against a `TestNode` holding the profile's
         /// funded cell and an open destination, with the process-global env
-        /// seams held for the duration. `None` when this build cannot run the
-        /// composed path at all: see `skipped`.
+        /// seams held for the duration. `None` only when the verified cores are
+        /// absent AND the Lean gate was explicitly disarmed; armed (the
+        /// default, or `DREGG_TEST_REQUIRE_LEAN=1`), an absent core PANICS,
+        /// because an arm that returns early reports `ok` having run nothing.
         async fn run_transfer(fault: Option<SubmitFault>) -> Option<Result<()>> {
             // DREGG_HOME AND DREGG_PROFILE ARE PROCESS-GLOBAL, so these arms are
             // serialized: cargo runs tests on threads, and two of them setting
@@ -2177,19 +2385,23 @@ mod tests {
             let sign = dregg_sdk::install_verified_mldsa_sign_core_real();
             let keygen = dregg_sdk::install_verified_mldsa_keygen_core_real();
             dregg_sdk::install_verified_mldsa_verify_core();
-            if !cores_are_healthy(sign, keygen) {
+            if !dregg_lean_ffi::demand_lean(
+                cores_are_healthy(sign, keygen),
+                "the verified ML-DSA sign and keygen cores (the composed transfer arms sign a turn)",
+            ) {
                 return None;
             }
-            let home = std::env::temp_dir().join(format!(
-                "dregg-client-sign-test-{}",
-                std::process::id()
-            ));
-            let _ = std::fs::create_dir_all(home.join("profiles"));
-            unsafe {
-                std::env::set_var("DREGG_HOME", &home);
-                std::env::set_var("DREGG_PROFILE", PROFILE);
-            }
-            let _ = dregg_sdk::profiles::create(PROFILE);
+            // Declared before the env guard so the directory outlives the
+            // restore and is removed when the arm ends.
+            let home = tempfile::TempDir::new().expect("temp DREGG_HOME");
+            std::fs::create_dir_all(home.path().join("profiles")).expect("profiles dir");
+            let _env = EnvRestore::set(&[
+                ("DREGG_HOME", home.path().as_os_str()),
+                ("DREGG_PROFILE", std::ffi::OsStr::new(PROFILE)),
+            ]);
+            dregg_sdk::profiles::create(PROFILE).expect("create the temp profile");
+            let token_file = home.path().join("bearer");
+            std::fs::write(&token_file, "test-bearer\n").expect("write the bearer file");
             let clerk = dregg_sdk::profiles::load(PROFILE).expect("load the temp profile");
 
             let (mut node, _) = TestNode::genesis([0x11; 32], [0x22; 32], 0);
@@ -2200,18 +2412,20 @@ mod tests {
                 None => node,
             };
             let spawned = node.spawn().await;
-            let out = cmd_transfer(transfer_flags(spawned.base_url(), &hex::encode(to.0))).await;
+            let flags = transfer_flags(spawned.base_url(), &hex::encode(to.0), &token_file);
+            let out = cmd_transfer(flags).await;
             spawned.shutdown();
             Some(out)
         }
 
-        /// The one place the skip is announced, so a reader of the output sees
-        /// WHICH property went unexercised and why.
+        /// Reached only when the Lean gate was explicitly disarmed
+        /// (`DREGG_TEST_ALLOW_MISSING_LEAN=1` or `DREGG_TEST_REQUIRE_LEAN=0`) on a
+        /// build without the verified cores. Says which property went unexercised.
         fn skipped(what: &str) {
             eprintln!(
                 "SKIPPED {what}: this build's linked archive exports no verified \
-                 ML-DSA core, so signing a turn would abort the process. The arm \
-                 is unchanged and runs wherever the cores are exported."
+                 ML-DSA core and the Lean gate is disarmed, so this arm ran nothing. \
+                 Its `ok` is not evidence."
             );
         }
 

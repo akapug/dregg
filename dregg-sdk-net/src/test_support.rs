@@ -583,6 +583,9 @@ fn route(method: &str, path: &str, body: &[u8], node: &mut TestNode) -> (u16, se
             "executor_federation_id": dregg_types::hex_encode(&node.fed_id),
             "coordination_fee_exempt": node.coordination_fee_exempt,
             "coordination_exempt_ceiling": ComputronCosts::default().coordination_exempt_ceiling,
+            // One height per committed turn, as the node's attested height
+            // advances only on turn-bearing finality.
+            "latest_height": node.receipts.len() as u64,
         }),
         ("POST", "/api/faucet") => handle_faucet(node, body),
         ("GET", p) if p.starts_with("/api/cell/") => {
