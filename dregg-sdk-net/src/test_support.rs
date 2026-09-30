@@ -7,7 +7,12 @@
 //! [`node::api::post_submit_signed_turn`] does and serves — over a hand-rolled
 //! HTTP/1.1 loop — the routes [`crate::node_world_sink::NodeHttpClient`] and
 //! the client signer speak (`/turns/submit`, `/api/cells`, `/api/cell/{id}`,
-//! `/api/receipts`, `/status`, `/api/faucet`).
+//! `/api/receipts`, `/api/starbridge/receipts?turn_hash=`, `/status`,
+//! `/api/faucet`).
+//!
+//! A test that needs the node to answer WRONGLY (a lost answer, a foreign hash,
+//! a failed receipt query, a rate-limited grant already in flight) sets a
+//! [`SubmitFault`] or [`FaucetFault`]; every other answer stays the real one.
 //!
 //! The whole value is that the REFUSAL pole is a genuine authority rejection
 //! (the executor's gate), not a stub: an over-reaching effect is refused BY THE
@@ -72,6 +77,43 @@ pub struct TestNode {
     node_public_key: [u8; 32],
     /// Every `POST /api/faucet` body, in arrival order.
     faucet_requests: Vec<serde_json::Value>,
+    /// Whether the executor admits the fee-exempt coordination class, served
+    /// on `/status` as `coordination_fee_exempt`.
+    coordination_fee_exempt: bool,
+    submit_fault: Option<SubmitFault>,
+    faucet_fault: Option<FaucetFault>,
+    /// Faucet grants accepted while rate-limited, credited when the next
+    /// request arrives (the in-flight grant finalizing).
+    pending_grants: Vec<(CellId, u64)>,
+}
+
+/// A deliberately wrong answer from `POST /turns/submit` or the exact-hash
+/// receipt query, for tests of what a client does with an answer it cannot
+/// trust. The node's real admission is bypassed only where the fault says so.
+#[derive(Clone, Debug)]
+pub enum SubmitFault {
+    /// Accept without executing and name a DIFFERENT turn's hash: the newest
+    /// committed turn's, whose receipt is really on the chain, or a hash no
+    /// turn has when the chain is empty.
+    ReportsAnotherTurn,
+    /// Accept without executing and name no turn at all.
+    ReportsNoHash,
+    /// Answer `/turns/submit` with this HTTP status and no verdict.
+    HttpStatus(u16),
+    /// Refuse without executing, naming the submitted turn and this reason.
+    RefusesNamingTheTurn(String),
+    /// Execute the turn for real, then fail every exact-hash receipt query
+    /// with HTTP 500.
+    ReceiptQueryFails,
+}
+
+/// A deliberately awkward answer from `POST /api/faucet`.
+#[derive(Clone, Copy, Debug)]
+pub enum FaucetFault {
+    /// Answer a positive request "rate limited" as the node does when the
+    /// cell's grant for this window is already in flight, and credit that
+    /// grant when the next request (a client's balance poll) arrives.
+    RateLimitedWhileGrantInFlight,
 }
 
 impl TestNode {
@@ -91,6 +133,10 @@ impl TestNode {
             fed_id,
             node_public_key,
             faucet_requests: Vec::new(),
+            coordination_fee_exempt: false,
+            submit_fault: None,
+            faucet_fault: None,
+            pending_grants: Vec::new(),
         };
         let agent = node.seed_open_cell(agent_public_key, balance);
         (node, agent)
@@ -102,6 +148,26 @@ impl TestNode {
     /// `executor_federation_id` while still saying `"solo"`.
     pub fn with_configured_committee(mut self, federation_id: [u8; 32]) -> Self {
         self.fed_id = federation_id;
+        self
+    }
+
+    /// Turn on the fee-exempt coordination class: the executor admits a
+    /// `fee = 0` own-cell EmitEvent-only turn up to the default ceiling, and
+    /// `/status` says so.
+    pub fn with_coordination_fee_exempt(mut self) -> Self {
+        self.coordination_fee_exempt = true;
+        self
+    }
+
+    /// Answer `/turns/submit` (or the receipt query) wrongly, as `fault` says.
+    pub fn with_submit_fault(mut self, fault: SubmitFault) -> Self {
+        self.submit_fault = Some(fault);
+        self
+    }
+
+    /// Answer `/api/faucet` awkwardly, as `fault` says.
+    pub fn with_faucet_fault(mut self, fault: FaucetFault) -> Self {
+        self.faucet_fault = Some(fault);
         self
     }
 
@@ -149,6 +215,17 @@ impl TestNode {
     /// The chain-head receipt hash a fresh turn must thread (`None` when empty).
     pub fn chain_head(&self) -> Option<[u8; 32]> {
         self.receipts.last().map(|r| r.receipt_hash())
+    }
+
+    /// `agent`'s own receipt head: the hash of the last receipt whose agent is
+    /// `agent` (`None` when it has committed nothing). Served on
+    /// `/api/cell/{id}` as `last_receipt_hash`, as the node serves it.
+    pub fn agent_receipt_head(&self, agent: &CellId) -> Option<[u8; 32]> {
+        self.receipts
+            .iter()
+            .rev()
+            .find(|r| r.agent == *agent)
+            .map(|r| r.receipt_hash())
     }
 
     /// Take ownership of the node into a shared [`TcpListener`] serve loop on
@@ -230,67 +307,105 @@ impl SpawnedNode {
 /// Execute a submitted postcard `SignedTurn` through the REAL executor,
 /// mirroring `node::api::post_submit_signed_turn`'s checks. Returns the JSON body
 /// the client parses.
-fn handle_submit(node: &mut TestNode, body: &[u8]) -> serde_json::Value {
+fn handle_submit(node: &mut TestNode, body: &[u8]) -> (u16, serde_json::Value) {
     let signed: dregg_sdk::SignedTurn = match postcard::take_from_bytes(body) {
         Ok((s, [])) => s,
         Ok((_s, remainder)) => {
-            return serde_json::json!({
+            return (200, serde_json::json!({
                 "accepted": false,
                 "error": format!(
                     "trailing bytes after SignedTurn envelope: {}",
                     remainder.len()
                 ),
-            });
+            }));
         }
         Err(_) => {
-            return serde_json::json!({"accepted": false, "error": "malformed SignedTurn"});
+            return (200, serde_json::json!({"accepted": false, "error": "malformed SignedTurn"}));
         }
     };
     let turn_hash = signed.turn.hash();
+    match node.submit_fault.clone() {
+        Some(SubmitFault::ReportsAnotherTurn) => {
+            let other = node
+                .receipts
+                .last()
+                .map(|r| dregg_types::hex_encode(&r.turn_hash))
+                .unwrap_or_else(|| "33".repeat(32));
+            return (200, serde_json::json!({"accepted": true, "turn_hash": other}));
+        }
+        Some(SubmitFault::ReportsNoHash) => {
+            return (200, serde_json::json!({"accepted": true}));
+        }
+        Some(SubmitFault::HttpStatus(code)) => {
+            return (code, serde_json::json!({"error": "injected status"}));
+        }
+        Some(SubmitFault::RefusesNamingTheTurn(reason)) => {
+            return (
+                200,
+                serde_json::json!({
+                    "accepted": false,
+                    "turn_hash": dregg_types::hex_encode(&turn_hash),
+                    "error": reason,
+                }),
+            );
+        }
+        Some(SubmitFault::ReceiptQueryFails) | None => {}
+    }
     if !signed.signer.verify(&turn_hash, &signed.signature) {
-        return serde_json::json!({
+        return (200, serde_json::json!({
             "accepted": false,
             "turn_hash": dregg_types::hex_encode(&turn_hash),
             "error": "invalid turn signature",
-        });
+        }));
     }
     let expected_agent = CellId::derive_raw(&signed.signer.0, &default_token_id());
     if signed.turn.agent != expected_agent {
-        return serde_json::json!({
+        return (200, serde_json::json!({
             "accepted": false,
             "turn_hash": dregg_types::hex_encode(&turn_hash),
             "error": "turn agent does not match signer default cell",
-        });
+        }));
     }
     if signed.turn.previous_receipt_hash != node.chain_head() {
-        return serde_json::json!({
+        return (200, serde_json::json!({
             "accepted": false,
             "turn_hash": dregg_types::hex_encode(&turn_hash),
             "error": "receipt chain mismatch",
-        });
+        }));
     }
 
-    let mut executor = TurnExecutor::new(ComputronCosts::default());
+    let mut costs = ComputronCosts::default();
+    costs.coordination_exempt = node.coordination_fee_exempt;
+    let mut executor = TurnExecutor::new(costs);
     executor.set_local_federation_id(node.fed_id);
     executor.set_timestamp(0);
     match executor.execute(&signed.turn, &mut node.ledger) {
         TurnResult::Committed { receipt, .. } => {
             node.receipts.push(receipt);
-            serde_json::json!({
-                "accepted": true,
-                "turn_hash": dregg_types::hex_encode(&turn_hash),
-            })
+            (
+                200,
+                serde_json::json!({
+                    "accepted": true,
+                    "turn_hash": dregg_types::hex_encode(&turn_hash),
+                }),
+            )
         }
-        TurnResult::Rejected { reason, .. } => serde_json::json!({
-            "accepted": false,
-            "turn_hash": dregg_types::hex_encode(&turn_hash),
-            "error": format!("{reason}"),
-        }),
-        other => serde_json::json!({
-            "accepted": false,
-            "turn_hash": dregg_types::hex_encode(&turn_hash),
-            "error": format!("unexpected result: {other:?}"),
-        }),
+        TurnResult::Rejected { reason, .. } => (
+            200,
+            serde_json::json!({
+                "accepted": false,
+                "turn_hash": dregg_types::hex_encode(&turn_hash),
+                "error": format!("{reason}"),
+            }),
+        ),
+        other => (
+            200,
+            serde_json::json!({
+                "accepted": false,
+                "turn_hash": dregg_types::hex_encode(&turn_hash),
+                "error": format!("unexpected result: {other:?}"),
+            }),
+        ),
     }
 }
 
@@ -308,6 +423,15 @@ fn handle_faucet(node: &mut TestNode, body: &[u8]) -> serde_json::Value {
     let Some(recipient) = recipient else {
         return serde_json::json!({"success": false, "error": "malformed recipient"});
     };
+    if amount > 0
+        && let Some(FaucetFault::RateLimitedWhileGrantInFlight) = node.faucet_fault
+    {
+        node.pending_grants.push((recipient, amount));
+        return serde_json::json!({
+            "success": false,
+            "error": "rate limited: 1 request per cell per minute",
+        });
+    }
     if node.ledger.get(&recipient).is_none() {
         let cell = match req["public_key"].as_str().and_then(decode_32) {
             Some(pk) => Cell::with_balance(pk, default_token_id(), 0),
@@ -343,10 +467,14 @@ fn cell_detail_json(id_hex: &str, node: &TestNode) -> serde_json::Value {
         Some(b) => b,
         None => return serde_json::json!({"id": id_hex, "found": false}),
     };
+    let head = node
+        .agent_receipt_head(&CellId(bytes))
+        .map(|h| dregg_types::hex_encode(&h));
     match node.ledger.get(&CellId(bytes)) {
         Some(cell) => serde_json::json!({
             "id": id_hex,
             "found": true,
+            "last_receipt_hash": head,
             "balance": cell.state.balance(),
             "nonce": cell.state.nonce(),
             "public_key": dregg_types::hex_encode(cell.public_key()),
@@ -360,8 +488,37 @@ fn cell_detail_json(id_hex: &str, node: &TestNode) -> serde_json::Value {
             "capabilities": cell.capabilities.iter().cloned().collect::<Vec<_>>(),
             "capability_tombstones": cell.capabilities.tombstoned_slots().collect::<Vec<u32>>(),
         }),
-        None => serde_json::json!({"id": id_hex, "found": false}),
+        // The node serves an agent's head for a cell it does not hold too.
+        None => serde_json::json!({"id": id_hex, "found": false, "last_receipt_hash": head}),
     }
+}
+
+/// `GET /api/starbridge/receipts?turn_hash=<hex>`: the whole chain filtered by
+/// exact turn hash, in the node's `ReceiptInfo` shape. A solo node's receipts
+/// are `tentative`.
+fn exact_receipts_json(query: &str, node: &TestNode) -> serde_json::Value {
+    let want = query
+        .split('&')
+        .find_map(|kv| kv.strip_prefix("turn_hash="))
+        .unwrap_or_default();
+    let last = node.receipts.len().saturating_sub(1);
+    let rows: Vec<serde_json::Value> = node
+        .receipts
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| dregg_types::hex_encode(&r.turn_hash).eq_ignore_ascii_case(want))
+        .map(|(i, r)| {
+            serde_json::json!({
+                "chain_index": i as u64,
+                "chain_head": i == last,
+                "receipt_hash": dregg_types::hex_encode(&r.receipt_hash()),
+                "turn_hash": dregg_types::hex_encode(&r.turn_hash),
+                "agent": dregg_types::hex_encode(&r.agent.0),
+                "finality": "tentative",
+            })
+        })
+        .collect();
+    serde_json::Value::Array(rows)
 }
 
 fn receipts_json(node: &TestNode) -> serde_json::Value {
@@ -382,8 +539,26 @@ fn receipts_json(node: &TestNode) -> serde_json::Value {
     serde_json::Value::Array(arr)
 }
 
-fn route(method: &str, path: &str, body: &[u8], node: &mut TestNode) -> serde_json::Value {
-    match (method, path) {
+fn route(method: &str, path: &str, body: &[u8], node: &mut TestNode) -> (u16, serde_json::Value) {
+    // A grant accepted while rate-limited finalizes before the next request.
+    for (cell, amount) in std::mem::take(&mut node.pending_grants) {
+        if let Some(c) = node.ledger.get_mut(&cell) {
+            let balance = c.state.balance();
+            c.state.set_balance(balance + amount as i64);
+        }
+    }
+    if method == "POST" && path == "/turns/submit" {
+        return handle_submit(node, body);
+    }
+    if method == "GET"
+        && let Some(query) = path.strip_prefix("/api/starbridge/receipts?")
+    {
+        if let Some(SubmitFault::ReceiptQueryFails) = node.submit_fault {
+            return (500, serde_json::json!({"error": "receipt index unavailable"}));
+        }
+        return (200, exact_receipts_json(query, node));
+    }
+    let json = match (method, path) {
         ("GET", "/api/cells") => {
             let arr: Vec<serde_json::Value> = node
                 .ledger
@@ -406,15 +581,17 @@ fn route(method: &str, path: &str, body: &[u8], node: &mut TestNode) -> serde_js
             "federation_mode": "solo",
             "public_key": dregg_types::hex_encode(&node.node_public_key),
             "executor_federation_id": dregg_types::hex_encode(&node.fed_id),
+            "coordination_fee_exempt": node.coordination_fee_exempt,
+            "coordination_exempt_ceiling": ComputronCosts::default().coordination_exempt_ceiling,
         }),
-        ("POST", "/turns/submit") => handle_submit(node, body),
         ("POST", "/api/faucet") => handle_faucet(node, body),
         ("GET", p) if p.starts_with("/api/cell/") => {
             let id_hex = p.trim_start_matches("/api/cell/");
             cell_detail_json(id_hex, node)
         }
         _ => serde_json::json!({"error": "not found"}),
-    }
+    };
+    (200, json)
 }
 
 /// Serve one HTTP/1.1 request on `sock` against the shared node.
@@ -457,13 +634,14 @@ async fn handle_conn(mut sock: tokio::net::TcpStream, node: Arc<Mutex<TestNode>>
         }
     }
 
-    let json = {
+    let (code, json) = {
         let mut guard = node.lock().await;
         route(&method, &path, &body, &mut guard)
     };
     let payload = serde_json::to_vec(&json).unwrap();
     let head = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {code} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        if code < 400 { "OK" } else { "Error" },
         payload.len()
     );
     let _ = sock.write_all(head.as_bytes()).await;

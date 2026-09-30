@@ -97,11 +97,6 @@ fn parse_cell_hex(what: &str, value: &str) -> Result<dregg_sdk::CellId> {
 /// decides. What this function refuses is a caller mistake the executor would
 /// happily commit: a transfer to the signer's OWN cell moves nothing and still
 /// burns the fee.
-///
-/// Note that `send`'s guard is the OPPOSITE shape — it requires `--to` to BE
-/// the signer's own cell, because a client-signed `EmitEvent` can only act as
-/// the signer. Inverting that guard is NOT what makes a transfer authorized;
-/// the two verbs simply refuse different caller mistakes.
 fn resolve_destination(to: &str, own_cell_hex: &str, profile: &str) -> Result<String> {
     let dest = hex::encode(parse_cell_hex("--to", to)?.as_bytes());
     if dest.eq_ignore_ascii_case(own_cell_hex) {
@@ -214,27 +209,24 @@ fn chat_fee(
     TurnExecutor::new(costs).estimate_cost(&chat_turn(clerk, cell, placeholder, 0, payload))
 }
 
-/// The cost model the CLIENT estimates its declared `turn.fee` against.
+/// The cost model the CLIENT estimates its declared `turn.fee` against: the
+/// node's own, read from `/status` (`coordination_fee_exempt`,
+/// `coordination_exempt_ceiling`).
 ///
-/// This bin only ever builds a single-action `EmitEvent` turn
-/// ([`build_chat_turn`]), which is exactly dregg's COORDINATION class
-/// ([`Turn::is_coordination`]: EmitEvent-only, no `balance_change`). When the
-/// deployment opts in via `DREGG_COORDINATION_EXEMPT` (truthy — helm forwards it
-/// on the chat send path), the estimate carries `coordination_exempt = true`, so
-/// [`TurnExecutor::estimate_cost`] returns 0 for the class and the client
-/// declares `fee = 0`: the turn rides the node's coordination-exempt admission
-/// free — no cell drain, no faucet grant, no `[unsigned]` throttle. Default OFF =
-/// exact legacy behavior (estimate the full computron cost), so a non-exempt node
-/// still gets a fully-funded fee.
-fn fee_cost_model() -> ComputronCosts {
-    let mut costs = ComputronCosts::default();
-    if env("DREGG_COORDINATION_EXEMPT")
-        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
-        .unwrap_or(false)
-    {
-        costs.coordination_exempt = true;
-    }
-    costs
+/// `send` builds a single-action `EmitEvent` on the signer's own cell
+/// ([`build_chat_turn`]), which is dregg's COORDINATION class
+/// ([`Turn::is_coordination`]). On a node that admits the class,
+/// [`TurnExecutor::estimate_cost`] returns 0 for it (within the ceiling) and
+/// the client declares `fee = 0`; on a node that does not, the same estimate is
+/// the full computron cost. The client asks the node which it is instead of
+/// reading a switch of its own, so the two cannot disagree: an unreadable
+/// answer is an error, never a guess.
+async fn fee_cost_model(node: &NodeHttpClient) -> Result<ComputronCosts> {
+    let class = node
+        .fetch_coordination_class()
+        .await
+        .map_err(|e| err(format!("read the node's coordination class: {e}")))?;
+    Ok(class.cost_model())
 }
 
 /// The two finality words `ReceiptInfo` can carry, lowercased. `Final` is a
@@ -583,6 +575,7 @@ async fn ensure_token(
 
 #[derive(Debug)]
 struct FundingOutcome {
+    /// The cell was absent and this call's faucet request created it.
     materialized: bool,
     topped_up: bool,
     joined_in_flight: bool,
@@ -605,8 +598,8 @@ fn observed_balance(cell: &serde_json::Value) -> Result<Option<u64>> {
     Ok(Some(balance as u64))
 }
 
-/// Return whether the cell is absent and how many computrons are required to
-/// make it spendable. `minimum_balance` is the next turn's actual fee; only a
+/// Return whether the cell is absent (so the faucet request below must
+/// materialize it) and how many computrons are required to make it spendable. `minimum_balance` is the next turn's actual fee; only a
 /// balance below that threshold opens the faucet. When it does, replenish to
 /// `target_balance` so rapid subsequent sends do not hit the 1/min faucet limit.
 fn funding_shortfall(
@@ -677,8 +670,9 @@ async fn ensure_cell(
 ) -> Result<FundingOutcome> {
     let cell_url = format!("{node_url}/api/cell/{cell_hex}");
     let initial = get_json(http, &cell_url).await?;
-    let (materialized, shortfall) = funding_shortfall(&initial, minimum_balance, target_balance)?;
-    if !materialized && shortfall == 0 {
+    let (needs_materializing, shortfall) =
+        funding_shortfall(&initial, minimum_balance, target_balance)?;
+    if !needs_materializing && shortfall == 0 {
         return Ok(FundingOutcome {
             materialized: false,
             topped_up: false,
@@ -732,7 +726,7 @@ async fn ensure_cell(
         )));
     }
 
-    let action = if materialized {
+    let action = if needs_materializing {
         "materialized"
     } else {
         "topped up"
@@ -740,8 +734,8 @@ async fn ensure_cell(
     eprintln!("[client-sign] faucet {action} cell (+{shortfall} computrons)");
     if let Some(balance) = wait_for_balance(http, &cell_url, target_balance).await? {
         return Ok(FundingOutcome {
-            materialized,
-            topped_up: !materialized && shortfall > 0,
+            materialized: needs_materializing,
+            topped_up: !needs_materializing && shortfall > 0,
             joined_in_flight: false,
             balance,
         });
@@ -844,7 +838,7 @@ fn parse_flags(argv: Vec<String>) -> Result<Flags> {
 const USAGE: &str = "dregg-client-sign: commit CLIENT-SIGNED turns to a dregg node as a named profile\n\n\
   join [--profile P] [--node-url U] [--fund N]\n\
        ensure the profile identity + a cell funded to at least N computrons\n\
-  send [--profile P] [--node-url U] [--token T] [--fund N] [--topic S] [--to CELL_HEX] PAYLOAD...\n\
+  send [--profile P] [--node-url U] [--token T] [--fund N] [--topic S] PAYLOAD...\n\
        ensure at least N computrons, then commit ONE hybrid-signed EmitEvent; payload\n\
        rides in the signed turn (memo + event data words)\n\
   transfer --to CELL_HEX --amount N [--profile P] [--node-url U] [--token T]\n\
@@ -862,9 +856,8 @@ async fn cmd_join(f: Flags) -> Result<()> {
     let cell_hex = hex::encode(clerk.cell_id("default").as_bytes());
     let pk_hex = hex::encode(clerk.public_key().0);
 
-    // COORDINATION-EXEMPT JOIN: when the deployment opts into the coordination
-    // class (DREGG_COORDINATION_EXEMPT truthy — helm's `cell.coord_fee()==0`
-    // forwards the env), materializing the cell requires the amount=0 path
+    // COORDINATION-EXEMPT JOIN: when the node admits the coordination class
+    // (`/status.coordination_fee_exempt`), materializing the cell requires the amount=0 path
     // (cell creation, free) and NEVER a faucet-funded grant. A faucet grant
     // bricks the nonce on devnet after ~1 successful call and drains the cell
     // on every failed retry — an exempt join that still routes through the
@@ -875,8 +868,8 @@ async fn cmd_join(f: Flags) -> Result<()> {
     // Non-exempt join is unchanged: `--fund N` (default 5000) calls the faucet.
     // BOTH BOUNDS GO TO ZERO, not just the minimum. `ensure_cell` computes
     // `funding_shortfall(initial, minimum_balance, target_balance)` and only
-    // returns early on `!materialized && shortfall == 0`. An ABSENT cell is
-    // `materialized`, so it always POSTs — with `amount: shortfall`, derived
+    // returns early on `!needs_materializing && shortfall == 0`. An ABSENT cell
+    // `needs_materializing`, so it always POSTs — with `amount: shortfall`, derived
     // from TARGET. Leaving target at `f.fund` therefore still requested a
     // FUNDED grant on the exact path an exempt join must never take: first
     // join, cell does not exist yet. Measured live 2026-07-28 — the exempt
@@ -886,7 +879,7 @@ async fn cmd_join(f: Flags) -> Result<()> {
     // With both at 0 the shortfall is 0, so the POST carries amount=0: the
     // free materialization path, which returns success before any Transfer is
     // built and needs no faucet signature at all.
-    let costs = fee_cost_model();
+    let costs = fee_cost_model(&NodeHttpClient::new(&f.node_url)).await?;
     let (minimum_balance, target_balance) = if costs.coordination_exempt {
         eprintln!("[client-sign] coordination-exempt join — materializing cell {cell_hex} (free, no faucet grant)");
         (0u64, 0u64)
@@ -929,15 +922,13 @@ async fn cmd_send(f: Flags) -> Result<()> {
     let cell = clerk.cell_id("default");
     let cell_hex = hex::encode(cell.as_bytes());
 
-    // This tool SIGNS AS the profile — the only admissible target is the
-    // profile's own cell (the node derives agent == the signer's cell).
-    if let Some(to) = &f.to {
-        if to.to_lowercase() != cell_hex {
-            return Err(err(format!(
-                "--to {to} is not profile '{name}'s own cell {cell_hex} — \
-                 a client-signed turn can only act as the signer's cell"
-            )));
-        }
+    // `send` has no destination: it always acts as the profile's own cell (the
+    // node derives agent == the signer's cell). `--to` belongs to `transfer`,
+    // and the flag parser is shared, so a `--to` here is a caller mistake.
+    if f.to.is_some() {
+        return Err(err(
+            "send takes no --to: it always posts on the profile's own cell".to_string(),
+        ));
     }
 
     // Materialize first without consuming the funded faucet bucket. The zero-
@@ -952,7 +943,8 @@ async fn cmd_send(f: Flags) -> Result<()> {
     // The fee depends on neither the nonce nor any signature byte (see
     // `chat_fee`), so it is sized here without signing. The one signed build
     // happens below, at the nonce fetched after funding.
-    let fee = chat_fee(&clerk, fee_cost_model(), cell, &f.topic, &payload);
+    let costs = fee_cost_model(&node).await?;
+    let fee = chat_fee(&clerk, costs.clone(), cell, &f.topic, &payload);
 
     // Funding is SEND correctness, not a one-time join convenience. One grant
     // reserves a bounded six-send burst inside the faucet's 60-second window;
@@ -975,7 +967,7 @@ async fn cmd_send(f: Flags) -> Result<()> {
         .await
         .map_err(|e| err(format!("fetch own-cell nonce after funding: {e}")))?;
     let mut turn = build_chat_turn(&clerk, cell, &f.topic, &payload, &federation_id, nonce);
-    turn.fee = TurnExecutor::new(fee_cost_model()).estimate_cost(&turn);
+    turn.fee = TurnExecutor::new(costs).estimate_cost(&turn);
     if turn.fee > funding.balance {
         return Err(err(format!(
             "final turn fee {} exceeds the observed funded balance {}",
@@ -1110,8 +1102,8 @@ async fn cmd_send(f: Flags) -> Result<()> {
 /// authority; the signature is presented and the owning layer decides.
 ///
 /// NOT COORDINATION-EXEMPT, unlike `send`. `Turn::is_coordination` requires
-/// every effect to be an `EmitEvent` and no `balance_change`, so a Transfer
-/// leaves the class whatever `DREGG_COORDINATION_EXEMPT` says, and
+/// every effect to be an own-cell `EmitEvent` and no `balance_change`, so a
+/// Transfer leaves the class whatever the node's flag says, and
 /// `estimate_cost` returns the real computron cost. The source must therefore
 /// hold `amount + fee`, not `amount`.
 async fn cmd_transfer(f: Flags) -> Result<()> {
@@ -1158,7 +1150,8 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
         &federation_id,
         estimate_nonce,
     );
-    turn.fee = TurnExecutor::new(fee_cost_model()).estimate_cost(&turn);
+    let costs = fee_cost_model(&node).await?;
+    turn.fee = TurnExecutor::new(costs.clone()).estimate_cost(&turn);
 
     // The source must cover the MOVED VALUE AND the fee. `send`'s funding math
     // covers the fee alone because an EmitEvent moves nothing.
@@ -1187,7 +1180,7 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
         .await
         .map_err(|e| err(format!("refetch own-cell nonce after funding: {e}")))?;
     turn = build_transfer_turn(&clerk, from, to, amount, &federation_id, nonce);
-    turn.fee = TurnExecutor::new(fee_cost_model()).estimate_cost(&turn);
+    turn.fee = TurnExecutor::new(costs).estimate_cost(&turn);
     let needed = amount.checked_add(turn.fee).ok_or_else(|| {
         err(format!(
             "amount {amount} plus fee {} overflows u64",
@@ -1371,215 +1364,10 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use dregg_cell::{AuthRequired, Cell, CellId, Ledger, Permissions};
-    use dregg_turn::{Action, Authorization, CallForest, DelegationMode, TurnResult, turn::Turn};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
-    use tokio::sync::Mutex;
+    use dregg_cell::CellId;
+    use dregg_turn::{Action, Authorization, CallForest, DelegationMode, turn::Turn};
 
     use super::*;
-
-    #[derive(Clone, Copy)]
-    enum FaucetMode {
-        Commit,
-        RateLimitedThenCommit,
-    }
-
-    struct FaucetNode {
-        ledger: Ledger,
-        faucet: CellId,
-        recipient: CellId,
-        calls: u64,
-        mode: FaucetMode,
-    }
-
-    fn open_permissions() -> Permissions {
-        Permissions {
-            send: AuthRequired::None,
-            receive: AuthRequired::None,
-            set_state: AuthRequired::None,
-            set_permissions: AuthRequired::None,
-            set_verification_key: AuthRequired::None,
-            increment_nonce: AuthRequired::None,
-            delegate: AuthRequired::None,
-            access: AuthRequired::None,
-        }
-    }
-
-    fn test_node(balance: i64, mode: FaucetMode) -> FaucetNode {
-        let mut faucet = Cell::with_balance([1; 32], [0; 32], 1_000_000);
-        faucet.permissions = open_permissions();
-        let faucet_id = faucet.id();
-        let mut recipient = Cell::with_balance([2; 32], [0; 32], balance);
-        recipient.permissions = open_permissions();
-        let recipient_id = recipient.id();
-        let mut ledger = Ledger::new();
-        ledger.insert_cell(faucet).unwrap();
-        ledger.insert_cell(recipient).unwrap();
-        FaucetNode {
-            ledger,
-            faucet: faucet_id,
-            recipient: recipient_id,
-            calls: 0,
-            mode,
-        }
-    }
-
-    fn transfer_turn(node: &FaucetNode, amount: u64) -> Turn {
-        let mut forest = CallForest::new();
-        forest.add_root(Action {
-            target: node.faucet,
-            method: *blake3::hash(b"faucet_transfer").as_bytes(),
-            args: vec![],
-            authorization: Authorization::Unchecked,
-            preconditions: Default::default(),
-            effects: vec![Effect::Transfer {
-                from: node.faucet,
-                to: node.recipient,
-                amount,
-            }],
-            may_delegate: DelegationMode::None,
-            commitment_mode: Default::default(),
-            balance_change: None,
-            witness_blobs: vec![],
-        });
-        Turn {
-            agent: node.faucet,
-            nonce: node
-                .ledger
-                .get(&node.faucet)
-                .expect("faucet cell")
-                .state
-                .nonce(),
-            fee: 0,
-            memo: None,
-            valid_until: Some(1_000_000),
-            call_forest: forest,
-            depends_on: vec![],
-            previous_receipt_hash: None,
-            conservation_proof: None,
-            sovereign_witnesses: Default::default(),
-            execution_proof: None,
-            execution_proof_cell: None,
-            execution_proof_new_commitment: None,
-            custom_program_proofs: None,
-            effect_binding_proofs: Vec::new(),
-            cross_effect_dependencies: Vec::new(),
-            effect_witness_index_map: Vec::new(),
-        }
-    }
-
-    fn commit_top_up(node: &mut FaucetNode, amount: u64) -> serde_json::Value {
-        let turn = transfer_turn(node, amount);
-        let hash = hex::encode(turn.hash());
-        node.calls += 1;
-        match TurnExecutor::new(ComputronCosts::zero()).execute(&turn, &mut node.ledger) {
-            TurnResult::Committed { .. } => {
-                serde_json::json!({"success": true, "turn_hash": hash})
-            }
-            other => serde_json::json!({"success": false, "error": format!("{other:?}")}),
-        }
-    }
-
-    async fn handle_connection(mut socket: tokio::net::TcpStream, state: Arc<Mutex<FaucetNode>>) {
-        let mut request = Vec::new();
-        let mut chunk = [0u8; 4096];
-        let header_end = loop {
-            let Ok(n) = socket.read(&mut chunk).await else {
-                return;
-            };
-            if n == 0 {
-                return;
-            }
-            request.extend_from_slice(&chunk[..n]);
-            if let Some(i) = request.windows(4).position(|w| w == b"\r\n\r\n") {
-                break i + 4;
-            }
-        };
-        let headers = String::from_utf8_lossy(&request[..header_end]).to_string();
-        let content_length = headers
-            .lines()
-            .find_map(|line| {
-                line.to_ascii_lowercase()
-                    .strip_prefix("content-length:")
-                    .and_then(|n| n.trim().parse::<usize>().ok())
-            })
-            .unwrap_or(0);
-        while request.len() < header_end + content_length {
-            let Ok(n) = socket.read(&mut chunk).await else {
-                return;
-            };
-            if n == 0 {
-                return;
-            }
-            request.extend_from_slice(&chunk[..n]);
-        }
-        let request_line = headers.lines().next().unwrap_or_default();
-        let body = &request[header_end..header_end + content_length];
-        let response = if request_line.starts_with("GET /api/cell/") {
-            let node = state.lock().await;
-            let balance = node
-                .ledger
-                .get(&node.recipient)
-                .expect("recipient cell")
-                .state
-                .balance();
-            serde_json::json!({"found": true, "balance": balance})
-        } else if request_line.starts_with("POST /api/faucet ") {
-            let amount = serde_json::from_slice::<serde_json::Value>(body)
-                .ok()
-                .and_then(|v| v.get("amount").and_then(|n| n.as_u64()))
-                .unwrap_or(0);
-            let mode = state.lock().await.mode;
-            match mode {
-                FaucetMode::Commit => {
-                    let mut node = state.lock().await;
-                    commit_top_up(&mut node, amount)
-                }
-                FaucetMode::RateLimitedThenCommit => {
-                    state.lock().await.calls += 1;
-                    let shared = state.clone();
-                    tokio::spawn(async move {
-                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                        let mut node = shared.lock().await;
-                        node.calls -= 1;
-                        let _ = commit_top_up(&mut node, amount);
-                    });
-                    serde_json::json!({
-                        "success": false,
-                        "error": "rate limited: 1 request per cell per minute"
-                    })
-                }
-            }
-        } else {
-            serde_json::json!({"error": "not found"})
-        };
-        let bytes = serde_json::to_vec(&response).unwrap();
-        let head = format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
-            bytes.len()
-        );
-        let _ = socket.write_all(head.as_bytes()).await;
-        let _ = socket.write_all(&bytes).await;
-    }
-
-    async fn spawn_faucet_node(
-        balance: i64,
-        mode: FaucetMode,
-    ) -> (String, Arc<Mutex<FaucetNode>>, tokio::task::JoinHandle<()>) {
-        let state = Arc::new(Mutex::new(test_node(balance, mode)));
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        let shared = state.clone();
-        let handle = tokio::spawn(async move {
-            while let Ok((socket, _)) = listener.accept().await {
-                tokio::spawn(handle_connection(socket, shared.clone()));
-            }
-        });
-        (url, state, handle)
-    }
 
     fn real_chat_turn(agent: CellId, payload: &[u8]) -> Turn {
         let mut forest = CallForest::new();
@@ -1734,17 +1522,21 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    /// An existing cell holding less than one chat turn's fee is topped up over
+    /// HTTP by a real node, and the exact metered chat turn it could not afford
+    /// then commits against that node's ledger.
+    #[cfg(feature = "test-support")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn low_balance_http_top_up_commits_and_enables_real_chat_turn() {
-        let (url, state, handle) = spawn_faucet_node(90, FaucetMode::Commit).await;
-        let (cell_hex, recipient) = {
-            let node = state.lock().await;
-            (hex::encode(node.recipient.0), node.recipient)
-        };
+        use dregg_sdk_net::test_support::TestNode;
+
+        let (node, recipient) = TestNode::genesis([0x11; 32], [2; 32], 90);
+        let spawned = node.spawn().await;
+        let cell_hex = hex::encode(recipient.0);
         let payload = b"This chat-sized send must fail before funding and commit after the HTTP faucet top-up.";
         let turn = real_chat_turn(recipient, payload);
         assert!(turn.fee > 90 && turn.fee < 9_060);
-        let mut depleted = state.lock().await.ledger.clone();
+        let mut depleted = spawned.lock().await.ledger().clone();
         let pre = TurnExecutor::new(ComputronCosts::default()).execute(&turn, &mut depleted);
         assert!(
             !pre.is_committed(),
@@ -1752,24 +1544,28 @@ mod tests {
         );
 
         let http = reqwest::Client::new();
-        let outcome = ensure_cell(&http, &url, &cell_hex, 1_510, 9_060)
+        let outcome = ensure_cell(&http, spawned.base_url(), &cell_hex, 1_510, 9_060)
             .await
             .expect("existing low-balance cell must top up");
         assert!(outcome.topped_up);
         assert_eq!(outcome.balance, 9_060);
-        let mut node = state.lock().await;
-        assert_eq!(node.calls, 1, "the product path must call the faucet once");
+        let node = spawned.lock().await;
         assert_eq!(
-            node.ledger.get(&recipient).unwrap().state.balance(),
-            9_060,
-            "the committed HTTP top-up must raise the real ledger balance"
+            node.faucet_requests().len(),
+            1,
+            "the product path must call the faucet once"
         );
-        let result = TurnExecutor::new(ComputronCosts::default()).execute(&turn, &mut node.ledger);
+        assert_eq!(
+            node.ledger().get(&recipient).unwrap().state.balance(),
+            9_060,
+            "the HTTP top-up must raise the real ledger balance"
+        );
+        let mut funded = node.ledger().clone();
+        let result = TurnExecutor::new(ComputronCosts::default()).execute(&turn, &mut funded);
         assert!(
             result.is_committed(),
             "the exact next metered chat turn must commit: {result:?}"
         );
-        handle.abort();
     }
 
     /// The body carries no `public_key` at any amount: a key in it makes the
@@ -1827,17 +1623,25 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    /// A rate-limited answer while this cell's grant is already in flight is not
+    /// a failure: the client joins that grant by polling instead of asking twice.
+    #[cfg(feature = "test-support")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn rate_limited_duplicate_joins_in_flight_grant() {
-        let (url, state, handle) = spawn_faucet_node(90, FaucetMode::RateLimitedThenCommit).await;
-        let cell_hex = hex::encode(state.lock().await.recipient.0);
-        let outcome = ensure_cell(&reqwest::Client::new(), &url, &cell_hex, 1_510, 9_060)
+        use dregg_sdk_net::test_support::{FaucetFault, TestNode};
+
+        let (node, recipient) = TestNode::genesis([0x11; 32], [2; 32], 90);
+        let spawned = node
+            .with_faucet_fault(FaucetFault::RateLimitedWhileGrantInFlight)
+            .spawn()
+            .await;
+        let cell_hex = hex::encode(recipient.0);
+        let outcome = ensure_cell(&reqwest::Client::new(), spawned.base_url(), &cell_hex, 1_510, 9_060)
             .await
             .expect("duplicate owner must join the in-flight grant");
         assert!(outcome.joined_in_flight);
         assert_eq!(outcome.balance, 9_060);
-        assert_eq!(state.lock().await.calls, 1);
-        handle.abort();
+        assert_eq!(spawned.lock().await.faucet_requests().len(), 1);
     }
 
     // ── transfer: admission is not commitment ───────────────────────────────
@@ -2316,274 +2120,18 @@ mod tests {
         assert!(text.contains("starbridge/receipts?turn_hash=abc"), "{text}");
     }
 
-    // ── the composed transfer path, against a node that answers ─────────────
+    // ── the composed transfer path, against a real-executor node ────────────
     //
     // The two roots below live in cmd_transfer's COMPOSITION and no helper
     // test can reach them: one is which hash the confirmation binds to, the
     // other is how an exit after the POST is reported. Both need a submission
-    // and a poll, so this mock serves the whole path — /status, the cell, the
-    // chain head, the faucet, /turns/submit and the exact-hash receipt query —
-    // and DREGG_HOME points the profile loader at a temp identity so no real
-    // key is touched and nothing is signed against a live node.
-    //
-    // The cell's own receipt head and the node-wide tip are DIFFERENT here, and
-    // /turns/submit refuses any turn that does not thread the cell's own head,
-    // as a node built after 7ea63fe5d does. So every arm that reaches the POST
-    // also checks which head the signer threaded; the real admission check is
-    // driven in the node crate's `client_threads_the_agent_scoped_receipt_head`.
-
-    /// The source cell's own receipt head, served on `GET /api/cell/{id}`.
-    const AGENT_HEAD: [u8; 32] = [0xa5; 32];
-    /// The node-wide tip, served on `GET /api/receipts`: another agent's receipt.
-    const NODE_TIP: [u8; 32] = [0xc3; 32];
-
-    fn submitted(body: &[u8]) -> dregg_sdk::SignedTurn {
-        postcard::from_bytes(body).expect("the client must send a postcard SignedTurn")
-    }
-
-    #[derive(Clone)]
-    enum Submit {
-        /// Behave like the node: decode the postcard turn and echo ITS hash.
-        Honest,
-        /// Accept, and report a DIFFERENT turn's hash.
-        ReportsAnotherTurn,
-        /// Accept, and report no hash at all.
-        ReportsNoHash,
-        /// Answer with an HTTP status rather than a verdict.
-        HttpError,
-        /// Refuse explicitly, NAMING THIS TURN — the one post-submit answer
-        /// that is not UNKNOWN.
-        Refuses,
-        /// Take the turn honestly, then fail the receipt query. The submission
-        /// landed and the poll cannot say what became of it.
-        HonestThenPollFails,
-    }
-
-    struct TransferNode {
-        submit: Submit,
-        /// The receipts the exact-hash query serves, by turn hash.
-        receipted: Mutex<Vec<String>>,
-    }
-
-    async fn transfer_connection(
-        mut socket: tokio::net::TcpStream,
-        node: Arc<TransferNode>,
-    ) {
-        let mut request = Vec::new();
-        let mut chunk = [0u8; 8192];
-        let header_end = loop {
-            let Ok(n) = socket.read(&mut chunk).await else { return };
-            if n == 0 {
-                return;
-            }
-            request.extend_from_slice(&chunk[..n]);
-            if let Some(i) = request.windows(4).position(|w| w == b"\r\n\r\n") {
-                break i + 4;
-            }
-        };
-        let headers = String::from_utf8_lossy(&request[..header_end]).to_string();
-        let content_length = headers
-            .lines()
-            .find_map(|line| {
-                line.to_ascii_lowercase()
-                    .strip_prefix("content-length:")
-                    .and_then(|n| n.trim().parse::<usize>().ok())
-            })
-            .unwrap_or(0);
-        while request.len() < header_end + content_length {
-            let Ok(n) = socket.read(&mut chunk).await else { return };
-            if n == 0 {
-                return;
-            }
-            request.extend_from_slice(&chunk[..n]);
-        }
-        let line = headers.lines().next().unwrap_or_default().to_string();
-        let body = request[header_end..header_end + content_length].to_vec();
-
-        let mut code = 200;
-        let response = if line.starts_with("GET /status") {
-            serde_json::json!({"federation_mode": "solo", "public_key": "11".repeat(32)})
-        } else if line.starts_with("GET /api/cell/") {
-            serde_json::json!({
-                "found": true, "balance": 1_000_000, "nonce": 0,
-                "last_receipt_hash": hex::encode(AGENT_HEAD),
-            })
-        } else if line.starts_with("GET /api/receipts") {
-            serde_json::json!([{
-                "chain_index": 9, "chain_head": true,
-                "receipt_hash": hex::encode(NODE_TIP), "turn_hash": "77".repeat(32),
-            }])
-        } else if line.starts_with("POST /api/faucet") {
-            serde_json::json!({"success": true, "turn_hash": "22".repeat(32)})
-        } else if line.starts_with("POST /turns/submit")
-            && submitted(&body).turn.previous_receipt_hash != Some(AGENT_HEAD)
-        {
-            // The node's refusal of a turn that does not thread its agent's
-            // own head. It names the turn, as the node's reject path does.
-            serde_json::json!({
-                "accepted": false,
-                "turn_hash": hex::encode(submitted(&body).turn.hash()),
-                "error": "receipt chain mismatch"
-            })
-        } else if line.starts_with("POST /turns/submit") {
-            match node.submit.clone() {
-                Submit::HttpError => {
-                    code = 503;
-                    serde_json::json!({"error": "upstream unavailable"})
-                }
-                Submit::Refuses => {
-                    // A GENUINE refusal names the turn it refused, which is
-                    // what the node's own reject path does.
-                    let signed: dregg_sdk::SignedTurn = postcard::from_bytes(&body)
-                        .expect("the client must send a postcard SignedTurn");
-                    serde_json::json!({
-                        "accepted": false,
-                        "turn_hash": hex::encode(signed.turn.hash()),
-                        "error": "insufficient balance"
-                    })
-                }
-                Submit::ReportsNoHash => serde_json::json!({"accepted": true}),
-                Submit::ReportsAnotherTurn => {
-                    let other = "33".repeat(32);
-                    node.receipted.lock().await.push(other.clone());
-                    serde_json::json!({"accepted": true, "turn_hash": other})
-                }
-                Submit::Honest | Submit::HonestThenPollFails => {
-                    let signed: dregg_sdk::SignedTurn = postcard::from_bytes(&body)
-                        .expect("the client must send a postcard SignedTurn");
-                    let hash = hex::encode(signed.turn.hash());
-                    node.receipted.lock().await.push(hash.clone());
-                    serde_json::json!({"accepted": true, "turn_hash": hash})
-                }
-            }
-        } else if line.starts_with("GET /api/starbridge/receipts")
-            && matches!(node.submit, Submit::HonestThenPollFails)
-        {
-            code = 500;
-            serde_json::json!({"error": "receipt index unavailable"})
-        } else if line.starts_with("GET /api/starbridge/receipts") {
-            let want = line
-                .split("turn_hash=")
-                .nth(1)
-                .and_then(|rest| rest.split_whitespace().next())
-                .unwrap_or_default()
-                .to_string();
-            let held = node.receipted.lock().await.clone();
-            if held.iter().any(|h| h.eq_ignore_ascii_case(&want)) {
-                serde_json::json!([{
-                    "chain_index": 3, "chain_head": true,
-                    "receipt_hash": "44".repeat(32),
-                    "turn_hash": want, "finality": "tentative",
-                }])
-            } else {
-                serde_json::json!([])
-            }
-        } else {
-            code = 404;
-            serde_json::json!({"error": "not found"})
-        };
-        let bytes = serde_json::to_vec(&response).unwrap();
-        let head = format!(
-            "HTTP/1.1 {code} OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
-            bytes.len()
-        );
-        let _ = socket.write_all(head.as_bytes()).await;
-        let _ = socket.write_all(&bytes).await;
-    }
-
-    /// A temp DREGG_HOME with one profile, and a node speaking the whole path.
-    async fn transfer_fixture(
-        submit: Submit,
-    ) -> Option<(String, String, tokio::task::JoinHandle<()>)> {
-        // The same install `main` performs, keygen included: creating the
-        // temp identity below IS a keygen.
-        //
-        // MEASURED ON THIS BUILD: all three come back ExportAbsent, so the
-        // linked archive exports no verified core and dregg-pq ABORTS the
-        // process the moment a key is generated or a turn is signed. These
-        // arms therefore cannot run here, and they say so rather than being
-        // deleted or quietly passing: the composition they cover is the one a
-        // helper cannot reach, so a skipped arm is a known gap and a removed
-        // one is an invisible gap. They run unchanged wherever the archive
-        // exports the cores. Forcing them through by accepting the unaudited
-        // primitive is NOT done: a test is not a reason to turn off an audit
-        // gate, and the gate is reporting a real degradation of this build.
-        let sign = dregg_sdk::install_verified_mldsa_sign_core_real();
-        let keygen = dregg_sdk::install_verified_mldsa_keygen_core_real();
-        dregg_sdk::install_verified_mldsa_verify_core();
-        if !cores_are_healthy(sign, keygen) {
-            return None;
-        }
-        let node = Arc::new(TransferNode {
-            submit,
-            receipted: Mutex::new(Vec::new()),
-        });
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        let shared = node.clone();
-        let handle = tokio::spawn(async move {
-            while let Ok((socket, _)) = listener.accept().await {
-                tokio::spawn(transfer_connection(socket, shared.clone()));
-            }
-        });
-        let home = std::env::temp_dir().join(format!(
-            "dregg-client-sign-test-{}",
-            listener_port(&url)
-        ));
-        let _ = std::fs::create_dir_all(home.join("profiles"));
-        Some((url, home.to_string_lossy().into_owned(), handle))
-    }
-
-    fn listener_port(url: &str) -> String {
-        url.rsplit(':').next().unwrap_or("0").to_string()
-    }
-
-    fn transfer_flags(url: &str, to: &str) -> Flags {
-        Flags {
-            node_url: url.trim_end_matches('/').to_string(),
-            profile: Some("hc2-transfer-test".to_string()),
-            token: Some("test-bearer".to_string()),
-            topic: "client-sign".to_string(),
-            to: Some(to.to_string()),
-            fund: 5000,
-            amount: Some(100),
-            accept_tentative: true,
-            rest: Vec::new(),
-        }
-    }
-
-    /// The whole composed run, with the process-global env seams held for the
-    /// duration. `DREGG_HOME` is what keeps this off any real identity.
-    /// `None` when this build cannot run the composed path at all — see
-    /// `transfer_fixture`. Every arm below reports the skip rather than
-    /// passing on it, so a gap stays visible.
-    async fn run_transfer(submit: Submit) -> Option<Result<()>> {
-        // DREGG_HOME AND DREGG_PROFILE ARE PROCESS-GLOBAL, so these arms are
-        // serialized: cargo runs tests on threads, and two of them setting the
-        // same variables would make each one read the other's identity.
-        static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _held = ENV.lock().unwrap_or_else(|e| e.into_inner());
-        let (url, home, handle) = transfer_fixture(submit).await?;
-        unsafe {
-            std::env::set_var("DREGG_HOME", &home);
-            std::env::set_var("DREGG_PROFILE", "hc2-transfer-test");
-        }
-        let _ = dregg_sdk::profiles::create("hc2-transfer-test");
-        let to = "55".repeat(32);
-        let out = cmd_transfer(transfer_flags(&url, &to)).await;
-        handle.abort();
-        Some(out)
-    }
-
-    /// The one place the skip is announced, so a reader of the output sees
-    /// WHICH property went unexercised and why.
-    fn skipped(what: &str) {
-        eprintln!(
-            "SKIPPED {what}: this build's linked archive exports no verified \
-             ML-DSA core, so signing a turn would abort the process. The arm \
-             is unchanged and runs wherever the cores are exported."
-        );
-    }
+    // and a poll, so these arms drive `cmd_transfer` against
+    // `test_support::TestNode`, which executes the turn with the real executor
+    // and serves the whole path (/status, the cell, the faucet, /turns/submit,
+    // the exact-hash receipt query). A `SubmitFault` makes the node answer
+    // wrongly in exactly one place; everything else stays the node's real
+    // answer. DREGG_HOME points the profile loader at a temp identity so no
+    // real key is touched.
 
     #[test]
     fn probe_which_verified_pq_cores_this_build_exports() {
@@ -2592,75 +2140,153 @@ mod tests {
         eprintln!("PQPROBE keygen={:?}", dregg_sdk::install_verified_mldsa_keygen_core_real());
     }
 
-    #[tokio::test]
-    async fn a_transfer_the_node_commits_reports_committed() {
-        // UNCONDITIONAL POSITIVE FIRST, through the whole path: without it the
-        // refusals below could all be satisfied by a verb that never succeeds.
-        let Some(out) = run_transfer(Submit::Honest).await else {
-            return skipped("the committed-transfer positive");
-        };
-        out.expect("an honest node's committed transfer must report success");
-    }
+    #[cfg(feature = "test-support")]
+    mod composed {
+        use dregg_sdk_net::test_support::{SubmitFault, TestNode};
 
-    #[tokio::test]
-    async fn a_receipt_for_ANOTHER_turn_never_reports_THIS_transfer_committed() {
-        // THE WRONG-OPERATION SUCCESS. The node accepts and names a different
-        // turn; that other turn has a perfectly valid receipt. Binding the
-        // confirmation to the hash the SERVER chose would confirm B and print
-        // THIS transfer's recipient and amount beside it.
-        let Some(out) = run_transfer(Submit::ReportsAnotherTurn).await else {
-            return skipped("the wrong-operation-success pole");
-        };
-        let e = out.expect_err("a foreign turn hash must never confirm this transfer");
-        let text = e.to_string();
-        assert!(text.contains("is not the transfer this process signed"), "{text}");
-        assert!(text.contains("Do NOT resubmit"), "{text}");
-    }
+        use super::*;
 
-    #[tokio::test]
-    async fn every_exit_after_the_post_says_UNKNOWN_and_do_not_resubmit() {
-        // A nonzero exit is not proof of refusal. Each of these leaves the
-        // bytes possibly delivered, so each must carry the same guidance.
-        for submit in [Submit::HttpError, Submit::ReportsNoHash] {
-            let Some(out) = run_transfer(submit).await else {
-                return skipped("the post-submit UNKNOWN poles");
+        const PROFILE: &str = "hc2-transfer-test";
+
+        fn transfer_flags(url: &str, to: &str) -> Flags {
+            Flags {
+                node_url: url.trim_end_matches('/').to_string(),
+                profile: Some(PROFILE.to_string()),
+                token: Some("test-bearer".to_string()),
+                topic: "client-sign".to_string(),
+                to: Some(to.to_string()),
+                fund: 5000,
+                amount: Some(100),
+                accept_tentative: true,
+                rest: Vec::new(),
+            }
+        }
+
+        /// The whole composed run against a `TestNode` holding the profile's
+        /// funded cell and an open destination, with the process-global env
+        /// seams held for the duration. `None` when this build cannot run the
+        /// composed path at all: see `skipped`.
+        async fn run_transfer(fault: Option<SubmitFault>) -> Option<Result<()>> {
+            // DREGG_HOME AND DREGG_PROFILE ARE PROCESS-GLOBAL, so these arms are
+            // serialized: cargo runs tests on threads, and two of them setting
+            // the same variables would make each one read the other's identity.
+            static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            let _held = ENV.lock().unwrap_or_else(|e| e.into_inner());
+            // The same install `main` performs, keygen included: creating the
+            // temp identity below IS a keygen.
+            let sign = dregg_sdk::install_verified_mldsa_sign_core_real();
+            let keygen = dregg_sdk::install_verified_mldsa_keygen_core_real();
+            dregg_sdk::install_verified_mldsa_verify_core();
+            if !cores_are_healthy(sign, keygen) {
+                return None;
+            }
+            let home = std::env::temp_dir().join(format!(
+                "dregg-client-sign-test-{}",
+                std::process::id()
+            ));
+            let _ = std::fs::create_dir_all(home.join("profiles"));
+            unsafe {
+                std::env::set_var("DREGG_HOME", &home);
+                std::env::set_var("DREGG_PROFILE", PROFILE);
+            }
+            let _ = dregg_sdk::profiles::create(PROFILE);
+            let clerk = dregg_sdk::profiles::load(PROFILE).expect("load the temp profile");
+
+            let (mut node, _) = TestNode::genesis([0x11; 32], [0x22; 32], 0);
+            node.seed_open_cell(clerk.public_key().0, 1_000_000);
+            let to = node.seed_open_cell([0x55; 32], 0);
+            let node = match fault {
+                Some(fault) => node.with_submit_fault(fault),
+                None => node,
             };
-            let e = out.expect_err("must not succeed");
+            let spawned = node.spawn().await;
+            let out = cmd_transfer(transfer_flags(spawned.base_url(), &hex::encode(to.0))).await;
+            spawned.shutdown();
+            Some(out)
+        }
+
+        /// The one place the skip is announced, so a reader of the output sees
+        /// WHICH property went unexercised and why.
+        fn skipped(what: &str) {
+            eprintln!(
+                "SKIPPED {what}: this build's linked archive exports no verified \
+                 ML-DSA core, so signing a turn would abort the process. The arm \
+                 is unchanged and runs wherever the cores are exported."
+            );
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_transfer_the_node_commits_reports_committed() {
+            // UNCONDITIONAL POSITIVE FIRST, through the whole path: without it the
+            // refusals below could all be satisfied by a verb that never succeeds.
+            let Some(out) = run_transfer(None).await else {
+                return skipped("the committed-transfer positive");
+            };
+            out.expect("an honest node's committed transfer must report success");
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_receipt_for_ANOTHER_turn_never_reports_THIS_transfer_committed() {
+            // THE WRONG-OPERATION SUCCESS. The node accepts and names a different
+            // turn; that other turn has a perfectly valid receipt. Binding the
+            // confirmation to the hash the SERVER chose would confirm B and print
+            // THIS transfer's recipient and amount beside it.
+            let Some(out) = run_transfer(Some(SubmitFault::ReportsAnotherTurn)).await else {
+                return skipped("the wrong-operation-success pole");
+            };
+            let e = out.expect_err("a foreign turn hash must never confirm this transfer");
+            let text = e.to_string();
+            assert!(text.contains("is not the transfer this process signed"), "{text}");
+            assert!(text.contains("Do NOT resubmit"), "{text}");
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn every_exit_after_the_post_says_UNKNOWN_and_do_not_resubmit() {
+            // A nonzero exit is not proof of refusal. Each of these leaves the
+            // bytes possibly delivered, so each must carry the same guidance.
+            for fault in [SubmitFault::HttpStatus(503), SubmitFault::ReportsNoHash] {
+                let Some(out) = run_transfer(Some(fault)).await else {
+                    return skipped("the post-submit UNKNOWN poles");
+                };
+                let e = out.expect_err("must not succeed");
+                let text = e.to_string();
+                assert!(text.contains("UNKNOWN, not a refusal"), "{text}");
+                assert!(text.contains("Do NOT resubmit"), "{text}");
+                assert!(text.contains("starbridge/receipts"),
+                        "the caller is owed the exact re-read: {text}");
+            }
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_poll_that_fails_after_the_turn_landed_is_UNKNOWN() {
+            // THE POLE THE REVIEW ASKED FOR: the submission reached the node and
+            // the receipt query then failed, so this process cannot say whether
+            // the transfer committed. Exiting on it without the warning is what
+            // invites the caller to send again.
+            let Some(out) = run_transfer(Some(SubmitFault::ReceiptQueryFails)).await else {
+                return skipped("the uncertain-poll pole");
+            };
+            let e = out.expect_err("a failed poll must not report success");
             let text = e.to_string();
             assert!(text.contains("UNKNOWN, not a refusal"), "{text}");
             assert!(text.contains("Do NOT resubmit"), "{text}");
-            assert!(text.contains("starbridge/receipts"),
-                    "the caller is owed the exact re-read: {text}");
+            assert!(text.contains("starbridge/receipts"), "{text}");
         }
-    }
 
-    #[tokio::test]
-    async fn a_poll_that_fails_after_the_turn_landed_is_UNKNOWN() {
-        // THE POLE THE REVIEW ASKED FOR: the submission reached the node and
-        // the receipt query then failed, so this process cannot say whether
-        // the transfer committed. Exiting on it without the warning is what
-        // invites the caller to send again.
-        let Some(out) = run_transfer(Submit::HonestThenPollFails).await else {
-            return skipped("the uncertain-poll pole");
-        };
-        let e = out.expect_err("a failed poll must not report success");
-        let text = e.to_string();
-        assert!(text.contains("UNKNOWN, not a refusal"), "{text}");
-        assert!(text.contains("Do NOT resubmit"), "{text}");
-        assert!(text.contains("starbridge/receipts"), "{text}");
-    }
-
-    #[tokio::test]
-    async fn an_explicit_refusal_is_the_one_post_submit_answer_that_is_not_unknown() {
-        // MUST-MISS beside the arm above: the node executed and rejected, so
-        // nothing moved and there is nothing to re-read. Telling the caller
-        // this might have committed would be its own false alarm.
-        let Some(out) = run_transfer(Submit::Refuses).await else {
-            return skipped("the decided-refusal must-miss");
-        };
-        let e = out.expect_err("a refused transfer must not succeed");
-        let text = e.to_string();
-        assert!(text.contains("node refused the transfer"), "{text}");
-        assert!(!text.contains("UNKNOWN"), "a decided refusal is not UNKNOWN: {text}");
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn an_explicit_refusal_is_the_one_post_submit_answer_that_is_not_unknown() {
+            // MUST-MISS beside the arm above: the node executed and rejected, so
+            // nothing moved and there is nothing to re-read. Telling the caller
+            // this might have committed would be its own false alarm.
+            let Some(out) = run_transfer(Some(SubmitFault::RefusesNamingTheTurn(
+                "insufficient balance".to_string(),
+            ))).await else {
+                return skipped("the decided-refusal must-miss");
+            };
+            let e = out.expect_err("a refused transfer must not succeed");
+            let text = e.to_string();
+            assert!(text.contains("node refused the transfer"), "{text}");
+            assert!(!text.contains("UNKNOWN"), "a decided refusal is not UNKNOWN: {text}");
+        }
     }
 }

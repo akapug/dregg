@@ -225,6 +225,17 @@ pub struct StatusResponse {
     /// committee of one, including the configured one `dregg-node init` mints,
     /// so no client-side rule over the other fields names the binding (#90).
     pub executor_federation_id: String,
+    /// Whether this node's executors admit the fee-exempt COORDINATION class
+    /// (`NodeStateInner::coordination_fee_exempt`, from genesis or the solo
+    /// `--coordination-fee-exempt` switch). A client sizing a `fee = 0` chat
+    /// turn reads this and `coordination_exempt_ceiling` instead of guessing
+    /// the node's cost model: a client that declares `fee = 0` to a node
+    /// without the class is refused `BudgetExceeded`.
+    pub coordination_fee_exempt: bool,
+    /// The per-turn computron ceiling an exempt coordination turn may meter for
+    /// free (`ComputronCosts::coordination_exempt_ceiling` on this node's
+    /// executors). Served whether or not the class is on.
+    pub coordination_exempt_ceiling: u64,
     /// THE SWAP — honest verified-execution surface. The authoritative state
     /// producer on the commit path:
     ///   * `"lean"`  — the VERIFIED Lean executor produces the committed state
@@ -3117,6 +3128,9 @@ async fn get_status(State(state): State<NodeState>) -> Json<StatusResponse> {
         executor_federation_id: hex_encode(&crate::executor_setup::federation_id_for_executor(
             &s,
         )),
+        coordination_fee_exempt: s.coordination_fee_exempt,
+        coordination_exempt_ceiling: dregg_turn::ComputronCosts::default()
+            .coordination_exempt_ceiling,
         state_producer,
         lean_producer,
         full_turn_proving,
@@ -12807,6 +12821,44 @@ mod tests {
         );
     }
 
+    /// `/status` says whether the coordination class is on, from the same state
+    /// the executors read (`configure_turn_executor`), and the ceiling they
+    /// apply. `dregg-client-sign` sizes a chat turn's fee from these two fields
+    /// (F9 of the #72 review), so they must follow the node's flag, not a
+    /// default.
+    #[tokio::test]
+    async fn status_serves_the_coordination_class() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = NodeState::new(tmp.path(), vec![]).expect("node state");
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let app = router(state.clone(), false, recorder.handle());
+
+        for exempt in [false, true, false] {
+            state.write().await.coordination_fee_exempt = exempt;
+            let (code, json) = get_json(&app, "/status").await;
+            assert_eq!(code, StatusCode::OK);
+            assert_eq!(
+                json.get("coordination_fee_exempt").and_then(|v| v.as_bool()),
+                Some(exempt),
+                "/status must serve the node's coordination flag; got {json}"
+            );
+            assert_eq!(
+                json.get("coordination_exempt_ceiling").and_then(|v| v.as_u64()),
+                Some(dregg_turn::COORDINATION_EXEMPT_CEILING),
+                "/status must serve the ceiling the executors apply; got {json}"
+            );
+            let executor = {
+                let s = state.read().await;
+                crate::executor_setup::new_verify_executor(&s)
+            };
+            assert_eq!(executor.costs.coordination_exempt, exempt);
+            assert_eq!(
+                executor.costs.coordination_exempt_ceiling,
+                dregg_turn::COORDINATION_EXEMPT_CEILING
+            );
+        }
+    }
+
     /// THE PUBLIC READ CONTRACT. Every path here must be reachable WITHOUT auth
     /// and must answer in the SHAPE its clients decode.
     ///
@@ -12862,6 +12914,8 @@ mod tests {
                     "federation_mode",
                     "public_key",
                     "executor_federation_id",
+                    "coordination_fee_exempt",
+                    "coordination_exempt_ceiling",
                     "state_producer",
                     "producer_root_agreeing_effects",
                 ]),

@@ -174,6 +174,9 @@ fn assert_producer_agreed(outcome: ProducerOutcome, label: &str) {
 }
 
 fn skip_no_lean() -> bool {
+    // Routed through the DREGG_TEST_REQUIRE_LEAN hard mode (dregg-lean-ffi::demand_lean):
+    // unarmed, an archive-less build prints the honest SKIP and returns; ARMED, it PANICS —
+    // so this suite can never report `ok` having asserted nothing on the hard-mode lane.
     !dregg_lean_ffi::demand_lean(
         dregg_lean_ffi::lean_available(),
         "Lean archive (lean_available)",

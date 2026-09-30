@@ -212,6 +212,18 @@ impl NodeHttpClient {
         })
     }
 
+    /// The node's coordination class, read from `/status`
+    /// (`coordination_fee_exempt`, `coordination_exempt_ceiling`): whether its
+    /// executors admit a `fee = 0` own-cell EmitEvent-only turn, and up to how
+    /// many metered computrons. A client sizes a chat turn's fee from this and
+    /// derives nothing, so it declares `fee = 0` exactly when the node would
+    /// admit it. A missing or malformed field is an error, never "off".
+    pub async fn fetch_coordination_class(&self) -> Result<CoordinationClass, SdkError> {
+        let url = format!("{}/status", self.base_url);
+        coordination_class(&self.get_json(&url).await?)
+            .map_err(|why| SdkError::Wire(format!("{url}: {why}")))
+    }
+
     /// `GET /api/cell/{id}` → the cell's current nonce (the executor rejects a
     /// stale nonce, so a fire must use this fresh value).
     pub async fn fetch_cell_nonce(&self, cell: &CellId) -> Result<u64, SdkError> {
@@ -404,6 +416,39 @@ fn agent_receipt_head(cell_view: &serde_json::Value) -> Result<Option<[u8; 32]>,
                 .into(),
         )),
     }
+}
+
+/// A node's fee-exempt coordination class as `/status` serves it. See
+/// [`NodeHttpClient::fetch_coordination_class`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CoordinationClass {
+    /// `/status.coordination_fee_exempt`.
+    pub exempt: bool,
+    /// `/status.coordination_exempt_ceiling`.
+    pub ceiling: u64,
+}
+
+impl CoordinationClass {
+    /// The cost model a client estimates its declared fee against for this
+    /// node: the default costs with this node's class and ceiling.
+    pub fn cost_model(&self) -> ComputronCosts {
+        let mut costs = ComputronCosts::default();
+        costs.coordination_exempt = self.exempt;
+        costs.coordination_exempt_ceiling = self.ceiling;
+        costs
+    }
+}
+
+fn coordination_class(status: &serde_json::Value) -> Result<CoordinationClass, String> {
+    let exempt = status
+        .get("coordination_fee_exempt")
+        .and_then(|v| v.as_bool())
+        .ok_or("carries no boolean coordination_fee_exempt")?;
+    let ceiling = status
+        .get("coordination_exempt_ceiling")
+        .and_then(|v| v.as_u64())
+        .ok_or("carries no unsigned coordination_exempt_ceiling")?;
+    Ok(CoordinationClass { exempt, ceiling })
 }
 
 /// Decode a 64-char hex string into a 32-byte array. `None` on malformed input.
@@ -742,6 +787,39 @@ mod federation_id_tests {
         assert_eq!(got, committee_id);
         assert_eq!(got, spawned.fed_id(), "the id the executor verifies under");
         assert_ne!(got, *blake3::hash(&node_public_key).as_bytes());
+    }
+}
+
+#[cfg(test)]
+mod coordination_class_tests {
+    use super::{CoordinationClass, coordination_class};
+
+    #[test]
+    fn the_served_class_is_read_as_served() {
+        for exempt in [false, true] {
+            let status = serde_json::json!({
+                "coordination_fee_exempt": exempt,
+                "coordination_exempt_ceiling": 10_000,
+            });
+            let class = coordination_class(&status).expect("well-formed");
+            assert_eq!(class, CoordinationClass { exempt, ceiling: 10_000 });
+            let costs = class.cost_model();
+            assert_eq!(costs.coordination_exempt, exempt);
+            assert_eq!(costs.coordination_exempt_ceiling, 10_000);
+        }
+    }
+
+    #[test]
+    fn a_missing_or_malformed_field_is_an_error_not_off() {
+        for status in [
+            serde_json::json!({"federation_mode": "solo"}),
+            serde_json::json!({"coordination_fee_exempt": true}),
+            serde_json::json!({"coordination_exempt_ceiling": 10_000}),
+            serde_json::json!({"coordination_fee_exempt": "true", "coordination_exempt_ceiling": 1}),
+            serde_json::json!({"coordination_fee_exempt": false, "coordination_exempt_ceiling": -1}),
+        ] {
+            assert!(coordination_class(&status).is_err(), "{status} must not read as a class");
+        }
     }
 }
 
