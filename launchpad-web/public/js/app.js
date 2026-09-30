@@ -63,12 +63,37 @@ export const short = (a) => a ? a.slice(0, 6) + '…' + a.slice(-4) : '';
 export const fmtWhole = (base) => (BigInt(base || 0) / 10n ** 18n).toString(); // token base→whole
 export const nowSec = () => Math.floor(Date.now() / 1000);
 
+// ── HTML construction ──
+// Token names, symbols, addresses, revert reasons and every other value the
+// backend relays are chosen by whoever deployed or called a contract, and this
+// origin holds the wallet connection and the buy/sell buttons. So markup is
+// built ONLY through the `html` tag: every interpolated value is escaped unless
+// it is itself an `html` result (a `SafeHtml`), arrays are joined element-wise
+// under the same rule, and `setHtml` refuses anything that is not a `SafeHtml`.
+// No page assigns `innerHTML` directly (test/escape.test.mjs enforces it).
+export class SafeHtml {
+  constructor(s) { this.s = s; }
+  toString() { return this.s; }
+}
+const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '`': '&#96;' };
+export const esc = (v) => String(v ?? '').replace(/[&<>"'`]/g, (c) => ESC[c]);
+const frag = (v) => v instanceof SafeHtml ? v.s : Array.isArray(v) ? v.map(frag).join('') : esc(v);
+export function html(strings, ...vals) {
+  let out = strings[0];
+  vals.forEach((v, i) => { out += frag(v) + strings[i + 1]; });
+  return new SafeHtml(out);
+}
+export function setHtml(el, h) {
+  if (!(h instanceof SafeHtml)) throw new TypeError('setHtml: markup must be built with html``');
+  el.innerHTML = h.s;
+}
+
 export function chip(grade) {
-  return `<span class="chip ${grade}">${grade}</span>`;
+  return html`<span class="chip ${grade}">${grade}</span>`;
 }
 export function phaseBadge(phase) {
   const cls = { Commit: 'commit', Reveal: 'reveal', ClearReady: 'reveal', Cleared: 'cleared', Finalized: 'cleared' }[phase] || '';
-  return `<span class="badge ${cls}">${phase}</span>`;
+  return html`<span class="badge ${cls}">${phase}</span>`;
 }
 
 // header wallet pill wiring (optional, pages call this)

@@ -47,7 +47,7 @@
 </main>
 
 <script type="module">
-import { mountWalletPill, phaseBadge, fmtGwei, short, chip } from '/js/app.js';
+import { mountWalletPill, phaseBadge, fmtGwei, short, chip, html, setHtml } from '/js/app.js';
 import { fetchLaunches } from '/js/launchpad.js';
 
 await import('/vendor/ethers.js');
@@ -57,7 +57,7 @@ function card(L) {
   const disc = L.disclosure;
   const disclosed = disc && disc.verified;
   const price = L.clearingPrice !== '0' ? `${fmtGwei(L.clearingPrice)} gwei uniform` : '—';
-  return `<div class="card link" onclick="location.href='/token.html?id=${L.id}'">
+  return html`<div class="card link" data-launch-id="${L.id}">
     <h4>${L.name || 'launch #' + L.id} <span class="tick">$${L.symbol || '???'}</span></h4>
     <div class="sub">launch #${L.id} · creator ${short(L.creator)}</div>
     <div class="kv" style="margin-top:9px">
@@ -65,8 +65,8 @@ function card(L) {
       <span class="k">clearing</span><span class="v mono">${price}</span>
       <span class="k">bidders revealed</span><span class="v mono">${L.revealedCount}</span>
       <span class="k">disclosed supply</span><span class="v">${disclosed
-        ? `<span class="badge ok">verified · no hidden supply</span>`
-        : `<span class="badge">unsubmitted</span>`}</span>
+        ? html`<span class="badge ok">verified · no hidden supply</span>`
+        : html`<span class="badge">unsubmitted</span>`}</span>
       <span class="k">rank</span><span class="v mono">${L.rank.toFixed(3)}</span>
     </div>
     <div class="note">${chip('REPLAYABLE')} rank re-derivable · ${chip(L.clearingAttested ? 'PROVED' : 'BUILT')} clearing</div>
@@ -77,9 +77,12 @@ async function render() {
   const el = document.getElementById('trending');
   try {
     const launches = await fetchLaunches();
-    el.innerHTML = launches.length ? launches.map(card).join('')
-      : '<div class="note">no launches yet — <a href="/create.html">create the first fair launch →</a></div>';
-  } catch (e) { el.innerHTML = `<div class="note">backend not ready: ${e.message}</div>`; }
+    setHtml(el, launches.length ? html`${launches.map(card)}`
+      : html`<div class="note">no launches yet — <a href="/create.html">create the first fair launch →</a></div>`);
+    for (const c of el.querySelectorAll('[data-launch-id]')) {
+      c.onclick = () => { location.href = '/token.html?id=' + encodeURIComponent(c.dataset.launchId); };
+    }
+  } catch (e) { setHtml(el, html`<div class="note">backend not ready: ${e.message}</div>`); }
 }
 render();
 setInterval(render, 4000);

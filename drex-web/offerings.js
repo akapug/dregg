@@ -73,8 +73,15 @@ function scalars(r) {
   return pick;
 }
 
+// A refusal reads green, an acceptance of the bad input reads red.
+function verdictSpan(good, goodText, badText) {
+  const s = $('span', '', good ? goodText : badText);
+  s.style.color = good ? 'var(--ok)' : 'var(--bad)';
+  return s;
+}
+
 function renderOut(container, r) {
-  container.innerHTML = '';
+  container.replaceChildren();
   container.classList.add('show');
   const cert = r.certificate || {};
   const valid = cert.valid !== undefined ? cert.valid : (r.certificate && r.certificate.valid);
@@ -99,15 +106,15 @@ function renderOut(container, r) {
   if (r.negativePolarity) {
     const np = $('div', 'note');
     np.style.padding = '2px 12px 8px';
-    np.innerHTML = `<b>negative polarity:</b> ${r.negativePolarity.what} → ` +
-      (r.negativePolarity.rejected ? '<span style="color:var(--ok)">REJECTED ✓</span>' : '<span style="color:var(--bad)">accepted ✗</span>');
+    np.append($('b', '', 'negative polarity:'), ` ${r.negativePolarity.what} → `,
+      verdictSpan(r.negativePolarity.rejected, 'REJECTED ✓', 'accepted ✗'));
     container.appendChild(np);
   }
   if (r.tamper) {
     const tp = $('div', 'note');
     tp.style.padding = '2px 12px 8px';
-    tp.innerHTML = `<b>tamper:</b> ${r.tamper.what} → ` +
-      (r.tamper.accept ? '<span style="color:var(--bad)">accepted ✗</span>' : '<span style="color:var(--ok)">REJECTED ✓</span>');
+    tp.append($('b', '', 'tamper:'), ` ${r.tamper.what} → `,
+      verdictSpan(!r.tamper.accept, 'REJECTED ✓', 'accepted ✗'));
     container.appendChild(tp);
   }
 
@@ -157,10 +164,10 @@ function card(off) {
       try {
         const res = await fetch(off.run, { method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(preset.body(vals)) }).then((r) => r.json());
-        if (!res.ok) { out.classList.add('show'); out.innerHTML = ''; out.appendChild($('pre', 'raw', 'error: ' + (res.error || 'run failed') + (res.stderr ? '\n' + res.stderr : ''))); }
+        if (!res.ok) { out.classList.add('show'); out.replaceChildren($('pre', 'raw', 'error: ' + (res.error || 'run failed') + (res.stderr ? '\n' + res.stderr : ''))); }
         else renderOut(out, res.result);
       } catch (e) {
-        out.classList.add('show'); out.innerHTML = ''; out.appendChild($('pre', 'raw', 'network error: ' + e.message));
+        out.classList.add('show'); out.replaceChildren($('pre', 'raw', 'network error: ' + e.message));
       }
       btn.disabled = false; btn.textContent = 'Run the real engine';
     };
@@ -188,9 +195,6 @@ async function main() {
   document.getElementById('scope').textContent = m.scope;
   const grid = document.getElementById('grid');
   for (const off of m.offerings) grid.appendChild(card(off));
-  document.getElementById('foot').innerHTML =
-    'Each wired offering runs the REAL <code>fhegg-solver</code> engine locally and shows its verified certificate. ' +
-    'This is a devnet-DEMO surface — public devnet broadcast + live tokens are the ember-gated step. ' +
-    'See <code>docs/deos/DREGGFI-DEVNET-OFFERINGS.md</code> for the stage-per-offering assessment + the deploy path.';
+  document.getElementById('foot').hidden = false;
 }
 main();

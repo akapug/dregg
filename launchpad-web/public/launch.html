@@ -100,7 +100,7 @@
 </main>
 
 <script type="module">
-import { connect, state, mountWalletPill, fmtGwei, phaseBadge, nowSec } from '/js/app.js';
+import { connect, state, mountWalletPill, fmtGwei, phaseBadge, nowSec, html, setHtml } from '/js/app.js';
 import { commit, reveal, finalize, settle, freshSalt, clearingOrder, fetchLaunch } from '/js/launchpad.js';
 await import('/vendor/ethers.js');
 
@@ -108,15 +108,15 @@ const id = new URLSearchParams(location.search).get('id');
 const $ = (i) => document.getElementById(i);
 const flow = $('flow');
 function step(cls, h, d) { const e = document.createElement('div'); e.className = 'step ' + cls;
-  e.innerHTML = `<div class="h">${h}</div>${d ? `<div class="d">${d}</div>` : ''}`; flow.prepend(e); }
+  setHtml(e, html`<div class="h">${h}</div>${d ? html`<div class="d">${d}</div>` : ''}`); flow.prepend(e); }
 const saltKey = (actor) => `salt:${id}:${actor}`;
 
 let L = null;
 async function refresh() {
   L = await fetchLaunch(id);
   if (!L) { $('title').textContent = 'no such launch'; return; }
-  $('title').innerHTML = `${L.name || 'launch'} <span class="tick">$${L.symbol || ''}</span> · #${L.id}`;
-  $('phase').innerHTML = phaseBadge(L.phase);
+  setHtml($('title'), html`${L.name || 'launch'} <span class="tick">$${L.symbol || ''}</span> · #${L.id}`);
+  setHtml($('phase'), phaseBadge(L.phase));
   $('commitEnd').textContent = new Date(L.commitEnd*1000).toLocaleTimeString() + ` (${L.commitEnd - nowSec()}s)`;
   $('revealEnd').textContent = new Date(L.revealEnd*1000).toLocaleTimeString() + ` (${L.revealEnd - nowSec()}s)`;
   $('sale').textContent = L.disclosure ? L.disclosure.saleSupply : '—';

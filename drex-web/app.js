@@ -12,6 +12,7 @@ import {
   proveEligibility, sealedCommit, sealedReveal, randHex, hex,
 } from './drex-wallet.mjs';
 import { demoBook, fairnessLedger } from './drex-clearside.js';
+import { html, setHtml } from './html.mjs';
 
 const $ = (id) => document.getElementById(id);
 const book = demoBook();
@@ -19,18 +20,18 @@ let walletReady = false;
 
 // ── render the sealed order book (left rail) ──
 function renderBook(reveal = false) {
-  $('book').innerHTML = book.map((o, i) => {
+  setHtml($('book'), html`${book.map((o, i) => {
     const mine = o.trader === 'Ada';
     const body = reveal
-      ? `<span class="m">offers ${o.offerAmount} ${o.offerAsset} · wants ≥ ${o.wantMin} ${o.wantAsset}</span>`
-      : `<span class="m">committed · <span class="mono fade">H(order‖salt)</span></span>`;
-    return `<div class="card ord ${mine ? 'mine' : ''}">
+      ? html`<span class="m">offers ${o.offerAmount} ${o.offerAsset} · wants ≥ ${o.wantMin} ${o.wantAsset}</span>`
+      : html`<span class="m">committed · <span class="mono fade">H(order‖salt)</span></span>`;
+    return html`<div class="card ord ${mine ? 'mine' : ''}">
       <span class="t">${o.trader}${mine ? ' · you' : ''}</span>
       <span class="sealed">${reveal ? 'revealed' : 'sealed'}</span>
       ${body}
       <span class="m">priority ${o.priority}</span>
     </div>`;
-  }).join('');
+  })}`);
 }
 
 // ── flow log (center) ──
@@ -43,14 +44,14 @@ function step(id, h, opts = {}) {
   return s;
 }
 function drawFlow() {
-  $('flow').innerHTML = steps.map(s => {
-    const badge = s.badge ? `<span class="real">${s.badge}</span>`
-      : s.real ? '<span class="real">REAL wasm</span>' : '';
-    return `<div class="step ${s.state || ''}">
+  setHtml($('flow'), html`${steps.map(s => {
+    const badge = s.badge ? html`<span class="real">${s.badge}</span>`
+      : s.real ? html`<span class="real">REAL wasm</span>` : '';
+    return html`<div class="step ${s.state || ''}">
       <div class="h">${s.h}${badge}</div>
-      ${s.d ? `<div class="d">${s.d}</div>` : ''}
+      ${s.d ? html`<div class="d">${s.d}</div>` : ''}
     </div>`;
-  }).join('');
+  })}`);
 }
 
 // ── the stepper (Seal → Clear → Settle) — the strong single-phase shape ──
@@ -80,14 +81,14 @@ function renderProofBadge(r) {
   if (!el) return;
   const proof = r.proof || {}, rc = r.receipt || {};
   const proven = !!(proof.present || (rc && rc.hasProof));
-  if (!proven) { el.classList.remove('show'); el.innerHTML = ''; return; }
+  if (!proven) { el.classList.remove('show'); el.textContent = ''; return; }
   const h = r.turnHash || '';
   const proofDesc = proof.mode === 'stark_full_turn'
     ? `full-turn STARK proof · ${proof.len} bytes`
     : proof.mode === 'witnessed_receipt'
       ? `witnessed receipt · prove_pool (witness count ${proof.witnessCount || rc.witnessCount || 1})`
       : 'attached by the node prove_pool';
-  el.innerHTML = `
+  setHtml(el, html`
     <div class="proof-card">
       <div class="crest">
         <div class="seal" aria-hidden="true">✓</div>
@@ -104,7 +105,7 @@ function renderProofBadge(r) {
         <div class="pr"><span class="k">Node</span><span class="v">${r.node || ''} · operator ${(r.operator || '').slice(0, 14)}…</span></div>
       </div>
       <p class="recheck">Don't take our word for it — <b>anyone can re-run this check.</b> The proof is fetchable from the node at <span class="mono">/api/turn/${h.slice(0, 10)}…/proof</span> and re-verifies against the committed turn. The guarantee comes from the math, not from us.</p>
-    </div>`;
+    </div>`);
   el.classList.add('show');
   const cb = $('copyHash');
   if (cb) cb.onclick = () => {
@@ -144,7 +145,7 @@ function openIntent(order) {
 async function place() {
   steps.length = 0; drawFlow();
   setStepper(0);
-  const pb = $('proofBadge'); if (pb) { pb.classList.remove('show'); pb.innerHTML = ''; }
+  const pb = $('proofBadge'); if (pb) { pb.classList.remove('show'); pb.textContent = ''; }
   $('placeBtn').disabled = true;
   const order = currentOrder();
   const holdings = +$('holdings').value;
@@ -196,7 +197,7 @@ async function place() {
 
   // hold onto the order for reveal/clear
   window.__drexPending = { order, salt, commit, signed, sol, elig };
-  $('clock').innerHTML = `<span class="ok">Your order is sealed and proven.</span> Clear the batch — every sealed order settles together at one fair price.`;
+  setHtml($('clock'), html`<span class="ok">Your order is sealed and proven.</span> Clear the batch — every sealed order settles together at one fair price.`);
   $('batchPill').className = 'pill warn'; $('batchPill').textContent = 'batch T+1 · ready to clear';
   setStepper(1); // Seal done → Clear is next
   // add an advance button
@@ -368,28 +369,24 @@ async function settleOnLiveNode(cleared) {
 function renderClearedReal(res) {
   const color = { GOLD: '#f0c14b', ART: '#bc8cff', WINE: '#f85149', SILVER: '#8b949e', PEARL: '#58a6ff' };
   const allocs = res.allocations || [];
-  let html = '<div class="card">';
-  html += allocs.filter(a => !a.rested).map(a => {
+  const settled = allocs.filter(a => !a.rested).map(a => {
     const mine = a.trader === 'Ada';
-    return `<div class="alloc ${mine ? 'mine' : ''}">
+    return html`<div class="alloc ${mine ? 'mine' : ''}">
       <span class="who">${a.trader}${mine ? ' · you' : ''}</span>
       <span class="leg">sent ${a.sent} ${a.sentAsset} · got ${a.received} ${a.recvAsset} (≥${a.wantMin})</span>
       <span class="${a.ir && a.budget ? 'ok' : 'no'}">${a.ir && a.budget ? '✔' : '✗'}</span>
     </div>`;
-  }).join('');
-  html += allocs.filter(a => a.rested).map(a =>
-    `<div class="alloc"><span class="who fade">${a.trader}</span><span class="leg fade">rests — no match this batch</span><span class="fade">·</span></div>`).join('');
-  html += '</div>';
+  });
+  const rested = allocs.filter(a => a.rested).map(a =>
+    html`<div class="alloc"><span class="who fade">${a.trader}</span><span class="leg fade">rests — no match this batch</span><span class="fade">·</span></div>`);
   // conservation bars (from the verified settle)
-  if (res.conservation && res.conservation.length) {
-    html += '<div class="barwrap card"><div class="fade" style="font-size:11px;margin-bottom:6px">per-asset conservation (in = out) — from the verified settle (recTotalAsset)</div>';
-    html += res.conservation.map(c =>
-      `<div class="leg">${c.asset}: ${c.in} in = ${c.out} out <span class="${c.ok?'ok':'no'}">${c.ok?'✔':'✗'}</span></div>
-       <div class="bar"><span style="width:100%;background:${color[c.asset]||'#58a6ff'}"></span></div>`).join('');
-    html += '</div>';
-  }
+  const conservation = res.conservation && res.conservation.length
+    ? html`<div class="barwrap card"><div class="fade" style="font-size:11px;margin-bottom:6px">per-asset conservation (in = out) — from the verified settle (recTotalAsset)</div>${res.conservation.map(c =>
+      html`<div class="leg">${c.asset}: ${c.in} in = ${c.out} out <span class="${c.ok?'ok':'no'}">${c.ok?'✔':'✗'}</span></div>
+       <div class="bar"><span style="width:100%;background:${color[c.asset]||'#58a6ff'}"></span></div>`)}</div>`
+    : '';
   $('cleared').classList.remove('empty');
-  $('cleared').innerHTML = html;
+  setHtml($('cleared'), html`<div class="card">${settled}${rested}</div>${conservation}`);
 }
 
 // ── the single-phase SHIELDED clear through the REAL fhEgg engine (POST /clear-shielded) ──
@@ -405,7 +402,7 @@ async function shieldedClear() {
   }));
   const el = $('shieldedCleared');
   el.classList.remove('empty');
-  el.innerHTML = '<div class="fade">running the real fhEgg engine (PDHG + Cert-F)…</div>';
+  setHtml(el, html`<div class="fade">running the real fhEgg engine (PDHG + Cert-F)…</div>`);
   let res;
   try {
     res = await fetch('/clear-shielded', {
@@ -413,12 +410,12 @@ async function shieldedClear() {
       body: JSON.stringify(orders),
     }).then(r => r.json());
   } catch (e) {
-    el.innerHTML = '<div class="no">fhEgg engine unreachable: ' + e.message + ' — run via serve.mjs</div>';
+    setHtml(el, html`<div class="no">fhEgg engine unreachable: ${e.message} — run via serve.mjs</div>`);
     btn.disabled = false;
     return;
   }
   if (res.error) {
-    el.innerHTML = '<div class="no">' + res.error + '</div>' + (res.stderr ? '<div class="fade mono">' + res.stderr + '</div>' : '');
+    setHtml(el, html`<div class="no">${res.error}</div>${res.stderr ? html`<div class="fade mono">${res.stderr}</div>` : ''}`);
     btn.disabled = false;
     return;
   }
@@ -432,41 +429,34 @@ function renderShieldedCleared(res) {
   const air = res.air || {};
   const t = res.tamper || {};
   const st = res.starkStage || {};
-  const esc = (s) => String(s).replace(/[&<>]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[m]));
 
-  let html = '<div class="card">';
-  html += `<div class="fade" style="font-size:11px;margin-bottom:6px">${esc(res.mechanism || '')}  ·  ${res.nodes} assets, ${res.edges} orders, T=${res.iters} iters</div>`;
-  html += (res.orders || []).map(o => {
+  const orders = (res.orders || []).map(o => {
     const mine = o.trader === 'Ada';
-    return `<div class="alloc ${mine ? 'mine' : ''}">
-      <span class="who">${esc(o.trader)}${mine ? ' · you' : ''}</span>
+    return html`<div class="alloc ${mine ? 'mine' : ''}">
+      <span class="who">${o.trader}${mine ? ' · you' : ''}</span>
       <span class="leg">${o.offerAsset}→${o.wantAsset}: cleared <b>${o.clearedFlow}</b> of ${o.offerAmount} (want ≥${o.wantMin})</span>
       <span class="${o.filled ? 'ok' : 'fade'}">${o.filled ? '✔' : '·'}</span>
     </div>`;
-  }).join('');
-  html += '</div>';
+  });
 
-  // The Cert-F certificate — the fair-batch gate.
-  html += '<div class="barwrap card"><div class="fade" style="font-size:11px;margin-bottom:6px">Cert-F primal-dual certificate — the fair-batch gate the verified AIR checks</div>';
-  html += `<div class="leg">cleared weighted volume wᵀf = <b>${c.clearedVolume}</b> · dual cᵀs = ${c.dualObjective} · duality gap = ${c.dualityGap}</div>`;
-  html += `<div class="leg">per-asset conservation ‖Af‖∞ = ${c.conservationResidual} <span class="${c.conserves ? 'ok' : 'no'}">${c.conserves ? '✔ conserves' : '✗'}</span></div>`;
-  html += `<div class="leg">certificate valid (conserves · boxed · s≥0 · dual-feasible · gap≤ε): <span class="${c.valid ? 'ok' : 'no'}">${c.valid ? '✔ PROVED-sound checks pass' : '✗'}</span></div>`;
-  html += '</div>';
-
-  // The AIR accept + the tamper reject — soundness in code.
-  html += '<div class="barwrap card"><div class="fade" style="font-size:11px;margin-bottom:6px">the verified AIR gate (the exact n+4m+1 rows Market/CertF.lean proves sound)</div>';
-  html += `<div class="leg">honest certificate → AIR <span class="${air.accept ? 'ok' : 'no'}">${air.accept ? '✔ ACCEPT' : '✗ reject'}</span> (${air.constraints} constraints, ${air.terms} terms, ${air.witnessCells} witness cells)</div>`;
-  html += `<div class="leg">tampered (${esc(t.what || '')}) → AIR <span class="${!t.accept ? 'ok' : 'no'}">${!t.accept ? '✔ REJECT' : '✗ accepted (BUG)'}</span> [${(t.violated || []).join(', ')}]</div>`;
-  html += '</div>';
-
-  // The two tiers + the NAMED STARK stage (honest scope).
-  html += '<div class="barwrap card"><div class="fade" style="font-size:11px;margin-bottom:6px">who sees what — the shielded tiers</div>';
-  html += (res.tiers || []).map(x => `<div class="leg"><b>${esc(x.tier)}</b>: ${esc(x.sees)}</div>`).join('');
-  html += `<div class="leg" style="margin-top:8px"><span class="chip NOTBATCH">STARK-ZK: ${esc(st.status || 'named')}</span></div>`;
-  html += `<div class="det">${esc(st.revealNothingFloor || '')}. Hides: ${(st.hides || []).map(esc).join(', ')}. Wire entry point: <span class="mono">${esc(st.wireEntryPoint || '')}</span>.</div>`;
-  html += '</div>';
-
-  $('shieldedCleared').innerHTML = html;
+  setHtml($('shieldedCleared'), html`<div class="card">
+    <div class="fade" style="font-size:11px;margin-bottom:6px">${res.mechanism || ''}  ·  ${res.nodes} assets, ${res.edges} orders, T=${res.iters} iters</div>
+    ${orders}
+  </div>
+  <div class="barwrap card"><div class="fade" style="font-size:11px;margin-bottom:6px">Cert-F primal-dual certificate — the fair-batch gate the verified AIR checks</div>
+    <div class="leg">cleared weighted volume wᵀf = <b>${c.clearedVolume}</b> · dual cᵀs = ${c.dualObjective} · duality gap = ${c.dualityGap}</div>
+    <div class="leg">per-asset conservation ‖Af‖∞ = ${c.conservationResidual} <span class="${c.conserves ? 'ok' : 'no'}">${c.conserves ? '✔ conserves' : '✗'}</span></div>
+    <div class="leg">certificate valid (conserves · boxed · s≥0 · dual-feasible · gap≤ε): <span class="${c.valid ? 'ok' : 'no'}">${c.valid ? '✔ PROVED-sound checks pass' : '✗'}</span></div>
+  </div>
+  <div class="barwrap card"><div class="fade" style="font-size:11px;margin-bottom:6px">the verified AIR gate (the exact n+4m+1 rows Market/CertF.lean proves sound)</div>
+    <div class="leg">honest certificate → AIR <span class="${air.accept ? 'ok' : 'no'}">${air.accept ? '✔ ACCEPT' : '✗ reject'}</span> (${air.constraints} constraints, ${air.terms} terms, ${air.witnessCells} witness cells)</div>
+    <div class="leg">tampered (${t.what || ''}) → AIR <span class="${!t.accept ? 'ok' : 'no'}">${!t.accept ? '✔ REJECT' : '✗ accepted (BUG)'}</span> [${(t.violated || []).join(', ')}]</div>
+  </div>
+  <div class="barwrap card"><div class="fade" style="font-size:11px;margin-bottom:6px">who sees what — the shielded tiers</div>
+    ${(res.tiers || []).map(x => html`<div class="leg"><b>${x.tier}</b>: ${x.sees}</div>`)}
+    <div class="leg" style="margin-top:8px"><span class="chip NOTBATCH">STARK-ZK: ${st.status || 'named'}</span></div>
+    <div class="det">${st.revealNothingFloor || ''}. Hides: ${(st.hides || []).join(', ')}. Wire entry point: <span class="mono">${st.wireEntryPoint || ''}</span>.</div>
+  </div>`);
 }
 
 // ── the reveal-nothing STARK: prove the shielded clearing, render the WORLD-view ──
@@ -480,7 +470,7 @@ async function proveShielded() {
   btn.disabled = true;
   const el = $('worldView');
   el.classList.remove('empty');
-  el.innerHTML = '<div class="fade">proving the clearing in a real STARK (BabyBear + FRI) — this is real work, a moment…</div>';
+  setHtml(el, html`<div class="fade">proving the clearing in a real STARK (BabyBear + FRI) — this is real work, a moment…</div>`);
   const orders = book.map(o => ({
     trader: o.trader, offerAsset: o.offerAsset, offerAmount: o.offerAmount,
     wantAsset: o.wantAsset, wantMin: o.wantMin, priority: o.priority,
@@ -493,14 +483,14 @@ async function proveShielded() {
       body: JSON.stringify(orders),
     }).then(x => x.json());
   } catch (e) {
-    el.innerHTML = '<div class="no">reveal-nothing prover unreachable: ' + e.message + ' — run via serve.mjs</div>';
+    setHtml(el, html`<div class="no">reveal-nothing prover unreachable: ${e.message} — run via serve.mjs</div>`);
     btn.disabled = false; return;
   }
   const wallMs = Math.round(performance.now() - t0);
   if (!r.ok) {
-    el.innerHTML = '<div class="no">' + (r.error || 'prove failed') + ' (stage: ' + (r.stage || '?') + ')</div>'
-      + (r.stderr ? '<div class="fade mono">' + r.stderr + '</div>' : '')
-      + (r.error && /not built/.test(r.error) ? '<div class="det">build it: <span class="mono">cargo build --release -p dregg-circuit-prove --bin cert_f_prove</span></div>' : '');
+    setHtml(el, html`<div class="no">${r.error || 'prove failed'} (stage: ${r.stage || '?'})</div>${
+      r.stderr ? html`<div class="fade mono">${r.stderr}</div>` : ''}${
+      r.error && /not built/.test(r.error) ? html`<div class="det">build it: <span class="mono">cargo build --release -p dregg-circuit-prove --bin cert_f_prove</span></div>` : ''}`);
     btn.disabled = false; return;
   }
   renderWorldView(r, wallMs);
@@ -508,58 +498,47 @@ async function proveShielded() {
 }
 
 function renderWorldView(r, wallMs) {
-  const esc = (s) => String(s).replace(/[&<>]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[m]));
   const p = r.program || {}, tr = r.trace || {};
   // The flows the SOLVER saw (from the local book) — shown REDACTED in the world-view, to make
   // the hiding tangible: the solver knew these; the world does not (they are only in the trace).
   const flowsRedacted = book.map(o =>
-    `<div class="leg"><span class="who">${esc(o.trader)}</span> <span class="mono" style="filter:blur(4px);user-select:none" aria-hidden="true">${esc(o.offerAsset)}→${esc(o.wantAsset)} · ██ units</span> <span class="chip NOTBATCH">hidden</span></div>`
-  ).join('');
-
-  let html = '';
-  // ── the boundary: solver-sees vs world-sees ──
-  html += '<div class="barwrap card"><div class="fade" style="font-size:11px;margin-bottom:6px">the reveal-nothing boundary — the same clearing, two views</div>';
-  html += `<div class="leg"><b>The solver saw</b> (server-side, plaintext, to clear fast): every order, every flow f, the dual prices π, the slacks s.</div>`;
-  html += `<div class="leg" style="margin-top:6px"><b>The world sees</b> (this response): only the proof + the public inputs below. The witness never left the server.</div>`;
-  html += '</div>';
-
-  // ── the per-order flows, REDACTED for the world ──
-  html += '<div class="barwrap card"><div class="fade" style="font-size:11px;margin-bottom:6px">per-order flows — what the world does NOT get</div>';
-  html += flowsRedacted;
-  html += `<div class="det" style="margin-top:6px">redacted: ${(r.hides || []).map(esc).join(' · ')}. ${esc(r.redaction || '')}</div>`;
-  html += '</div>';
-
-  // ── what the world DOES see: the proof + public inputs ──
-  html += '<div class="barwrap card"><div class="fade" style="font-size:11px;margin-bottom:6px">the public output — a real dregg STARK (BabyBear + FRI) over the Cert-F AIR</div>';
-  html += `<div class="leg">a fair batch cleared · per-asset conservation held <span class="${r.conserves ? 'ok' : 'no'}">${r.conserves ? '✔' : '✗'}</span></div>`;
-  html += `<div class="leg">cleared volume wᵀf = <b>${esc(r.clearedVolume)}</b> (the ONLY witness-derived scalar the STARK exposes; public inputs = [${(r.publicInputs || []).map(esc).join(', ')}])</div>`;
-  html += `<div class="leg">proof verifies <span class="${r.verify ? 'ok' : 'no'}">${r.verify ? '✔ verify_cert_f → true' : '✗ did NOT verify'}</span></div>`;
-  html += `<div class="leg">proof size: <b>${esc(r.proofBytes)}</b> bytes · descriptor <span class="mono">${esc(r.descriptor || 'cert-f')}</span> · trace width ${esc(tr.width)} (${esc(tr.valueBits)}-bit range gadget)</div>`;
-  html += `<div class="leg">public program shape: ${esc(p.nodes)} assets, ${esc(p.edges)} orders, ε=${esc(p.epsilon)} (A, w, c ride as descriptor constants — public)</div>`;
-  html += `<div class="leg">proving latency: <b>${esc(r.proveMs)} ms</b> prove · ${esc(r.verifyMs)} ms verify · ${esc(wallMs)} ms wall (real STARK work — a separate action, not a click)</div>`;
-  html += '</div>';
-
-  // ── honest remaining: what full input-privacy still needs ──
+    html`<div class="leg"><span class="who">${o.trader}</span> <span class="mono" style="filter:blur(4px);user-select:none" aria-hidden="true">${o.offerAsset}→${o.wantAsset} · ██ units</span> <span class="chip NOTBATCH">hidden</span></div>`);
   const rem = r.remaining || {};
-  html += '<div class="barwrap card"><div class="fade" style="font-size:11px;margin-bottom:6px">honest scope — what full reveal-nothing still needs</div>';
-  html += `<div class="leg"><span class="chip NOTBATCH">named</span> ${esc(rem.noteCommitmentMatching || '')}</div>`;
-  html += `<div class="leg" style="margin-top:6px"><span class="chip NOTBATCH">floor</span> ${esc(rem.zkFloor || '')}</div>`;
-  html += `<div class="det" style="margin-top:6px">Here the flows are hidden from the PUBLIC OUTPUT (this proof). Full input-privacy — hidden bids end-to-end — is the shielded-pool wire, named above, not faked.</div>`;
-  html += '</div>';
 
-  $('worldView').innerHTML = html;
+  setHtml($('worldView'), html`
+  <div class="barwrap card"><div class="fade" style="font-size:11px;margin-bottom:6px">the reveal-nothing boundary — the same clearing, two views</div>
+    <div class="leg"><b>The solver saw</b> (server-side, plaintext, to clear fast): every order, every flow f, the dual prices π, the slacks s.</div>
+    <div class="leg" style="margin-top:6px"><b>The world sees</b> (this response): only the proof + the public inputs below. The witness never left the server.</div>
+  </div>
+  <div class="barwrap card"><div class="fade" style="font-size:11px;margin-bottom:6px">per-order flows — what the world does NOT get</div>
+    ${flowsRedacted}
+    <div class="det" style="margin-top:6px">redacted: ${(r.hides || []).join(' · ')}. ${r.redaction || ''}</div>
+  </div>
+  <div class="barwrap card"><div class="fade" style="font-size:11px;margin-bottom:6px">the public output — a real dregg STARK (BabyBear + FRI) over the Cert-F AIR</div>
+    <div class="leg">a fair batch cleared · per-asset conservation held <span class="${r.conserves ? 'ok' : 'no'}">${r.conserves ? '✔' : '✗'}</span></div>
+    <div class="leg">cleared volume wᵀf = <b>${r.clearedVolume}</b> (the ONLY witness-derived scalar the STARK exposes; public inputs = [${(r.publicInputs || []).join(', ')}])</div>
+    <div class="leg">proof verifies <span class="${r.verify ? 'ok' : 'no'}">${r.verify ? '✔ verify_cert_f → true' : '✗ did NOT verify'}</span></div>
+    <div class="leg">proof size: <b>${r.proofBytes}</b> bytes · descriptor <span class="mono">${r.descriptor || 'cert-f'}</span> · trace width ${tr.width} (${tr.valueBits}-bit range gadget)</div>
+    <div class="leg">public program shape: ${p.nodes} assets, ${p.edges} orders, ε=${p.epsilon} (A, w, c ride as descriptor constants — public)</div>
+    <div class="leg">proving latency: <b>${r.proveMs} ms</b> prove · ${r.verifyMs} ms verify · ${wallMs} ms wall (real STARK work — a separate action, not a click)</div>
+  </div>
+  <div class="barwrap card"><div class="fade" style="font-size:11px;margin-bottom:6px">honest scope — what full reveal-nothing still needs</div>
+    <div class="leg"><span class="chip NOTBATCH">named</span> ${rem.noteCommitmentMatching || ''}</div>
+    <div class="leg" style="margin-top:6px"><span class="chip NOTBATCH">floor</span> ${rem.zkFloor || ''}</div>
+    <div class="det" style="margin-top:6px">Here the flows are hidden from the PUBLIC OUTPUT (this proof). Full input-privacy — hidden bids end-to-end — is the shielded-pool wire, named above, not faked.</div>
+  </div>`);
 }
 
 function renderFairness() {
-  $('fair').innerHTML = fairnessLedger().map(f => {
-    const chips = f.grades.map(g => `<span class="chip ${g === 'NOT-IN-THIS-BATCH' ? 'NOTBATCH' : g}">${g}</span>`).join('');
-    return `<div class="fair">
+  setHtml($('fair'), html`${fairnessLedger().map(f => {
+    const chips = f.grades.map(g => html`<span class="chip ${g === 'NOT-IN-THIS-BATCH' ? 'NOTBATCH' : g}">${g}</span>`);
+    return html`<div class="fair">
       <div>${chips}</div>
       <div class="lab" style="margin-top:6px">${f.label}</div>
       <div class="det">${f.detail}</div>
       <div class="cite">${f.lean}</div>
     </div>`;
-  }).join('');
+  })}`);
 }
 
 const tick = () => new Promise(r => setTimeout(r, 30));

@@ -51,7 +51,7 @@
 </main>
 
 <script type="module">
-import { connect, state, mountWalletPill, fmtGwei, fmtEth, fmtWhole, short, phaseBadge, chip } from '/js/app.js';
+import { connect, state, mountWalletPill, fmtGwei, fmtEth, fmtWhole, short, phaseBadge, chip, html, setHtml } from '/js/app.js';
 import { fetchLaunch, graduate, poolBuy, poolSell } from '/js/launchpad.js';
 await import('/vendor/ethers.js');
 await mountWalletPill();
@@ -65,27 +65,27 @@ const spotGwei = (weiPerToken) => (Number(BigInt(weiPerToken || 0)) / 1e9).toFix
 async function render() {
   const L = await fetchLaunch(id);
   if (!L) { $('title').textContent = 'no such launch'; return; }
-  $('title').innerHTML = `${L.name || 'launch'} <span class="tick">$${L.symbol || ''}</span> · #${L.id} ${phaseBadge(L.phase)}`;
+  setHtml($('title'), html`${L.name || 'launch'} <span class="tick">$${L.symbol || ''}</span> · #${L.id} ${phaseBadge(L.phase)}`);
 
   // clearing
   const cleared = L.clearingPrice !== '0';
-  $('clearing').innerHTML = cleared ? `
+  setHtml($('clearing'), cleared ? html`
     <div class="big">${fmtGwei(L.clearingPrice)} gwei / token</div>
     <div class="kv" style="margin-top:8px">
       <span class="k">tokens sold</span><span class="v mono">${L.soldQty}</span>
       <span class="k">bidders revealed</span><span class="v mono">${L.revealedCount}</span>
       <span class="k">clearing proof</span><span class="v">${L.clearingAttested
-        ? chip('PROVED') + 'rung-2 attested' : chip('REPLAYABLE') + 'rung-1 re-derivable'}</span>
+        ? html`${chip('PROVED')}rung-2 attested` : html`${chip('REPLAYABLE')}rung-1 re-derivable`}</span>
     </div>
     <div class="note">Every winner paid this same uniform price (uniform_price_envy_free).</div>`
-    : `<div class="note">not cleared yet — phase ${L.phase}. <a href="/launch.html?id=${id}">go bid →</a></div>`;
+    : html`<div class="note">not cleared yet — phase ${L.phase}. <a href="/launch.html?id=${encodeURIComponent(id)}">go bid →</a></div>`);
 
   // graduated market (the provably-solvent pool)
   renderMarket(L);
 
   // disclosed schedule
   const d = L.disclosure;
-  $('schedule').innerHTML = d ? `
+  setHtml($('schedule'), d ? html`
     <div class="kv">
       <span class="k">total supply</span><span class="v mono">${d.totalSupply}</span>
       <span class="k">— sale (raise)</span><span class="v mono">${d.saleSupply}</span>
@@ -94,45 +94,45 @@ async function render() {
       <span class="k">reserve price</span><span class="v mono">${fmtGwei(d.reservePrice)} gwei</span>
       <span class="k">on-chain totalSupply</span><span class="v mono">${fmtWhole(L.totalSupplyBase)}</span>
       <span class="k">accounting</span><span class="v">${d.verified
-        ? '<span class="badge ok">verified vs commitment · no hidden supply</span>'
-        : '<span class="badge no">unverified</span>'}</span>
+        ? html`<span class="badge ok">verified vs commitment · no hidden supply</span>`
+        : html`<span class="badge no">unverified</span>`}</span>
     </div>
     <div class="note">${chip('BUILT')} disclosure checked server-side via checkSchedule; recompute
       keccak(abi.encode(schedule)) and compare to ${short(L.scheduleCommit)} yourself.</div>`
-    : '<div class="note">no disclosed schedule submitted for this launch.</div>';
+    : html`<div class="note">no disclosed schedule submitted for this launch.</div>`);
 
   // holders
   const hs = L.holders || [];
   const total = hs.reduce((s, h) => s + BigInt(h.balanceBase), 0n) || 1n;
-  $('holders').innerHTML = hs.length ? hs.map((h) => {
+  setHtml($('holders'), hs.length ? html`${hs.map((h) => {
     const pct = Number(BigInt(h.balanceBase) * 10000n / total) / 100;
-    return `<div class="alloc">
+    return html`<div class="alloc">
       <span class="who">${short(h.address)}</span>
       <span class="mono">${fmtWhole(h.balanceBase)}</span>
       <span class="mono">${pct.toFixed(1)}%</span>
       </div><div class="bar"><span style="width:${Math.min(100,pct)}%;background:var(--dragon)"></span></div>`;
-  }).join('') : '<div class="note">no holders yet (settle winners to distribute).</div>';
+  })}` : html`<div class="note">no holders yet (settle winners to distribute).</div>`);
 
   // bids
   const bids = (L.bids || []).filter((b) => b.revealed);
-  $('bids').innerHTML = bids.length ? bids.map((b) => `
+  setHtml($('bids'), bids.length ? html`${bids.map((b) => html`
     <div class="alloc">
       <span class="who">${short(b.bidder)}</span>
       <span class="mono">${fmtGwei(b.price)} gw × ${b.qty}</span>
       <span class="${b.filled !== '0' ? 'win' : 'lose'}">${b.filled !== '0' ? 'won ' + b.filled : 'no fill'}</span>
-    </div>`).join('') : '<div class="note">no revealed bids yet.</div>';
+    </div>`)}` : html`<div class="note">no revealed bids yet.</div>`);
 }
 
 // ── the graduated market: the live provably-solvent pool ──────────────────────
 function renderMarket(L) {
   const el = $('market');
   const cleared = L.clearingPrice !== '0';
-  if (!cleared) { el.innerHTML = '<div class="note">the token graduates into a solvent pool once the raise clears.</div>'; return; }
+  if (!cleared) { setHtml(el, html`<div class="note">the token graduates into a solvent pool once the raise clears.</div>`); return; }
 
   if (!L.graduated) {
     // cleared but not yet graduated — show the disclosed seed + a graduate action.
     const gs = L.graduationSeed;
-    el.innerHTML = `
+    setHtml(el, html`
       <div class="note">Cleared — ready to <b>graduate</b> into a provably-solvent liquid market.
         The seed is the <b>disclosed fraction</b> of the raise (on-chain-verifiable); a wrong seeding reverts.</div>
       <div class="kv" style="margin-top:8px">
@@ -142,25 +142,25 @@ function renderMarket(L) {
       <div class="row2" style="margin-top:10px">
         <button class="primary" id="gradBtn">Graduate → seed the solvent pool</button>
       </div>
-      <div class="note" id="gradMsg" style="margin-top:6px"></div>`;
+      <div class="note" id="gradMsg" style="margin-top:6px"></div>`);
     const btn = $('gradBtn');
     if (btn) btn.onclick = async () => {
       const msg = $('gradMsg');
       try { msg.textContent = 'connecting…'; await connect(0);
         msg.textContent = 'graduating (seeding the pool with the disclosed fraction)…';
         const r = await graduate({ launchId: id });
-        msg.innerHTML = `<span class="badge ok">graduated ✓</span> pool ${short(r.pool)} · tx ${short(r.txHash)}`;
+        setHtml(msg, html`<span class="badge ok">graduated ✓</span> pool ${short(r.pool)} · tx ${short(r.txHash)}`);
         await render();
-      } catch (e) { msg.innerHTML = `<span class="badge no">graduate failed:</span> ${e.shortMessage || e.message}`; }
+      } catch (e) { setHtml(msg, html`<span class="badge no">graduate failed:</span> ${e.shortMessage || e.message}`); }
     };
     return;
   }
 
   // graduated — the live pool: price, reserves, the solvency invariant, trading.
   const p = L.poolState;
-  if (!p) { el.innerHTML = '<div class="note">graduated — loading pool…</div>'; return; }
+  if (!p) { setHtml(el, html`<div class="note">graduated — loading pool…</div>`); return; }
   const floorPctQ = Number(BigInt(p.floorQuote) * 10000n / (BigInt(p.reserveQuote) || 1n)) / 100;
-  el.innerHTML = `
+  setHtml(el, html`
     <div class="big">${spotGwei(p.spotWeiPerToken)} gwei / token <span class="chip PROVED">PROVED</span></div>
     <div class="note">spot price read from the pool reserves — <b>reserveQuote · 1e18 / reserveToken</b>. The
       pool is the DrEX rung-6 never-insolvent pool: a trade that would drain a reserve below its floor
@@ -185,14 +185,14 @@ function renderMarket(L) {
         BUILT DreggSolventPool.buy/sell (PoolFloorBreached) · x·y=k pricing</div>
     </div>
     <h4 style="margin:12px 0 4px">Recent trades — the honest tape (from pool logs)</h4>
-    <div id="tape"></div>`;
+    <div id="tape"></div>`);
 
-  $('tape').innerHTML = (p.trades || []).length ? p.trades.map((t) => `
+  setHtml($('tape'), (p.trades || []).length ? html`${p.trades.map((t) => html`
     <div class="alloc">
       <span class="who">${t.kind === 'buy' ? 'buy' : 'sell'} ${short(t.who)}</span>
       <span class="mono">${fmtEth(t.quote)} ETH</span>
       <span class="mono">${fmtWhole(t.token)} tok</span>
-    </div>`).join('') : '<div class="note">no trades yet — be the first.</div>';
+    </div>`)}` : html`<div class="note">no trades yet — be the first.</div>`);
 
   const tokenAddr = L.token;
   $('buyBtn').onclick = async () => {
@@ -201,9 +201,9 @@ function renderMarket(L) {
       const eth = $('buyEth').value; const wei = BigInt(Math.round(parseFloat(eth) * 1e18));
       msg.textContent = `buying with ${eth} ETH…`;
       const r = await poolBuy({ poolAddr: p.address, quoteWei: wei.toString() });
-      msg.innerHTML = `<span class="badge ok">bought ✓</span> ~${fmtWhole(r.quotedOut)} tokens · tx ${short(r.txHash)}`;
+      setHtml(msg, html`<span class="badge ok">bought ✓</span> ~${fmtWhole(r.quotedOut)} tokens · tx ${short(r.txHash)}`);
       await render();
-    } catch (e) { msg.innerHTML = `<span class="badge no">buy failed:</span> ${e.shortMessage || e.message}`; }
+    } catch (e) { setHtml(msg, html`<span class="badge no">buy failed:</span> ${e.shortMessage || e.message}`); }
   };
   $('sellBtn').onclick = async () => {
     const msg = $('tradeMsg');
@@ -211,9 +211,9 @@ function renderMarket(L) {
       const tok = $('sellTok').value; const base = BigInt(Math.round(parseFloat(tok) * 1e18));
       msg.textContent = `selling ${tok} tokens…`;
       const r = await poolSell({ poolAddr: p.address, tokenBase: base.toString(), tokenAddr });
-      msg.innerHTML = `<span class="badge ok">sold ✓</span> tx ${short(r.txHash)}`;
+      setHtml(msg, html`<span class="badge ok">sold ✓</span> tx ${short(r.txHash)}`);
       await render();
-    } catch (e) { msg.innerHTML = `<span class="badge no">sell failed:</span> ${e.shortMessage || e.message}`; }
+    } catch (e) { setHtml(msg, html`<span class="badge no">sell failed:</span> ${e.shortMessage || e.message}`); }
   };
 }
 
