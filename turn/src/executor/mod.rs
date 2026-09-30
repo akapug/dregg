@@ -854,9 +854,12 @@ pub struct TurnExecutor {
     /// looks up the deployed program here and verifies proofs against it.
     /// Falls back to `EffectVmAir` if no program is found.
     pub program_registry: ProgramRegistry,
-    /// Current timestamp for precondition evaluation.
+    /// Current timestamp for precondition evaluation and receipts. Not the deadline clock:
+    /// `Turn::valid_until` is checked against `block_height`.
     pub current_timestamp: i64,
-    /// Current block height for precondition evaluation.
+    /// Current block height: precondition evaluation, and the clock `Turn::valid_until` is
+    /// checked against (`crate::turn::check_deadline`). 0 means unset; a turn carrying a
+    /// deadline is then refused.
     pub block_height: u64,
     /// Per-(cell, sender, epoch) mutation counts for `StateConstraint::RateLimit`.
     ///
@@ -2140,12 +2143,12 @@ impl TurnExecutor {
         Some(sig.to_bytes().to_vec())
     }
 
-    /// Set the current timestamp (used for expiration and precondition checks).
+    /// Set the current timestamp (used for precondition checks and receipt timestamps; the
+    /// `valid_until` deadline is a block height, see [`Self::set_block_height`]).
     ///
     /// P2-2: rejects backwards timestamp updates. The executor's clock must be
-    /// monotonically non-decreasing; a stuck/backward clock allows expired
-    /// turns to succeed and breaks `valid_until` enforcement. Backward-stepping
-    /// `ts` values are silently ignored (no-op).
+    /// monotonically non-decreasing. Backward-stepping `ts` values are silently
+    /// ignored (no-op).
     pub fn set_timestamp(&mut self, ts: i64) {
         if ts >= self.current_timestamp {
             self.current_timestamp = ts;
@@ -2318,7 +2321,9 @@ impl TurnExecutor {
             .insert(cell, receipt_hash);
     }
 
-    /// Set the current block height (used for network preconditions).
+    /// Set the current block height: network preconditions, and the clock every turn's
+    /// `valid_until` is checked against (`crate::turn::check_deadline`). An executor that never
+    /// calls this refuses every turn that carries a deadline.
     pub fn set_block_height(&mut self, height: u64) {
         self.block_height = height;
     }

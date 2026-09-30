@@ -81,8 +81,9 @@ pub enum TurnError {
     /// The turn's nonce doesn't match the expected nonce for the agent cell.
     NonceReplay { expected: u64, got: u64 },
 
-    /// The turn's valid_until timestamp has passed.
-    Expired { valid_until: i64, now: i64 },
+    /// The turn's `valid_until` block height is below the executor's height: the deadline has
+    /// passed ([`crate::turn::check_deadline`]).
+    Expired { valid_until: i64, height: u64 },
 
     /// The turn exceeded its computron budget.
     BudgetExceeded { limit: u64, used: u64 },
@@ -726,6 +727,22 @@ pub enum TurnError {
         /// Lowercase hex of the wire sub-proof's dispatched `vk_hash`.
         dispatched: String,
     },
+
+    // Appended, not placed beside `Expired`, so the serde variant index of every older variant
+    // is unchanged.
+    /// The turn's `valid_until` is further past the executor's height than
+    /// [`MAX_TURN_VALIDITY_HORIZON_BLOCKS`](crate::turn::MAX_TURN_VALIDITY_HORIZON_BLOCKS)
+    /// allows. `valid_until` is a block height; this is the refusal a Unix-seconds deadline (or
+    /// an `i64::MAX`-style "never" sentinel) gets, instead of being read as a far-future height.
+    DeadlineBeyondHorizon {
+        valid_until: i64,
+        height: u64,
+        max_horizon: u64,
+    },
+
+    /// The turn carries a `valid_until` but the executor has no block height (0), so the
+    /// deadline cannot be decided. Fail-closed: see [`crate::turn::check_deadline`].
+    DeadlineWithoutHeight { valid_until: i64 },
 }
 
 /// Operational classification of a refusal, for the security observability
@@ -828,8 +845,30 @@ impl core::fmt::Display for TurnError {
             TurnError::NonceReplay { expected, got } => {
                 write!(f, "nonce replay: expected {expected}, got {got}")
             }
-            TurnError::Expired { valid_until, now } => {
-                write!(f, "turn expired: valid_until={valid_until}, now={now}")
+            TurnError::Expired {
+                valid_until,
+                height,
+            } => {
+                write!(
+                    f,
+                    "turn expired: valid_until={valid_until} is below the executor's block height {height}"
+                )
+            }
+            TurnError::DeadlineBeyondHorizon {
+                valid_until,
+                height,
+                max_horizon,
+            } => {
+                write!(
+                    f,
+                    "turn deadline out of range: valid_until={valid_until} is more than {max_horizon} blocks past the executor's block height {height}; valid_until is a block height (latest_height from GET /status plus the blocks the turn may wait), not a Unix timestamp"
+                )
+            }
+            TurnError::DeadlineWithoutHeight { valid_until } => {
+                write!(
+                    f,
+                    "turn deadline undecidable: valid_until={valid_until} but the executor has no block height"
+                )
             }
             TurnError::BudgetExceeded { limit, used } => {
                 write!(f, "computron budget exceeded: limit={limit}, used={used}")

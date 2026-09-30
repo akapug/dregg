@@ -481,17 +481,13 @@ impl TurnExecutor {
             };
         }
 
-        // Check expiration.
-        if let Some(valid_until) = turn.valid_until {
-            if self.current_timestamp > valid_until {
-                return TurnResult::Rejected {
-                    reason: TurnError::Expired {
-                        valid_until,
-                        now: self.current_timestamp,
-                    },
-                    at_action: vec![],
-                };
-            }
+        // Check the deadline: `valid_until` is a block height, compared with this executor's
+        // height (the same leg as the verified kernel's `expiryOk`).
+        if let Err(reason) = crate::turn::check_deadline(self.block_height, turn.valid_until) {
+            return TurnResult::Rejected {
+                reason,
+                at_action: vec![],
+            };
         }
 
         // Check agent cell exists.
@@ -1861,14 +1857,7 @@ impl TurnExecutor {
             return Err(TurnError::EmptyForest);
         }
 
-        if let Some(valid_until) = turn.valid_until {
-            if self.current_timestamp > valid_until {
-                return Err(TurnError::Expired {
-                    valid_until,
-                    now: self.current_timestamp,
-                });
-            }
-        }
+        crate::turn::check_deadline(self.block_height, turn.valid_until)?;
 
         let agent_cell = ledger
             .get(&turn.agent)

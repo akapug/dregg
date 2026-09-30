@@ -247,8 +247,10 @@ pub use reversible::{
 pub use routing::{IntroductionExport, RoutingDirective};
 pub use shadow::{NoOpShadowObserver, ShadowHostCtx, ShadowObserver};
 pub use turn::{
-    ConsumedCapAuthPath, ConsumedCapWitness, CustomProgramProof, EmittedEvent, Finality,
-    SovereignCellWitness, Turn, TurnReceipt, TurnResult, absorb_emitted_event,
+    ConsumedCapAuthPath, ConsumedCapWitness, CustomProgramProof,
+    DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS, EmittedEvent, Finality, MAX_TURN_VALIDITY_HORIZON_BLOCKS,
+    SovereignCellWitness, Turn, TurnReceipt, TurnResult, absorb_emitted_event, check_deadline,
+    valid_until_at,
 };
 pub use verify::{
     VerifyError, sign_receipt, verify_receipt_chain, verify_receipt_chain_allowing_deferred,

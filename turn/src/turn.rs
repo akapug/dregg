@@ -383,6 +383,86 @@ impl CustomProgramProof {
     }
 }
 
+/// How many heights past the height it was built against a freshly stamped turn stays
+/// admissible, when the stamping code has no reason to choose otherwise.
+///
+/// The executor's height is the attested-root height (`executor_setup::attested_block_height`,
+/// `latest_height` on `GET /status`). It advances only on turn-bearing finality, and a node
+/// produces at most one block per `--min-block-interval-ms` (default 2000 ms). So 1800 heights
+/// is at least an hour on a chain finalizing a turn in every block, and longer on a quieter
+/// chain, whose height does not move while idle.
+pub const DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS: u64 = 1_800;
+
+/// The furthest past the executor's height a turn's `valid_until` may reach. A deadline beyond
+/// `block_height + MAX_TURN_VALIDITY_HORIZON_BLOCKS` is refused with
+/// [`TurnError::DeadlineBeyondHorizon`](crate::error::TurnError::DeadlineBeyondHorizon).
+///
+/// 2^20 heights: about 24 days at one height per 2 s block, far above any real horizon, and
+/// small enough that every Unix-seconds value (≥ 1.7e9 today) is refused at every height below
+/// 1.7e9 − 2^20 (more than a century of 2 s blocks), as is the old `i64::MAX / 2` "never"
+/// sentinel. A client still sending seconds is therefore refused rather than having its value
+/// read as a far-future height. The verified kernel carries the same constant
+/// (`Dregg2.Exec.Admission.maxTurnValidityHorizon`).
+pub const MAX_TURN_VALIDITY_HORIZON_BLOCKS: u64 = 1 << 20;
+
+/// The `valid_until` for a turn built against attested height `height` that should stay
+/// admissible for `horizon_blocks` more heights: `height + horizon_blocks`, saturating (an
+/// overflowing value is refused by [`check_deadline`] as beyond the horizon, never wrapped).
+///
+/// `height` is the latest attested height the builder knows: `latest_height` from
+/// `GET /status` for a client, `attested_block_height` inside a node. Every in-tree stamp goes
+/// through this function.
+pub fn valid_until_at(height: u64, horizon_blocks: u64) -> i64 {
+    i64::try_from(height.saturating_add(horizon_blocks)).unwrap_or(i64::MAX)
+}
+
+/// The expiry leg of admission, decided in one place for `execute` and
+/// `validate_without_apply`. `valid_until` is a block height (see [`Turn::valid_until`]).
+///
+/// * `None` — the turn never expires; admitted.
+/// * An executor with no height (`block_height == 0`) cannot decide a deadline, so a turn that
+///   carries one is refused ([`TurnError::DeadlineWithoutHeight`]). Every production executor
+///   is given a height (`executor_setup::configure_turn_executor` uses `attested + 1` on the
+///   submit and finalize paths, which is never 0). A height of 0 means nobody set it, and
+///   admitting would mean the deadline is checked against nothing. The kernel refuses the same
+///   case (`expiryOk 0 (some _) = false`), so a covered turn cannot be admitted by Lean where Rust
+///   refuses.
+/// * `valid_until < block_height` — expired ([`TurnError::Expired`]).
+/// * `valid_until > block_height + MAX_TURN_VALIDITY_HORIZON_BLOCKS` — refused
+///   ([`TurnError::DeadlineBeyondHorizon`]). This is what a Unix-seconds deadline gets.
+///
+/// [`TurnError::DeadlineWithoutHeight`]: crate::error::TurnError::DeadlineWithoutHeight
+/// [`TurnError::Expired`]: crate::error::TurnError::Expired
+/// [`TurnError::DeadlineBeyondHorizon`]: crate::error::TurnError::DeadlineBeyondHorizon
+pub fn check_deadline(
+    block_height: u64,
+    valid_until: Option<i64>,
+) -> Result<(), crate::error::TurnError> {
+    use crate::error::TurnError;
+    let Some(valid_until) = valid_until else {
+        return Ok(());
+    };
+    if block_height == 0 {
+        return Err(TurnError::DeadlineWithoutHeight { valid_until });
+    }
+    let deadline = i128::from(valid_until);
+    let height = i128::from(block_height);
+    if deadline < height {
+        return Err(TurnError::Expired {
+            valid_until,
+            height: block_height,
+        });
+    }
+    if deadline > height + i128::from(MAX_TURN_VALIDITY_HORIZON_BLOCKS) {
+        return Err(TurnError::DeadlineBeyondHorizon {
+            valid_until,
+            height: block_height,
+            max_horizon: MAX_TURN_VALIDITY_HORIZON_BLOCKS,
+        });
+    }
+    Ok(())
+}
+
 /// A Turn is the atomic unit of agent execution.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Turn {
@@ -391,6 +471,13 @@ pub struct Turn {
     pub call_forest: CallForest,
     pub fee: u64,
     pub memo: Option<String>,
+    /// The last executor block height at which this turn is admissible, or `None` for a turn
+    /// that never expires. A BLOCK HEIGHT, not a Unix timestamp: the executor admits the turn
+    /// while `block_height ≤ valid_until ≤ block_height + MAX_TURN_VALIDITY_HORIZON_BLOCKS`
+    /// ([`check_deadline`]), the same leg the verified kernel runs
+    /// (`Dregg2.Exec.Admission.expiryOk`). Stamp it with [`valid_until_at`]. Bound into
+    /// [`Turn::hash`], so the turn-level signature covers it; the per-action signing message
+    /// does not.
     pub valid_until: Option<i64>,
     #[serde(default)]
     pub previous_receipt_hash: Option<[u8; 32]>,

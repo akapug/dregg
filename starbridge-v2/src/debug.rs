@@ -321,7 +321,9 @@ fn classify(error: &TurnError) -> (GuardKind, Vec<CellId>) {
 
         PreconditionFailed { .. } => (GuardKind::Precondition, vec![]),
         ConditionNotMet(_) => (GuardKind::Precondition, vec![]),
-        Expired { .. } => (GuardKind::Precondition, vec![]),
+        Expired { .. } | DeadlineBeyondHorizon { .. } | DeadlineWithoutHeight { .. } => {
+            (GuardKind::Precondition, vec![])
+        }
 
         NonceReplay { .. } => (GuardKind::History, vec![]),
         NonceOverflow { cell } => (GuardKind::History, vec![*cell]),
@@ -574,7 +576,7 @@ pub fn debug_turn(world: &World, turn: &Turn) -> TurnTrace {
             Some(RefusalExplanation::from_error(
                 TurnError::Expired {
                     valid_until: 0,
-                    now: 0,
+                    height: 0,
                 },
                 None,
             )),
@@ -939,7 +941,7 @@ fn run_prefix(
             false,
             Some(TurnError::Expired {
                 valid_until: 0,
-                now: 0,
+                height: 0,
             }),
             ledger.clone(),
         ),

@@ -1443,15 +1443,11 @@ fn test_nonce_increment_prevents_replay() {
 }
 
 // =============================================================================
-// Test: Expiration — turn past valid_until is rejected
+// Test: the deadline — `valid_until` is a block height
 // =============================================================================
 
-#[test]
-fn test_turn_expiration() {
-    let (mut ledger, agent_id, target_id) = setup_two_open_cells(5000, 0);
-    let mut executor = zero_cost_executor();
-    executor.set_timestamp(1000); // current time = 1000
-
+/// A one-action turn from `agent` with `valid_until` set as given (or left `None`).
+fn deadline_turn(agent_id: CellId, target_id: CellId, valid_until: Option<i64>) -> Turn {
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
         let action = ActionBuilder::new_unchecked_for_tests(target_id, "op", agent_id)
@@ -1459,19 +1455,136 @@ fn test_turn_expiration() {
             .build();
         builder.add_action(action);
     }
-    let turn = builder.fee(100).valid_until(500).build(); // expired at 500
+    let mut turn = builder.fee(100).build();
+    turn.valid_until = valid_until;
+    turn
+}
 
-    let result = executor.execute(&turn, &mut ledger);
-    assert!(result.is_rejected());
+/// Execute and validate `valid_until` at executor height `height`, with a wall clock far past
+/// every deadline in these tests so a seconds comparison would give a different answer.
+fn deadline_verdicts(height: u64, valid_until: Option<i64>) -> (TurnResult, Result<(), TurnError>) {
+    let (mut ledger, agent_id, target_id) = setup_two_open_cells(5000, 0);
+    let mut executor = zero_cost_executor();
+    executor.set_timestamp(1_760_000_000);
+    executor.set_block_height(height);
+    let turn = deadline_turn(agent_id, target_id, valid_until);
+    let validated = executor.validate_without_apply(&turn, &ledger);
+    (executor.execute(&turn, &mut ledger), validated)
+}
 
+#[test]
+fn test_turn_expiration() {
+    let (result, validated) = deadline_verdicts(1000, Some(500));
+    let expected = TurnError::Expired {
+        valid_until: 500,
+        height: 1000,
+    };
+    assert_eq!(validated, Err(expected.clone()));
     let (error, _) = result.unwrap_rejected();
-    match error {
-        TurnError::Expired { valid_until, now } => {
-            assert_eq!(valid_until, 500);
-            assert_eq!(now, 1000);
-        }
-        other => panic!("expected Expired, got {other:?}"),
+    assert_eq!(error, expected);
+    assert_eq!(
+        error.to_string(),
+        "turn expired: valid_until=500 is below the executor's block height 1000"
+    );
+}
+
+/// The window is inclusive at both ends: the executor's own height and
+/// `height + MAX_TURN_VALIDITY_HORIZON_BLOCKS` are both admitted, although the wall clock
+/// (1.76e9) is past each of them.
+#[test]
+fn a_deadline_inside_the_height_window_is_admitted() {
+    let max = crate::turn::MAX_TURN_VALIDITY_HORIZON_BLOCKS as i64;
+    for valid_until in [1000, 1000 + 1800, 1000 + max] {
+        let (result, validated) = deadline_verdicts(1000, Some(valid_until));
+        assert_eq!(validated, Ok(()), "valid_until={valid_until}");
+        assert!(
+            result.is_committed(),
+            "valid_until={valid_until}: {result:?}"
+        );
     }
+    let (result, validated) = deadline_verdicts(1000, None);
+    assert_eq!(validated, Ok(()));
+    assert!(
+        result.is_committed(),
+        "a turn with no deadline never expires"
+    );
+}
+
+/// A Unix-seconds deadline, the old `i64::MAX / 2` sentinel, and the first height past the
+/// horizon are all refused with `DeadlineBeyondHorizon`, by `execute` and by
+/// `validate_without_apply`. The Display is the refusal text a seconds client sees.
+#[test]
+fn a_seconds_valued_deadline_is_refused_as_beyond_the_horizon() {
+    let max = crate::turn::MAX_TURN_VALIDITY_HORIZON_BLOCKS;
+    for valid_until in [1_760_000_000i64, i64::MAX / 2, 1000 + max as i64 + 1] {
+        let (result, validated) = deadline_verdicts(1000, Some(valid_until));
+        let expected = TurnError::DeadlineBeyondHorizon {
+            valid_until,
+            height: 1000,
+            max_horizon: max,
+        };
+        assert_eq!(
+            validated,
+            Err(expected.clone()),
+            "valid_until={valid_until}"
+        );
+        let (error, _) = result.unwrap_rejected();
+        assert_eq!(error, expected, "valid_until={valid_until}");
+    }
+    let shown = TurnError::DeadlineBeyondHorizon {
+        valid_until: 1_760_000_000,
+        height: 1000,
+        max_horizon: max,
+    }
+    .to_string();
+    assert_eq!(
+        shown,
+        "turn deadline out of range: valid_until=1760000000 is more than 1048576 blocks past the executor's block height 1000; valid_until is a block height (latest_height from GET /status plus the blocks the turn may wait), not a Unix timestamp"
+    );
+}
+
+/// An executor nobody gave a height refuses a turn that carries a deadline, and still admits
+/// one that carries none.
+#[test]
+fn a_deadline_on_an_executor_without_a_height_is_refused() {
+    let (result, validated) = deadline_verdicts(0, Some(10));
+    let expected = TurnError::DeadlineWithoutHeight { valid_until: 10 };
+    assert_eq!(validated, Err(expected.clone()));
+    let (error, _) = result.unwrap_rejected();
+    assert_eq!(error, expected);
+    assert_eq!(
+        error.to_string(),
+        "turn deadline undecidable: valid_until=10 but the executor has no block height"
+    );
+
+    let (result, validated) = deadline_verdicts(0, None);
+    assert_eq!(validated, Ok(()));
+    assert!(result.is_committed());
+}
+
+#[test]
+fn valid_until_at_stamps_height_plus_horizon_and_saturates() {
+    use crate::turn::{DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS, check_deadline, valid_until_at};
+    assert_eq!(valid_until_at(7, 64), 71);
+    assert_eq!(valid_until_at(u64::MAX, 1), i64::MAX);
+    // A default stamp at h is admitted by the submit executor at h + 1 and every height up to
+    // its deadline, and refused one height later.
+    let h = 500;
+    let vu = valid_until_at(h, DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS);
+    assert_eq!(check_deadline(h + 1, Some(vu)), Ok(()));
+    assert_eq!(check_deadline(vu as u64, Some(vu)), Ok(()));
+    assert_eq!(
+        check_deadline(vu as u64 + 1, Some(vu)),
+        Err(TurnError::Expired {
+            valid_until: vu,
+            height: vu as u64 + 1
+        })
+    );
+    // A negative deadline is below every height.
+    assert!(matches!(
+        check_deadline(1, Some(-1)),
+        Err(TurnError::Expired { .. })
+    ));
 }
 
 // =============================================================================
