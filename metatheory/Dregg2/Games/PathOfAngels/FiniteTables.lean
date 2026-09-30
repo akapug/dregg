@@ -213,7 +213,10 @@ three minutes at 5 GB — the process never reached `main`.  They therefore carr
 makes them functions rather than closed terms, so nothing is computed until a pin applies `()`.
 The eight RELAY checks above are still parameterless and still forced at init; they are cheap
 enough to leave, and their cost is the thing to re-measure before adding another.
-Rule: a `check_*` in this module whose body walks a state closure takes `(_ : Unit)`. -/
+Rule: any parameterless `Bool` in this module whose body walks a state closure takes
+`(_ : Unit)` — a `check_*` and every helper `Bool` a check is built from alike (the three
+`salvageParametric*B` below carry one for this reason: a `Unit` on the check alone defers
+only the `&&`, and the helpers would still be forced at init). -/
 
 /-- Every board's transition table is closed: no accepted successor leaves the board's own
 enumerated state closure. (Pinned `= true` in `FiniteTablesFixtures`.) -/
@@ -523,15 +526,15 @@ def salvageParametricTransitions : List ParametricTransition :=
     salvageActions.map fun action =>
       { state, action, row := salvageParametricRow state action }
 
-def salvageParametricClosedB : Bool :=
+def salvageParametricClosedB (_ : Unit) : Bool :=
   let states := salvageParametricStates
   salvageParametricTransitions.all fun transition =>
     (salvageParametricSuccessors transition.state transition.action).all fun next =>
       decide (next ∈ states)
 
-def salvageParametricStatesNodupB : Bool := salvageParametricStates.Nodup
+def salvageParametricStatesNodupB (_ : Unit) : Bool := salvageParametricStates.Nodup
 
-def salvageParametricStateIdsUniqueB : Bool :=
+def salvageParametricStateIdsUniqueB (_ : Unit) : Bool :=
   (salvageParametricStates.map salvageStateId).Nodup
 
 /-- ⚑ **The refinement.**  For every one of the ninety boards and every emitted
@@ -556,8 +559,8 @@ counts are here because a client is told them and must be able to refuse a table
 of a different size; they are NOT a property of any board.
 (Pinned `= true` in `FiniteTablesFixtures`.) -/
 def check_salvage_parametric_table_is_well_formed (_ : Unit) : Bool :=
-  salvageParametricClosedB && salvageParametricStatesNodupB &&
-    salvageParametricStateIdsUniqueB
+  salvageParametricClosedB () && salvageParametricStatesNodupB () &&
+    salvageParametricStateIdsUniqueB ()
 
 /-- The emitted parametric closure has exactly 1016 states (632 before the budget
 grew from 12 exposures to 18 — the closure carries `turns`, so a bigger budget is a
