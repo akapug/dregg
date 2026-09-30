@@ -10,8 +10,9 @@ ember-approved shielded Option-A redesign (`docs/DECISION-shielded-redesign-2026
 seam #15). Seam **#16**: the value-link (STARK leaf value ↔ the conserved amount) is checked
 ONLY in tests (`verify_value_link` needs the secret opening, so it cannot run in `apply`), and
 deployed conservation gates only the Shor-broken Ristretto legs — a prover can decouple the
-leaf values from the legs and MINT. The fix authored here is the `nleg_air.rs` binding shape
-(`circuit-prove/src/shielded_ring_clearing_nleg_air.rs:27-70,436-451,384-395`), in Lean:
+leaf values from the legs and MINT. The fix authored here is, in Lean, the binding shape of the
+Rust `shielded_ring_clearing_nleg_air.rs` (since deleted with the shielded-spend tower by
+`3ec27de26`):
 
 ## What this descriptor IS
 

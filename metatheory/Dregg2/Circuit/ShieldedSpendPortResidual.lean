@@ -5,8 +5,9 @@
 # mod-p → ℤ conservation range-lift.
 
 **This is Lean-authored AIR discharge, downstream of the security core.** The Rust-authored shielded
-spend AIR (`circuit-prove/src/shielded/spend_circuit.rs`, width-20 `shielded_spend_descriptor()`,
-C1–C7b as hand-written `ConstraintExpr` data) is house-law-#1 DEBT. Its Lean re-authoring is the two
+spend AIR (`spend_circuit.rs`, width-20 `shielded_spend_descriptor()`, C1–C7b as hand-written
+`ConstraintExpr` data) was house-law-#1 DEBT, and was deleted with the whole Rust shielded-spend tower
+by `3ec27de26` (2026-08-07). Its Lean re-authoring is the two
 emitted `EffectVmDescriptor2` objects Rust only *decodes/witnesses*
 (`Emit.ShieldedSpendDescriptor.shieldedSpendDesc`, `Emit.ShieldedValueLinkDescriptor.shieldedValueLinkDesc`),
 and the security core (`ShieldedSpendPortDischarge`, seams #15/#16) discharged `AccumulatorSound`/

@@ -35,7 +35,8 @@ decoupling them."*
     consults `value_binding`; it sums the *separate, free* Pedersen leg. A binding on a quantity the
     no-mint gate does not use buys nothing.
   * the Rust test `leaf_leg_value_link_matches_verifies_mismatch_rejects`
-    (`circuit-prove/tests/shielded_transfer_m2a.rs:441`) exercises `verify_value_link`, which DOES tie
+    (in `shielded_transfer_m2a.rs`, deleted by `5f33b6b43` when the value link moved into the AIR)
+    exercised `verify_value_link`, which DOES tie
     leg↔leaf (`commit(value,blinding) == leg` AND `value_link_binding(value) == value_binding`), and it
     even asserts the inflated leg is `LegMismatch`-rejected. Real — but `verify_value_link` is
     **never called by `apply_shielded_transfer`**. The test is a green light on a check the deployed

@@ -11,8 +11,10 @@ contributes a claim to a turn must prove its committed claim REFINES a sound eff
         (hstep  : recKExec k turn = some k') : -- the composite turn committed
       ConservesOn S k k' ∧ AuthorizedOn S k turn ∧ NullifierFreshOn S k turn
 
-The shielded-spend claim (the marquee side-structure) is the 3-felt uni-STARK PI
-`[nullifier, merkle_root, value_binding]` (`circuit-prove/src/shielded/spend_circuit.rs:135-147`).
+The shielded-spend claim (the marquee side-structure) was the 3-felt uni-STARK PI
+`[nullifier, merkle_root, value_binding]` of the Rust `spend_circuit.rs` (deleted by `3ec27de26`; the
+deployed Lean-emitted spend, `ShieldedSpendCompleteEmit.lean`, publishes
+`[nullifier] ++ committedRoot[8] ++ wideCarrier[16]`).
 Its two halves plug in at DIFFERENT grades (ABI §4.1):
 
   * **PROVED half — membership + nullifier** (THIS theorem). A valid shielded spend

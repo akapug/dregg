@@ -3,8 +3,9 @@
 # the two named hypotheses of the shielded falsifier proofs DISCHARGED against the emitted AIR.
 
 **This is the discharge lane of the shielded `spend_circuit` port.** The Rust-authored
-shielded-spend AIR (`circuit-prove/src/shielded/spend_circuit.rs`, `shielded_spend_descriptor()` —
-constraints C1–C7b as hand-written `ConstraintExpr` data) is house-law-#1 DEBT. Its Lean re-authoring
+shielded-spend AIR (`shielded_spend_descriptor()` in `spend_circuit.rs` — constraints C1–C7b as
+hand-written `ConstraintExpr` data) was house-law-#1 DEBT; it was deleted with the whole Rust
+shielded-spend tower by `3ec27de26` (2026-08-07). Its Lean re-authoring
 already exists as two emitted `EffectVmDescriptor2` objects that Rust only *decodes/witnesses*:
 
   * `Dregg2.Circuit.Emit.ShieldedSpendDescriptor.shieldedSpendDesc` — 4-ary Merkle membership +

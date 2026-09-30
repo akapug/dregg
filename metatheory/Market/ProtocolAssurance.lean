@@ -943,10 +943,12 @@ A faithful implementation can discharge this by adding a genuine clearing action
 carries the allocation, or by lifting the apex to the emitted effect list.  At HEAD a public input names
 one `FullActionA`, so this statement is named and not fabricated.
 
-TRIAGE (2026-07-15, `assurance-audit`): the fair allocation is NOT trusted — it is CIRCUIT-ENFORCED. The
-deployed `circuit-prove/src/shielded_ring_clearing_air.rs` binds each leg's cleared offer to a spent member
-note by an in-circuit `connect` (forged leg ⇒ UNSAT), enforces the matching descriptor, nullifier
-distinctness, and BOTH coordinate + range-checked INTEGER conservation; and `LedgerRealizationExt.
+TRIAGE (2026-07-15, `assurance-audit`) found the fair allocation CIRCUIT-ENFORCED: the Rust
+`shielded_ring_clearing_air.rs` bound each leg's cleared offer to a spent member note by an in-circuit
+`connect` (forged leg ⇒ UNSAT), enforced the matching descriptor, nullifier distinctness, and BOTH
+coordinate + range-checked INTEGER conservation. ⚠ That AIR was never on a deployed path and was deleted
+with the shielded-spend tower by `3ec27de26` (2026-08-07); ring clearing has no Lean-emitted AIR, so
+today NO circuit enforces the allocation. What remains is the Lean side: `LedgerRealizationExt.
 shielded_ring_fused_clears` proves the `CycleValid`+`LegFused` ring that settles via `settleRing` is
 conserving + `RingBalanced`-fair + fused.
 
