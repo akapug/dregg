@@ -35,6 +35,10 @@
 //!       unknown — the `pq-identity-not-enrolled` half, pinned by its absence.
 //!   [4] the tooth still bites: a turn naming a foreign agent is refused
 //!       `agent-signer-mismatch` and no cell is fabricated for it.
+//!   [6] a KEY-BOUND cell with no ML-DSA anchor (the zero-amount faucet with
+//!       `public_key` on a solo node, which anyone who knows the key can ask
+//!       for) takes its owner's first hybrid turn, which anchors the envelope's
+//!       ML-DSA key in place and FINALIZES (#91).
 //!
 //! THE CANARY (run it, it is cheap): in `claim_signer_actor_cell`, change
 //! `carried_balance` to `stub.state.balance() - 1`. [1] stays green through the
@@ -51,7 +55,9 @@ use dregg_sdk::AgentCipherclerk;
 use dregg_turn::action::Effect;
 use dregg_types::hex_encode;
 
-use crate::faucet_grant_e2e::{await_balance, faucet_node, post_faucet};
+use crate::faucet_grant_e2e::{
+    await_balance, faucet_node, faucet_node_with, post_faucet, post_faucet_json,
+};
 use crate::state::NodeState;
 
 /// The `blake3("default")` asset every actor cell lives in
@@ -425,5 +431,120 @@ async fn claiming_never_fabricates_authority_over_a_foreign_agent() {
     assert!(
         s.ledger.get(&victim).is_none(),
         "no cell may be fabricated at a foreign agent id"
+    );
+}
+
+/// [6] #91. On a solo node, `POST /api/faucet` with `public_key` materializes a
+/// hosted cell bound to the Ed25519 key and carrying NO ML-DSA anchor, and the
+/// route is public, so anyone who knows a key can put that key's cell in this
+/// state before its owner ever acts. The first-turn claim used to decline the
+/// cell as "already the signer's account", and `validate_signed_turn` then
+/// refused every hybrid turn as not enrolled: the cell could never act. The
+/// claim now anchors the envelope's proven ML-DSA key on it, exactly as it
+/// does for a zero-pk stub, and the owner's first turn finalizes.
+///
+/// The funding grant here goes out WITHOUT `public_key`, so it moves value
+/// into the existing key-bound cell and replaces nothing; the assertion after
+/// it pins that the cell under test is still the key-bound, unanchored one.
+///
+/// THE CANARY: in `claimed_actor_cell`, make the key-bound arm `return None`
+/// again. The first turn is refused "neither Cell-committed nor independently
+/// enrolled" and this goes RED at the admission assertion.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_key_bound_zero_amount_faucet_cell_takes_its_first_hybrid_turn() {
+    let (state, app, _faucet, _tmp) = faucet_node_with(|s| {
+        // `run` arms solo consensus for a node with no peers; the faucet mints
+        // the key-bound hosted cell only under it.
+        let sk = s.cclerk.gossip_signing_key().to_bytes();
+        s.solo_consensus = Some(dregg_federation::solo::SoloConsensusState::new(sk));
+    })
+    .await;
+    {
+        let s = state.read().await;
+        assert!(
+            crate::executor_setup::new_submit_executor(&s).require_pq(),
+            "the node under test runs the default posture: post-quantum admission required"
+        );
+    }
+
+    let client = AgentCipherclerk::from_key_bytes(zeroize::Zeroizing::new([0xC9; 32]));
+    let actor = client.cell_id("default");
+    let actor_hex = hex_encode(&actor.0);
+
+    // Anyone can make this request: it names only public values.
+    let json = post_faucet_json(
+        &app,
+        serde_json::json!({
+            "recipient": actor_hex,
+            "amount": 0,
+            "public_key": hex_encode(&client.public_key().0),
+        }),
+    )
+    .await;
+    assert_eq!(json["success"], true, "zero-amount materialization: {json}");
+
+    let grant = 10_000u64;
+    let json = post_faucet(&app, &actor_hex, grant).await;
+    assert_eq!(json["success"], true, "faucet must accept the grant: {json}");
+    let credited = await_balance(&state, &actor, grant as i64, Duration::from_secs(30)).await;
+    assert_eq!(credited, Some(grant as i64), "the grant must finalize");
+    {
+        let s = state.read().await;
+        let cell = s.ledger.get(&actor).expect("the key-bound cell");
+        assert_eq!(
+            *cell.public_key(),
+            client.public_key().0,
+            "the state under test is the KEY-BOUND cell; a zero-pk stub here means the faucet \
+             did not take the solo `public_key` path and this test proves nothing about #91"
+        );
+        assert!(
+            cell.pq_identity().is_none(),
+            "the state under test carries no ML-DSA anchor"
+        );
+        assert_eq!(cell.state.nonce(), 0, "and has never acted");
+    }
+
+    let destination = dregg_cell::CellId::derive_raw(&[0xD8; 32], &default_token());
+    let moved = 1_000u64;
+    let fee = 5_000u64;
+    let signed = client_transfer_turn(&state, &client, destination, moved, fee).await;
+    let response = post_signed_turn(&app, &signed).await;
+    assert_eq!(
+        response["accepted"], true,
+        "a key-bound, unanchored cell's first hybrid turn must be admitted; \
+         `neither Cell-committed nor independently enrolled` here is #91. Response: {response}"
+    );
+
+    let landed = await_balance(&state, &destination, moved as i64, Duration::from_secs(30)).await;
+    assert_eq!(
+        landed,
+        Some(moved as i64),
+        "the first turn must FINALIZE and fund its destination (got {landed:?}); the node \
+         answered {response}"
+    );
+
+    {
+        let s = state.read().await;
+        let cell = s.ledger.get(&actor).expect("client cell present");
+        assert_eq!(*cell.public_key(), client.public_key().0);
+        let identity = cell
+            .pq_identity()
+            .expect("the first turn commits the ML-DSA anchor it proved possession of");
+        let expected = dregg_cell::ml_dsa_public_key_commitment(&signed.pq_signer)
+            .expect("canonical ML-DSA-65 key");
+        assert_eq!(identity.ml_dsa_key_commitment, expected);
+        assert_eq!(identity.key_epoch, 0, "a first claim is epoch zero");
+        assert_eq!(cell.state.nonce(), 1, "the claimed cell took exactly one turn");
+        assert_eq!(
+            cell.state.balance(),
+            grant as i64 - moved as i64 - fee as i64,
+            "anchoring must carry the balance over verbatim"
+        );
+    }
+
+    let rejected = finalized_rejection_codes(&state).await;
+    assert!(
+        rejected.is_empty(),
+        "no finalized payload may be deterministically rejected; got {rejected:?}"
     );
 }

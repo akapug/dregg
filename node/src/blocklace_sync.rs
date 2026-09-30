@@ -9333,7 +9333,7 @@ async fn execute_finalized_turn(
         crate::signed_turn_validation::claimed_actor_cell(
             s.ledger.get(&signed_turn.turn.agent),
             &signed_turn,
-            executor.require_pq(),
+            &executor,
         );
 
     // Consensus authenticated the block producer, not the enclosed user turn.

@@ -396,7 +396,7 @@ pub async fn arm_private_dependent_turn(
         // refused here and accepted there.
         let live = state.ledger.get(&signed.turn.agent);
         let claimed =
-            crate::signed_turn_validation::claimed_actor_cell(live, &signed, executor.require_pq());
+            crate::signed_turn_validation::claimed_actor_cell(live, &signed, &executor);
         crate::signed_turn_validation::validate_signed_turn(
             &signed,
             &executor,
@@ -623,7 +623,7 @@ async fn submit_claimed_turn(
         // the ingress that will actually apply the turn.
         let live = state.ledger.get(&signed.turn.agent);
         let claimed =
-            crate::signed_turn_validation::claimed_actor_cell(live, &signed, executor.require_pq());
+            crate::signed_turn_validation::claimed_actor_cell(live, &signed, &executor);
         crate::signed_turn_validation::validate_signed_turn(
             &signed,
             &executor,
