@@ -714,9 +714,9 @@ impl Turn {
         fn tree_is_coordination(tree: &crate::forest::CallTree, agent: &CellId) -> bool {
             tree.action.balance_change.is_none()
                 && !tree.action.effects.is_empty()
-                && tree.action.effects.iter().all(|e| {
-                    matches!(e, crate::action::Effect::EmitEvent { cell, .. } if cell == agent)
-                })
+                && tree.action.effects.iter().all(
+                    |e| matches!(e, crate::action::Effect::EmitEvent { cell, .. } if cell == agent),
+                )
                 && tree
                     .children
                     .iter()

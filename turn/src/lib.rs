@@ -184,9 +184,8 @@ pub use executor::{
     BridgeEscrowRecord, BridgeMintError, BridgeMintReceipt, BridgeMintRequest,
     COORDINATION_EXEMPT_CEILING, CellMigrationManager, ComputronCosts, MigrationCancelReason,
     MigrationError, MigrationState, MixedAtomicResult, MixedAtomicTurn, ProofVerifier,
-    ResolutionTable, TurnExecutor,
-    escrow_nullifier_for, execute_pipeline, new_mirror_ledger_cell, read_supply,
-    resolve_eventual_ref,
+    ResolutionTable, TurnExecutor, escrow_nullifier_for, execute_pipeline, new_mirror_ledger_cell,
+    read_supply, resolve_eventual_ref,
 };
 pub use faithful_note_spend_exact_v3_acceptance::{
     AcceptedFaithfulNoteSpendExactV3, ExactFnspV3ProofAuthorityAlreadyInstalled,

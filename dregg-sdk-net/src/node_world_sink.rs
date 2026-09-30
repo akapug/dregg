@@ -819,7 +819,13 @@ mod coordination_class_tests {
                 "coordination_exempt_ceiling": 10_000,
             });
             let class = coordination_class(&status).expect("well-formed");
-            assert_eq!(class, CoordinationClass { exempt, ceiling: 10_000 });
+            assert_eq!(
+                class,
+                CoordinationClass {
+                    exempt,
+                    ceiling: 10_000
+                }
+            );
             let costs = class.cost_model();
             assert_eq!(costs.coordination_exempt, exempt);
             assert_eq!(costs.coordination_exempt_ceiling, 10_000);
@@ -835,7 +841,10 @@ mod coordination_class_tests {
             serde_json::json!({"coordination_fee_exempt": "true", "coordination_exempt_ceiling": 1}),
             serde_json::json!({"coordination_fee_exempt": false, "coordination_exempt_ceiling": -1}),
         ] {
-            assert!(coordination_class(&status).is_err(), "{status} must not read as a class");
+            assert!(
+                coordination_class(&status).is_err(),
+                "{status} must not read as a class"
+            );
         }
     }
 }

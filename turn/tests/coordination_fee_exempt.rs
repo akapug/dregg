@@ -27,8 +27,8 @@
 
 use dregg_cell::{AuthRequired, Cell, CellId, Ledger, Permissions};
 use dregg_turn::{
-    Action, Authorization, COORDINATION_EXEMPT_CEILING, CallForest, ComputronCosts,
-    DelegationMode, Effect, Event, TurnError, TurnExecutor,
+    Action, Authorization, COORDINATION_EXEMPT_CEILING, CallForest, ComputronCosts, DelegationMode,
+    Effect, Event, TurnError, TurnExecutor,
     turn::{Turn, TurnResult},
 };
 
@@ -266,7 +266,11 @@ fn estimate_and_validate_mirror_the_exemption() {
     let chat = chat_turn(agent_id, 0);
     let transfer = transfer_turn(agent_id, make_open_cell(2, 0).id(), 1, 0);
 
-    assert_eq!(exempt.estimate_cost(&chat), 0, "exempt coordination estimates 0");
+    assert_eq!(
+        exempt.estimate_cost(&chat),
+        0,
+        "exempt coordination estimates 0"
+    );
     assert!(legacy.estimate_cost(&chat) > 0, "legacy estimate unchanged");
     assert!(
         exempt.estimate_cost(&transfer) > 0,
@@ -298,7 +302,10 @@ fn exempt_turn_with_nonzero_fee_still_commits_and_charges() {
     let executor = exempt_executor();
     let turn = chat_turn(agent_id, 1_000);
     let result = executor.execute(&turn, &mut ledger);
-    assert!(result.is_committed(), "funded exempt turn commits: {result:?}");
+    assert!(
+        result.is_committed(),
+        "funded exempt turn commits: {result:?}"
+    );
     let balance = ledger.get(&agent_id).unwrap().state.balance();
     assert_eq!(
         balance, 9_000,
@@ -314,7 +321,10 @@ fn wide_chat_turn(agent: CellId, fields: usize, fee: u64) -> Turn {
         agent,
         vec![Effect::EmitEvent {
             cell: agent,
-            event: Event::new(*blake3::hash(b"helm.chat").as_bytes(), vec![[7u8; 32]; fields]),
+            event: Event::new(
+                *blake3::hash(b"helm.chat").as_bytes(),
+                vec![[7u8; 32]; fields],
+            ),
         }],
         fee,
     )
@@ -330,7 +340,10 @@ fn a_zero_fee_coordination_turn_over_the_ceiling_rejects() {
     let executor = exempt_executor();
     // 400 fields meter 400 * 32 = 12,800 for the event alone.
     let turn = wide_chat_turn(agent_id, 400, 0);
-    assert!(turn.is_coordination(), "precondition: the shape is coordination");
+    assert!(
+        turn.is_coordination(),
+        "precondition: the shape is coordination"
+    );
     let estimated = TurnExecutor::new(ComputronCosts::default_costs()).estimate_cost(&turn);
     assert!(
         estimated > COORDINATION_EXEMPT_CEILING,
@@ -342,7 +355,10 @@ fn a_zero_fee_coordination_turn_over_the_ceiling_rejects() {
             reason: TurnError::BudgetExceeded { limit, used },
             ..
         } => {
-            assert_eq!(limit, COORDINATION_EXEMPT_CEILING, "the ceiling is the limit");
+            assert_eq!(
+                limit, COORDINATION_EXEMPT_CEILING,
+                "the ceiling is the limit"
+            );
             assert!(used > COORDINATION_EXEMPT_CEILING);
         }
         other => panic!("a fee=0 coordination turn over the ceiling must reject, got {other:?}"),
@@ -397,7 +413,10 @@ fn an_emit_on_a_foreign_cell_is_not_exempt() {
         }],
         0,
     );
-    assert!(!turn.is_coordination(), "an emit on another cell is not coordination");
+    assert!(
+        !turn.is_coordination(),
+        "an emit on another cell is not coordination"
+    );
     // One own-cell emit does not launder a foreign one in the same action.
     let mut mixed = chat_turn(agent_id, 0);
     mixed.call_forest.roots[0]
@@ -410,7 +429,10 @@ fn an_emit_on_a_foreign_cell_is_not_exempt() {
     assert!(!mixed.is_coordination());
 
     let executor = exempt_executor();
-    assert!(executor.estimate_cost(&turn) > 0, "a foreign emit estimates its cost");
+    assert!(
+        executor.estimate_cost(&turn) > 0,
+        "a foreign emit estimates its cost"
+    );
     match executor.execute(&turn, &mut ledger) {
         TurnResult::Rejected {
             reason: TurnError::BudgetExceeded { .. },
@@ -429,7 +451,10 @@ fn an_effectless_proof_authorized_action_is_not_exempt() {
         bound_action: "helm.chat".to_string(),
         bound_resource: "self".to_string(),
     };
-    assert!(!turn.is_coordination(), "an effect-less action is not coordination");
+    assert!(
+        !turn.is_coordination(),
+        "an effect-less action is not coordination"
+    );
 
     let executor = exempt_executor();
     let costs = ComputronCosts::default_costs();

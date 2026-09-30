@@ -87,8 +87,11 @@ fn pack_payload(payload: &[u8]) -> Vec<[u8; 32]> {
 /// hard error: a signer never guesses at the destination of value.
 fn parse_cell_hex(what: &str, value: &str) -> Result<dregg_sdk::CellId> {
     let trimmed = value.trim();
-    let bytes = hex::decode(trimmed)
-        .map_err(|e| err(format!("{what} must be 64 hex characters (a 32-byte cell id): {e}")))?;
+    let bytes = hex::decode(trimmed).map_err(|e| {
+        err(format!(
+            "{what} must be 64 hex characters (a 32-byte cell id): {e}"
+        ))
+    })?;
     let id: [u8; 32] = bytes.as_slice().try_into().map_err(|_| {
         err(format!(
             "{what} must be 64 hex characters (a 32-byte cell id); got {} bytes",
@@ -361,14 +364,19 @@ fn unknown_after_submit(
 /// `valid_until` for a turn signed now: the node's `latest_height` plus
 /// [`TURN_VALID_FOR_HEIGHTS`], read from `/status` just before signing.
 async fn turn_deadline(node: &NodeHttpClient) -> Result<i64> {
-    let height = node
-        .fetch_latest_height()
-        .await
-        .map_err(|e| err(format!("read the node's latest height for the turn deadline: {e}")))?;
+    let height = node.fetch_latest_height().await.map_err(|e| {
+        err(format!(
+            "read the node's latest height for the turn deadline: {e}"
+        ))
+    })?;
     let deadline = height
         .checked_add(TURN_VALID_FOR_HEIGHTS)
         .and_then(|h| i64::try_from(h).ok())
-        .ok_or_else(|| err(format!("latest_height {height} leaves no room for a deadline")))?;
+        .ok_or_else(|| {
+            err(format!(
+                "latest_height {height} leaves no room for a deadline"
+            ))
+        })?;
     Ok(deadline)
 }
 
@@ -399,9 +407,7 @@ enum Admission {
 /// function and a reason that calls a send a "transfer" tells the operator
 /// about an operation that did not happen. The word is the caller's and never
 /// this function's to assume.
-fn bind_admission(
-    submitted: &str, local_hash: &str, verdict: &serde_json::Value,
-) -> Admission {
+fn bind_admission(submitted: &str, local_hash: &str, verdict: &serde_json::Value) -> Admission {
     // IDENTITY IS ESTABLISHED BEFORE THE ANSWER IS TRUSTED, AND THAT ORDER IS
     // THE WHOLE POINT — IN BOTH DIRECTIONS. Deciding the refusal first made a
     // reply carrying NO hash, or SOMEONE ELSE'S, an ordinary decided refusal:
@@ -436,9 +442,9 @@ fn bind_admission(
                 .unwrap_or("no reason given")
                 .to_string(),
         ),
-        _ => Admission::Unknown(
-            "the submit response says neither accepted nor refused".to_string(),
-        ),
+        _ => {
+            Admission::Unknown("the submit response says neither accepted nor refused".to_string())
+        }
     }
 }
 
@@ -976,7 +982,9 @@ async fn cmd_join(f: Flags) -> Result<()> {
     // built and needs no faucet signature at all.
     let costs = fee_cost_model(&NodeHttpClient::new(&f.node_url)).await?;
     let (minimum_balance, target_balance) = if costs.coordination_exempt {
-        eprintln!("[client-sign] coordination-exempt join — materializing cell {cell_hex} (free, no faucet grant)");
+        eprintln!(
+            "[client-sign] coordination-exempt join — materializing cell {cell_hex} (free, no faucet grant)"
+        );
         (0u64, 0u64)
     } else {
         (f.fund, f.fund)
@@ -1122,7 +1130,11 @@ async fn cmd_send(f: Flags) -> Result<()> {
         .send()
         .await
         .map_err(|e| {
-            unknown_after_submit(format!("POST /turns/submit: {e}"), Submitted::Send, &confirm_url)
+            unknown_after_submit(
+                format!("POST /turns/submit: {e}"),
+                Submitted::Send,
+                &confirm_url,
+            )
         })?;
     let status = resp.status();
     if !status.is_success() {
@@ -1207,7 +1219,6 @@ async fn cmd_send(f: Flags) -> Result<()> {
     ))
 }
 
-
 /// `transfer` — move computrons from the profile's own cell to another cell.
 ///
 /// The signer is the SOURCE. `Effect::Transfer { from: own cell, to, amount }`
@@ -1232,10 +1243,9 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
                 .to_string(),
         ));
     }
-    let to_flag = f
-        .to
-        .clone()
-        .ok_or_else(|| err("transfer requires --to CELL_HEX".to_string()))?;
+    let to_flag =
+        f.to.clone()
+            .ok_or_else(|| err("transfer requires --to CELL_HEX".to_string()))?;
 
     let http = reqwest::Client::new();
     let node = NodeHttpClient::new(&f.node_url);
@@ -1258,15 +1268,7 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
         .await
         .map_err(|e| err(format!("fetch own-cell nonce for fee estimate: {e}")))?;
     // The deadline is fixed per signed build; the estimate ignores it.
-    let mut turn = build_transfer_turn(
-        &clerk,
-        from,
-        to,
-        amount,
-        &federation_id,
-        estimate_nonce,
-        0,
-    );
+    let mut turn = build_transfer_turn(&clerk, from, to, amount, &federation_id, estimate_nonce, 0);
     let costs = fee_cost_model(&node).await?;
     turn.fee = TurnExecutor::new(costs.clone()).estimate_cost(&turn);
 
@@ -1346,16 +1348,25 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
         .map_err(|e| {
             // The bytes may have arrived and the ANSWER been lost. Ambiguous.
             unknown_after_submit(
-                format!("POST /turns/submit: {e}"), Submitted::Transfer { amount }, &confirm_url)
+                format!("POST /turns/submit: {e}"),
+                Submitted::Transfer { amount },
+                &confirm_url,
+            )
         })?;
     let status = resp.status();
     if !status.is_success() {
         return Err(unknown_after_submit(
-            format!("/turns/submit returned {status}"), Submitted::Transfer { amount }, &confirm_url));
+            format!("/turns/submit returned {status}"),
+            Submitted::Transfer { amount },
+            &confirm_url,
+        ));
     }
     let verdict: serde_json::Value = resp.json().await.map_err(|e| {
         unknown_after_submit(
-            format!("cannot parse the submit response: {e}"), Submitted::Transfer { amount }, &confirm_url)
+            format!("cannot parse the submit response: {e}"),
+            Submitted::Transfer { amount },
+            &confirm_url,
+        )
     })?;
     // THE LOCAL HASH IS WHAT THE RESPONSE IS CHECKED AGAINST, never the other
     // way round. This is the only place the submit answer is read.
@@ -1365,7 +1376,11 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
             return Err(err(format!("node refused the transfer: {why}")));
         }
         Admission::Unknown(why) => {
-            return Err(unknown_after_submit(why, Submitted::Transfer { amount }, &confirm_url));
+            return Err(unknown_after_submit(
+                why,
+                Submitted::Transfer { amount },
+                &confirm_url,
+            ));
         }
     }
     eprintln!("[client-sign] transfer admitted: {turn_hash}; confirming commitment...");
@@ -1419,9 +1434,13 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
             Commitment::BelowFinality { finality } => last_below = Some(finality),
             Commitment::Unreadable(why) => {
                 return Err(unknown_after_submit(
-                    format!("cannot tell whether transfer {turn_hash} \
-                             committed: {why}"),
-                    Submitted::Transfer { amount }, &confirm_url));
+                    format!(
+                        "cannot tell whether transfer {turn_hash} \
+                             committed: {why}"
+                    ),
+                    Submitted::Transfer { amount },
+                    &confirm_url,
+                ));
             }
         }
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
@@ -1434,9 +1453,13 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
         None => String::new(),
     };
     Err(unknown_after_submit(
-        format!("transfer {turn_hash} was admitted but not confirmed committed \
-                 within 30s.{seen}"),
-        Submitted::Transfer { amount }, &confirm_url))
+        format!(
+            "transfer {turn_hash} was admitted but not confirmed committed \
+                 within 30s.{seen}"
+        ),
+        Submitted::Transfer { amount },
+        &confirm_url,
+    ))
 }
 
 #[tokio::main]
@@ -1558,11 +1581,23 @@ mod tests {
         let federation_id = [9u8; 32];
         let long = "x".repeat(1_000);
         for costs in [ComputronCosts::default(), exempt_costs()] {
-            for payload in ["", "hi", "a chat-sized payload of some words", long.as_str()] {
+            for payload in [
+                "",
+                "hi",
+                "a chat-sized payload of some words",
+                long.as_str(),
+            ] {
                 let fee = chat_fee(&clerk, costs.clone(), cell, "helm.chat", payload);
                 for nonce in [0u64, 1, 41] {
-                    let signed =
-                        build_chat_turn(&clerk, cell, "helm.chat", payload, &federation_id, nonce, 70);
+                    let signed = build_chat_turn(
+                        &clerk,
+                        cell,
+                        "helm.chat",
+                        payload,
+                        &federation_id,
+                        nonce,
+                        70,
+                    );
                     assert!(matches!(
                         signed.call_forest.roots[0].action.authorization,
                         Authorization::HybridSignature { .. }
@@ -1608,20 +1643,42 @@ mod tests {
         );
         old.fee = TurnExecutor::new(costs.clone()).estimate_cost(&old);
         let old_funding_fee = old.fee;
-        old = build_chat_turn(&clerk, cell, "helm.chat", payload, &federation_id, nonce, deadline);
+        old = build_chat_turn(
+            &clerk,
+            cell,
+            "helm.chat",
+            payload,
+            &federation_id,
+            nonce,
+            deadline,
+        );
         old.fee = TurnExecutor::new(costs.clone()).estimate_cost(&old);
         old.previous_receipt_hash = head;
         let old_signed = postcard::to_stdvec(&clerk.sign_turn(&old)).unwrap();
 
         // NEW: unsigned estimate, then the one signed build at the fresh nonce.
         let new_funding_fee = chat_fee(&clerk, costs.clone(), cell, "helm.chat", payload);
-        let mut new = build_chat_turn(&clerk, cell, "helm.chat", payload, &federation_id, nonce, deadline);
+        let mut new = build_chat_turn(
+            &clerk,
+            cell,
+            "helm.chat",
+            payload,
+            &federation_id,
+            nonce,
+            deadline,
+        );
         new.fee = TurnExecutor::new(costs).estimate_cost(&new);
         new.previous_receipt_hash = head;
         let new_signed = postcard::to_stdvec(&clerk.sign_turn(&new)).unwrap();
 
-        assert_eq!(old_funding_fee, new_funding_fee, "funding is sized identically");
-        assert_eq!(old_signed, new_signed, "the submitted SignedTurn bytes are identical");
+        assert_eq!(
+            old_funding_fee, new_funding_fee,
+            "funding is sized identically"
+        );
+        assert_eq!(
+            old_signed, new_signed,
+            "the submitted SignedTurn bytes are identical"
+        );
         assert_eq!(new.nonce, nonce);
     }
 
@@ -1775,9 +1832,15 @@ mod tests {
             .spawn()
             .await;
         let cell_hex = hex::encode(recipient.0);
-        let outcome = ensure_cell(&reqwest::Client::new(), spawned.base_url(), &cell_hex, 1_510, 9_060)
-            .await
-            .expect("duplicate owner must join the in-flight grant");
+        let outcome = ensure_cell(
+            &reqwest::Client::new(),
+            spawned.base_url(),
+            &cell_hex,
+            1_510,
+            9_060,
+        )
+        .await
+        .expect("duplicate owner must join the in-flight grant");
         assert!(outcome.joined_in_flight);
         assert_eq!(outcome.balance, 9_060);
         assert_eq!(spawned.lock().await.faucet_requests().len(), 1);
@@ -1996,7 +2059,8 @@ mod tests {
         let body = serde_json::json!([row(WANT, "tentative")]);
         let got = exact_receipt(WANT, &body).expect("readable");
         assert_eq!(
-            got.and_then(|r| r.get("turn_hash")).and_then(|v| v.as_str()),
+            got.and_then(|r| r.get("turn_hash"))
+                .and_then(|v| v.as_str()),
             Some(WANT)
         );
     }
@@ -2047,14 +2111,22 @@ mod tests {
         // `send` and `transfer` now ask the same question through the same
         // reader, so the sibling cannot drift from the cure again.
         assert_eq!(
-            bind_admission("transfer", WANT, &serde_json::json!({
-                "accepted": true, "turn_hash": WANT
-            })),
+            bind_admission(
+                "transfer",
+                WANT,
+                &serde_json::json!({
+                    "accepted": true, "turn_hash": WANT
+                })
+            ),
             Admission::Took
         );
-        let got = bind_admission("transfer", WANT, &serde_json::json!({
-            "accepted": true, "turn_hash": OTHER
-        }));
+        let got = bind_admission(
+            "transfer",
+            WANT,
+            &serde_json::json!({
+                "accepted": true, "turn_hash": OTHER
+            }),
+        );
         assert!(
             matches!(&got, Admission::Unknown(why)
                      if why.contains("is not the transfer this process signed")),
@@ -2064,8 +2136,10 @@ mod tests {
         // which is exactly why the binding has to happen before the lookup.
         let body = serde_json::json!([row(OTHER, "tentative")]);
         assert!(exact_receipt(OTHER, &body).expect("readable").is_some());
-        assert!(exact_receipt(WANT, &body).is_err(),
-                "asking for THIS turn must not be answered by that one");
+        assert!(
+            exact_receipt(WANT, &body).is_err(),
+            "asking for THIS turn must not be answered by that one"
+        );
     }
 
     #[test]
@@ -2076,21 +2150,33 @@ mod tests {
         // not happen — a false lead at exactly the moment they are deciding
         // whether value moved.
         for (submitted, other) in [("send", "transfer"), ("transfer", "send")] {
-            let foreign = bind_admission(submitted, WANT, &serde_json::json!({
-                "accepted": true, "turn_hash": OTHER
-            }));
-            let hashless = bind_admission(submitted, WANT, &serde_json::json!({
-                "accepted": true
-            }));
+            let foreign = bind_admission(
+                submitted,
+                WANT,
+                &serde_json::json!({
+                    "accepted": true, "turn_hash": OTHER
+                }),
+            );
+            let hashless = bind_admission(
+                submitted,
+                WANT,
+                &serde_json::json!({
+                    "accepted": true
+                }),
+            );
             for got in [&foreign, &hashless] {
                 let why = match got {
                     Admission::Unknown(why) => why,
                     _ => panic!("expected UNKNOWN, got {got:?}"),
                 };
-                assert!(why.contains(submitted),
-                        "the reason must name what THIS caller signed: {why}");
-                assert!(!why.contains(other),
-                        "and must not name the other verb: {why}");
+                assert!(
+                    why.contains(submitted),
+                    "the reason must name what THIS caller signed: {why}"
+                );
+                assert!(
+                    !why.contains(other),
+                    "and must not name the other verb: {why}"
+                );
             }
         }
     }
@@ -2118,15 +2204,23 @@ mod tests {
         // UNCONDITIONAL POSITIVE FIRST, and note what it is NOT: taking the
         // turn is the node saying it received it. Commitment is a receipt.
         assert_eq!(
-            bind_admission("transfer", WANT, &serde_json::json!({
-                "accepted": true, "turn_hash": WANT
-            })),
+            bind_admission(
+                "transfer",
+                WANT,
+                &serde_json::json!({
+                    "accepted": true, "turn_hash": WANT
+                })
+            ),
             Admission::Took
         );
         assert_eq!(
-            bind_admission("transfer", WANT, &serde_json::json!({
-                "accepted": true, "turn_hash": WANT.to_uppercase()
-            })),
+            bind_admission(
+                "transfer",
+                WANT,
+                &serde_json::json!({
+                    "accepted": true, "turn_hash": WANT.to_uppercase()
+                })
+            ),
             Admission::Took
         );
     }
@@ -2136,9 +2230,13 @@ mod tests {
         // THE WRONG-OPERATION SUCCESS, at the line that decides it. Confirming
         // the hash the RESPONSE chose would find that other turn's perfectly
         // valid receipt and print it beside this transfer's amount.
-        let got = bind_admission("transfer", WANT, &serde_json::json!({
-            "accepted": true, "turn_hash": OTHER
-        }));
+        let got = bind_admission(
+            "transfer",
+            WANT,
+            &serde_json::json!({
+                "accepted": true, "turn_hash": OTHER
+            }),
+        );
         assert!(
             matches!(&got, Admission::Unknown(why)
                      if why.contains("is not the transfer this process signed")),
@@ -2154,7 +2252,10 @@ mod tests {
             serde_json::json!({"accepted": true, "turn_hash": serde_json::Value::Null}),
         ] {
             assert!(
-                matches!(bind_admission("transfer", WANT, &verdict), Admission::Unknown(_)),
+                matches!(
+                    bind_admission("transfer", WANT, &verdict),
+                    Admission::Unknown(_)
+                ),
                 "{verdict} must be UNKNOWN"
             );
         }
@@ -2171,7 +2272,10 @@ mod tests {
             serde_json::json!({"turn_hash": WANT}),
         ] {
             assert!(
-                matches!(bind_admission("transfer", WANT, &verdict), Admission::Unknown(_)),
+                matches!(
+                    bind_admission("transfer", WANT, &verdict),
+                    Admission::Unknown(_)
+                ),
                 "{verdict} must be UNKNOWN, never Refused"
             );
         }
@@ -2184,16 +2288,24 @@ mod tests {
         // have committed. The node's reject path fills turn_hash before it
         // decides, so a real refusal names the turn it refused.
         assert_eq!(
-            bind_admission("transfer", WANT, &serde_json::json!({
-                "accepted": false, "turn_hash": WANT,
-                "error": "insufficient balance"
-            })),
+            bind_admission(
+                "transfer",
+                WANT,
+                &serde_json::json!({
+                    "accepted": false, "turn_hash": WANT,
+                    "error": "insufficient balance"
+                })
+            ),
             Admission::Refused("insufficient balance".to_string())
         );
         assert_eq!(
-            bind_admission("transfer", WANT, &serde_json::json!({
-                "accepted": false, "turn_hash": WANT.to_uppercase()
-            })),
+            bind_admission(
+                "transfer",
+                WANT,
+                &serde_json::json!({
+                    "accepted": false, "turn_hash": WANT.to_uppercase()
+                })
+            ),
             Admission::Refused("no reason given".to_string())
         );
     }
@@ -2212,7 +2324,10 @@ mod tests {
             serde_json::json!({"accepted": false, "turn_hash": 12}),
         ] {
             assert!(
-                matches!(bind_admission("transfer", WANT, &verdict), Admission::Unknown(_)),
+                matches!(
+                    bind_admission("transfer", WANT, &verdict),
+                    Admission::Unknown(_)
+                ),
                 "{verdict} names no evidence about this turn, so it is UNKNOWN"
             );
         }
@@ -2228,8 +2343,10 @@ mod tests {
         use dregg_sdk::{MlDsaKeygenCoreRealInstall as K, MlDsaSignCoreRealInstall as S};
         for sign in [S::Installed, S::AlreadyInstalled] {
             for keygen in [K::Installed, K::AlreadyInstalled] {
-                assert!(cores_are_healthy(sign, keygen),
-                        "{sign:?}/{keygen:?} is a healthy verified producer");
+                assert!(
+                    cores_are_healthy(sign, keygen),
+                    "{sign:?}/{keygen:?} is a healthy verified producer"
+                );
             }
         }
         // MUST-MISS: only a genuinely absent export is unhealthy, and it must
@@ -2240,8 +2357,10 @@ mod tests {
             (S::ExportAbsent, K::ExportAbsent),
             (S::ExportAbsent, K::AlreadyInstalled),
         ] {
-            assert!(!cores_are_healthy(sign, keygen),
-                    "{sign:?}/{keygen:?} cannot sign a turn");
+            assert!(
+                !cores_are_healthy(sign, keygen),
+                "{sign:?}/{keygen:?} cannot sign a turn"
+            );
         }
     }
 
@@ -2272,13 +2391,18 @@ mod tests {
 
     #[test]
     fn a_bearer_on_argv_is_refused_without_being_echoed() {
-        let argv = ["send", "--token", "s3cret-bearer", "hello"].map(String::from).to_vec();
+        let argv = ["send", "--token", "s3cret-bearer", "hello"]
+            .map(String::from)
+            .to_vec();
         let e = match parse_flags(argv[1..].to_vec()) {
             Ok(_) => panic!("--token must be refused, not parsed"),
             Err(e) => e.to_string(),
         };
         assert!(e.contains("--token-file"), "{e}");
-        assert!(!e.contains("s3cret-bearer"), "the refusal must not echo the bearer: {e}");
+        assert!(
+            !e.contains("s3cret-bearer"),
+            "the refusal must not echo the bearer: {e}"
+        );
     }
 
     #[test]
@@ -2345,7 +2469,10 @@ mod tests {
 
         impl EnvRestore {
             fn set(vars: &[(&'static str, &std::ffi::OsStr)]) -> Self {
-                let saved = vars.iter().map(|(k, _)| (*k, std::env::var_os(k))).collect();
+                let saved = vars
+                    .iter()
+                    .map(|(k, _)| (*k, std::env::var_os(k)))
+                    .collect();
                 for (k, v) in vars {
                     // SAFETY: every arm that touches these variables holds `ENV`.
                     unsafe { std::env::set_var(k, v) };
@@ -2434,7 +2561,11 @@ mod tests {
                 .expect("the stranger's own turn commits");
             {
                 let node = spawned.lock().await;
-                assert_eq!(node.receipts().len(), 1, "the tip is the stranger's receipt");
+                assert_eq!(
+                    node.receipts().len(),
+                    1,
+                    "the tip is the stranger's receipt"
+                );
                 assert_eq!(
                     node.agent_receipt_head(&clerk.cell_id("default")),
                     None,
@@ -2482,7 +2613,10 @@ mod tests {
             };
             let e = out.expect_err("a foreign turn hash must never confirm this transfer");
             let text = e.to_string();
-            assert!(text.contains("is not the transfer this process signed"), "{text}");
+            assert!(
+                text.contains("is not the transfer this process signed"),
+                "{text}"
+            );
             assert!(text.contains("Do NOT resubmit"), "{text}");
         }
 
@@ -2498,8 +2632,10 @@ mod tests {
                 let text = e.to_string();
                 assert!(text.contains("UNKNOWN, not a refusal"), "{text}");
                 assert!(text.contains("Do NOT resubmit"), "{text}");
-                assert!(text.contains("starbridge/receipts"),
-                        "the caller is owed the exact re-read: {text}");
+                assert!(
+                    text.contains("starbridge/receipts"),
+                    "the caller is owed the exact re-read: {text}"
+                );
             }
         }
 
@@ -2526,13 +2662,18 @@ mod tests {
             // this might have committed would be its own false alarm.
             let Some(out) = run_transfer(Some(SubmitFault::RefusesNamingTheTurn(
                 "insufficient balance".to_string(),
-            ))).await else {
+            )))
+            .await
+            else {
                 return skipped("the decided-refusal must-miss");
             };
             let e = out.expect_err("a refused transfer must not succeed");
             let text = e.to_string();
             assert!(text.contains("node refused the transfer"), "{text}");
-            assert!(!text.contains("UNKNOWN"), "a decided refusal is not UNKNOWN: {text}");
+            assert!(
+                !text.contains("UNKNOWN"),
+                "a decided refusal is not UNKNOWN: {text}"
+            );
         }
     }
 }

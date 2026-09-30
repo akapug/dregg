@@ -3125,9 +3125,7 @@ async fn get_status(State(state): State<NodeState>) -> Json<StatusResponse> {
         note_count,
         federation_mode,
         public_key: hex_encode(&s.cclerk.public_key().0),
-        executor_federation_id: hex_encode(&crate::executor_setup::federation_id_for_executor(
-            &s,
-        )),
+        executor_federation_id: hex_encode(&crate::executor_setup::federation_id_for_executor(&s)),
         coordination_fee_exempt: s.coordination_fee_exempt,
         coordination_exempt_ceiling: dregg_turn::ComputronCosts::default()
             .coordination_exempt_ceiling,
@@ -12838,12 +12836,14 @@ mod tests {
             let (code, json) = get_json(&app, "/status").await;
             assert_eq!(code, StatusCode::OK);
             assert_eq!(
-                json.get("coordination_fee_exempt").and_then(|v| v.as_bool()),
+                json.get("coordination_fee_exempt")
+                    .and_then(|v| v.as_bool()),
                 Some(exempt),
                 "/status must serve the node's coordination flag; got {json}"
             );
             assert_eq!(
-                json.get("coordination_exempt_ceiling").and_then(|v| v.as_u64()),
+                json.get("coordination_exempt_ceiling")
+                    .and_then(|v| v.as_u64()),
                 Some(dregg_turn::COORDINATION_EXEMPT_CEILING),
                 "/status must serve the ceiling the executors apply; got {json}"
             );

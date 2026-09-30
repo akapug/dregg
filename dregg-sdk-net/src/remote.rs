@@ -740,7 +740,10 @@ mod tests {
         let (runtime, server) = status_fixture(answers).await;
         let got = runtime.federation_id().await;
         server.abort();
-        assert!(got.is_err(), "a status without the field must refuse: {got:?}");
+        assert!(
+            got.is_err(),
+            "a status without the field must refuse: {got:?}"
+        );
     }
 
     /// A dropped `/status` request is a transport failure and refuses.

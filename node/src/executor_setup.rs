@@ -815,7 +815,10 @@ mod tests {
             cross_effect_dependencies: Vec::new(),
             effect_witness_index_map: Vec::new(),
         };
-        assert!(turn.is_coordination(), "precondition: an own-cell status post");
+        assert!(
+            turn.is_coordination(),
+            "precondition: an own-cell status post"
+        );
 
         for exempt in [true, false] {
             s.coordination_fee_exempt = exempt;
@@ -823,7 +826,11 @@ mod tests {
             let verify = new_verify_executor(&s);
             let mut finalize = TurnExecutor::new(dregg_turn::ComputronCosts::default());
             configure_turn_executor(&mut finalize, &s, BlockHeightMode::Next);
-            let paths = [("submit", &submit), ("verify", &verify), ("finalize", &finalize)];
+            let paths = [
+                ("submit", &submit),
+                ("verify", &verify),
+                ("finalize", &finalize),
+            ];
             for (path, executor) in paths {
                 assert_eq!(
                     executor.costs.coordination_exempt, exempt,
@@ -832,9 +839,15 @@ mod tests {
             }
             let estimate = submit.estimate_cost(&turn);
             if exempt {
-                assert_eq!(estimate, 0, "the drainer/relay fee for a coordination turn is 0");
+                assert_eq!(
+                    estimate, 0,
+                    "the drainer/relay fee for a coordination turn is 0"
+                );
             } else {
-                assert!(estimate > 0, "with the flag off the same turn is fee-bearing");
+                assert!(
+                    estimate > 0,
+                    "with the flag off the same turn is fee-bearing"
+                );
             }
         }
     }

@@ -488,7 +488,10 @@ async fn a_key_bound_zero_amount_faucet_cell_takes_its_first_hybrid_turn() {
 
     let grant = 10_000u64;
     let json = post_faucet(&app, &actor_hex, grant).await;
-    assert_eq!(json["success"], true, "faucet must accept the grant: {json}");
+    assert_eq!(
+        json["success"], true,
+        "faucet must accept the grant: {json}"
+    );
     let credited = await_balance(&state, &actor, grant as i64, Duration::from_secs(30)).await;
     assert_eq!(credited, Some(grant as i64), "the grant must finalize");
     {
@@ -537,7 +540,11 @@ async fn a_key_bound_zero_amount_faucet_cell_takes_its_first_hybrid_turn() {
             .expect("canonical ML-DSA-65 key");
         assert_eq!(identity.ml_dsa_key_commitment, expected);
         assert_eq!(identity.key_epoch, 0, "a first claim is epoch zero");
-        assert_eq!(cell.state.nonce(), 1, "the claimed cell took exactly one turn");
+        assert_eq!(
+            cell.state.nonce(),
+            1,
+            "the claimed cell took exactly one turn"
+        );
         assert_eq!(
             cell.state.balance(),
             grant as i64 - moved as i64 - fee as i64,

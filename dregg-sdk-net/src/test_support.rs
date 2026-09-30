@@ -310,16 +310,22 @@ fn handle_submit(node: &mut TestNode, body: &[u8]) -> (u16, serde_json::Value) {
     let signed: dregg_sdk::SignedTurn = match postcard::take_from_bytes(body) {
         Ok((s, [])) => s,
         Ok((_s, remainder)) => {
-            return (200, serde_json::json!({
-                "accepted": false,
-                "error": format!(
-                    "trailing bytes after SignedTurn envelope: {}",
-                    remainder.len()
-                ),
-            }));
+            return (
+                200,
+                serde_json::json!({
+                    "accepted": false,
+                    "error": format!(
+                        "trailing bytes after SignedTurn envelope: {}",
+                        remainder.len()
+                    ),
+                }),
+            );
         }
         Err(_) => {
-            return (200, serde_json::json!({"accepted": false, "error": "malformed SignedTurn"}));
+            return (
+                200,
+                serde_json::json!({"accepted": false, "error": "malformed SignedTurn"}),
+            );
         }
     };
     let turn_hash = signed.turn.hash();
@@ -330,7 +336,10 @@ fn handle_submit(node: &mut TestNode, body: &[u8]) -> (u16, serde_json::Value) {
                 .last()
                 .map(|r| dregg_types::hex_encode(&r.turn_hash))
                 .unwrap_or_else(|| "33".repeat(32));
-            return (200, serde_json::json!({"accepted": true, "turn_hash": other}));
+            return (
+                200,
+                serde_json::json!({"accepted": true, "turn_hash": other}),
+            );
         }
         Some(SubmitFault::ReportsNoHash) => {
             return (200, serde_json::json!({"accepted": true}));
@@ -351,26 +360,35 @@ fn handle_submit(node: &mut TestNode, body: &[u8]) -> (u16, serde_json::Value) {
         Some(SubmitFault::ReceiptQueryFails) | None => {}
     }
     if !signed.signer.verify(&turn_hash, &signed.signature) {
-        return (200, serde_json::json!({
-            "accepted": false,
-            "turn_hash": dregg_types::hex_encode(&turn_hash),
-            "error": "invalid turn signature",
-        }));
+        return (
+            200,
+            serde_json::json!({
+                "accepted": false,
+                "turn_hash": dregg_types::hex_encode(&turn_hash),
+                "error": "invalid turn signature",
+            }),
+        );
     }
     let expected_agent = CellId::derive_raw(&signed.signer.0, &default_token_id());
     if signed.turn.agent != expected_agent {
-        return (200, serde_json::json!({
-            "accepted": false,
-            "turn_hash": dregg_types::hex_encode(&turn_hash),
-            "error": "turn agent does not match signer default cell",
-        }));
+        return (
+            200,
+            serde_json::json!({
+                "accepted": false,
+                "turn_hash": dregg_types::hex_encode(&turn_hash),
+                "error": "turn agent does not match signer default cell",
+            }),
+        );
     }
     if signed.turn.previous_receipt_hash != node.agent_receipt_head(&signed.turn.agent) {
-        return (200, serde_json::json!({
-            "accepted": false,
-            "turn_hash": dregg_types::hex_encode(&turn_hash),
-            "error": "receipt chain mismatch",
-        }));
+        return (
+            200,
+            serde_json::json!({
+                "accepted": false,
+                "turn_hash": dregg_types::hex_encode(&turn_hash),
+                "error": "receipt chain mismatch",
+            }),
+        );
     }
 
     let mut costs = ComputronCosts::default();
@@ -553,7 +571,10 @@ fn route(method: &str, path: &str, body: &[u8], node: &mut TestNode) -> (u16, se
         && let Some(query) = path.strip_prefix("/api/starbridge/receipts?")
     {
         if let Some(SubmitFault::ReceiptQueryFails) = node.submit_fault {
-            return (500, serde_json::json!({"error": "receipt index unavailable"}));
+            return (
+                500,
+                serde_json::json!({"error": "receipt index unavailable"}),
+            );
         }
         return (200, exact_receipts_json(query, node));
     }

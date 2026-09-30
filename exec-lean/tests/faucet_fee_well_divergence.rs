@@ -30,11 +30,11 @@ use std::collections::HashMap;
 
 use dregg_cell::permissions::AuthRequired;
 use dregg_cell::{Cell, CellId, Ledger, Permissions};
-use dregg_exec_lean::lean_apply::{execute_via_lean, produce_via_lean, ProducerOutcome};
+use dregg_exec_lean::lean_apply::{ProducerOutcome, execute_via_lean, produce_via_lean};
 use dregg_exec_lean::lean_shadow::ShadowHostCtx;
 use dregg_turn::{
-    turn::Turn, Action, Authorization, CallForest, ComputronCosts, DelegationMode, Effect, Event,
-    TurnExecutor,
+    Action, Authorization, CallForest, ComputronCosts, DelegationMode, Effect, Event, TurnExecutor,
+    turn::Turn,
 };
 
 fn open_permissions() -> Permissions {

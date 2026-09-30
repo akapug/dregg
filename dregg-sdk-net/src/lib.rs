@@ -92,9 +92,9 @@ pub use deos_server::{
 };
 
 // ── The client-side NodeWorldSink (inhabit a remote box's node over HTTP) ─────
-pub use node_world_sink::{CoordinationClass, NodeHttpClient};
 #[cfg(feature = "world-sink")]
 pub use node_world_sink::NodeWorldSink;
+pub use node_world_sink::{CoordinationClass, NodeHttpClient};
 
 // ── Silo client / discharge / discovery / events ─────────────────────────────
 pub use client::{PresentationResult, RevocationStatus, SiloClient};

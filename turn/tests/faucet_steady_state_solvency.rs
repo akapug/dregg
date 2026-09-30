@@ -504,5 +504,8 @@ fn property_randomized_schedule_faucet_bounded_below() {
         floor >= FAUCET_START - AGENT_START - 100_000,
         "faucet bounded below (floor {floor}) — steady-state, not draining"
     );
-    assert!(floor > 0, "faucet never insolvent under randomized schedule");
+    assert!(
+        floor > 0,
+        "faucet never insolvent under randomized schedule"
+    );
 }
