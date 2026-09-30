@@ -411,6 +411,18 @@ pub enum Command {
         /// Also settable via `DREGG_DEV_UNLOCK=1`.
         #[arg(long = "dev-unlock")]
         dev_unlock: bool,
+
+        /// Turn on the fee-exempt COORDINATION class on this node (own-cell
+        /// EmitEvent-only turns may carry `fee = 0`, up to the per-turn
+        /// ceiling). The class changes admission and finalization, so a chain's
+        /// nodes must agree on it: the consensus-safe way to turn it on is
+        /// `coordination_fee_exempt: true` in `genesis.json`. This switch is the
+        /// solo-devnet form. The node REFUSES TO START with it when it has any
+        /// peer (a peer list, a multi-member committee, or `--federation-mode
+        /// full`), or when `genesis.json` declares `coordination_fee_exempt:
+        /// false`. `--enable-faucet` does not turn the class on.
+        #[arg(long = "coordination-fee-exempt")]
+        coordination_fee_exempt: bool,
     },
 
     /// Initialize the data directory and generate a node keypair.
@@ -1336,6 +1348,7 @@ pub async fn run(cli: Cli) {
             cors_origins,
             deos_program,
             dev_unlock,
+            coordination_fee_exempt,
         } => {
             run_node(
                 port,
@@ -1363,6 +1376,7 @@ pub async fn run(cli: Cli) {
                 cors_origins,
                 deos_program,
                 dev_unlock,
+                coordination_fee_exempt,
             )
             .await
         }
@@ -1903,6 +1917,9 @@ pub async fn run(cli: Cli) {
                 Vec::new(),
                 None,
                 false,
+                // A joining node always has a peer, so the solo-only switch
+                // is never offered here; the class comes from genesis.
+                false,
             )
             .await
         }
@@ -2169,6 +2186,7 @@ async fn run_node(
     cors_origins_flag: Vec<String>,
     deos_program: Option<String>,
     dev_unlock: bool,
+    coordination_fee_exempt_switch: bool,
 ) {
     let data_path = expand_path(data_dir);
 
@@ -2294,6 +2312,7 @@ async fn run_node(
 
     // Load genesis.json if present in the data directory.
     let mut starbridge_seeded_from_genesis = false;
+    let mut genesis_coordination_fee_exempt: Option<bool> = None;
     let mut consensus_time_policy_v1 = None;
     let mut loaded_genesis_bytes = None;
     let genesis_path = data_path.join("genesis.json");
@@ -2428,6 +2447,7 @@ async fn run_node(
                         // the receipt's computrons_used stays honest.
                         // Genesis-declared so every committee node agrees.
                         if let Some(exempt) = genesis["coordination_fee_exempt"].as_bool() {
+                            genesis_coordination_fee_exempt = Some(exempt);
                             s.coordination_fee_exempt = exempt;
                             if exempt {
                                 info!(
@@ -2588,24 +2608,6 @@ async fn run_node(
                 );
             }
         }
-        // COORDINATION-TURN CLASS ("leash, not ledger") — half (a) of the
-        // signed-turn transport fix. Same genesis-less devnet cave node never
-        // hits the `genesis.json`-exists branch above (lib.rs:1229-1247), so
-        // `s.coordination_fee_exempt` is still its `false` default here — which
-        // means the compiled-in exempt class is OFF on our devnet, and every
-        // coordination turn (chat/gate/status/meld — EmitEvent-only, no
-        // balance_change) still pays the per-turn fee, drains its cell, and hits
-        // the faucet's 1/min grant rate-limit → falls back to `[unsigned]`.
-        // Mirror the fee_well backfill above: turn the class ON at this dogfood
-        // boot so `configure_turn_executor` wires `costs.coordination_exempt =
-        // true` onto every executor. Metering stays honest (receipts keep the
-        // true `computrons_used`); only the ADMISSION CHARGE is waived, and only
-        // for EmitEvent-only turns — economic turns (Transfer/Burn/…) charge
-        // exactly as before. Gated by the same `--enable-faucet` devnet path.
-        info!(
-            "coordination class: genesis-less devnet fee-exempts EmitEvent-only turns (leash, not ledger)"
-        );
-        s.coordination_fee_exempt = true;
     }
 
     // Demo execution-lease seed — the local-cloud loop's mint. An external
@@ -2927,6 +2929,30 @@ async fn run_node(
                  full explicitly to silence this, or run with no peers for a genuine solo node."
             );
             is_solo_mode = false;
+        }
+
+        // COORDINATION-TURN CLASS, explicit switch. Resolved here, after the
+        // federation mode, because the switch is refused on any node that has
+        // a peer: finalization reads the flag, so a per-node switch on a
+        // committee would split nodes on whether a fee-0 turn commits.
+        match coordination_fee_exempt_switch_verdict(
+            coordination_fee_exempt_switch,
+            peers_present || !is_solo_mode,
+            genesis_coordination_fee_exempt,
+        ) {
+            Ok(false) => {}
+            Ok(true) => {
+                s.coordination_fee_exempt = true;
+                warn!(
+                    "--coordination-fee-exempt: own-cell EmitEvent-only turns may carry fee = 0 \
+                     on this solo node (up to the per-turn ceiling). A node that later joins \
+                     this chain must carry the same class in genesis.json to agree with it."
+                );
+            }
+            Err(why) => {
+                error!("REFUSING TO START: {why}");
+                std::process::exit(1);
+            }
         }
 
         // In solo mode, initialize the SoloConsensusState with the node's signing key.
@@ -4100,6 +4126,38 @@ fn solo_should_auto_upgrade(is_solo_mode: bool, has_peers: bool, committee_size:
     is_solo_mode && (has_peers || committee_size > 1)
 }
 
+/// Decide what `--coordination-fee-exempt` does at boot. `Ok(true)` turns the
+/// class on, `Ok(false)` leaves `s.coordination_fee_exempt` as genesis set it,
+/// and `Err` is a refusal to start.
+///
+/// The class changes admission AND finalization, so it is consensus-relevant.
+/// The switch is therefore refused on a node with any peer (`federated`: a peer
+/// list, a multi-member committee, or full mode), where only a genesis
+/// declaration keeps nodes in agreement. It is also refused when genesis
+/// explicitly declares the class OFF: an operator flag never overrides a
+/// genesis declaration.
+fn coordination_fee_exempt_switch_verdict(
+    switch: bool,
+    federated: bool,
+    genesis_declared: Option<bool>,
+) -> Result<bool, &'static str> {
+    if !switch {
+        return Ok(false);
+    }
+    if federated {
+        return Err(
+            "--coordination-fee-exempt is a solo-node switch and this node has peers; declare \
+             coordination_fee_exempt in genesis.json so every committee node agrees",
+        );
+    }
+    if genesis_declared == Some(false) {
+        return Err(
+            "--coordination-fee-exempt contradicts genesis.json coordination_fee_exempt: false",
+        );
+    }
+    Ok(true)
+}
+
 /// Parse the `DREGG_ALLOW_UNVERIFIED_CONSENSUS` escape hatch (shared by the
 /// marshal-only startup tripwire and the verified-consensus hard-check). Running an
 /// un-verified executor / ordering is a DELIBERATE opt-in — this returns `true` only
@@ -4620,6 +4678,44 @@ mod shutdown_and_federation_tests {
         // Configured solo but a multi-member genesis committee ⇒ upgrade even
         // with no explicit peer list.
         assert!(solo_should_auto_upgrade(true, false, 3));
+    }
+
+    // ── --coordination-fee-exempt: solo-only, never over genesis ──────────────
+
+    #[test]
+    fn coordination_switch_off_leaves_genesis_alone() {
+        for federated in [false, true] {
+            for genesis in [None, Some(false), Some(true)] {
+                assert_eq!(
+                    coordination_fee_exempt_switch_verdict(false, federated, genesis),
+                    Ok(false)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn coordination_switch_turns_the_class_on_for_a_solo_node() {
+        assert_eq!(
+            coordination_fee_exempt_switch_verdict(true, false, None),
+            Ok(true)
+        );
+        assert_eq!(
+            coordination_fee_exempt_switch_verdict(true, false, Some(true)),
+            Ok(true)
+        );
+    }
+
+    #[test]
+    fn coordination_switch_refuses_a_node_with_peers() {
+        for genesis in [None, Some(false), Some(true)] {
+            assert!(coordination_fee_exempt_switch_verdict(true, true, genesis).is_err());
+        }
+    }
+
+    #[test]
+    fn coordination_switch_refuses_to_override_a_genesis_false() {
+        assert!(coordination_fee_exempt_switch_verdict(true, false, Some(false)).is_err());
     }
 
     #[test]
