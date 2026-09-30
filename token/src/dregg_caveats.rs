@@ -127,6 +127,9 @@ pub const CAV_FEATURE_GLOB: CaveatType = 13;
 /// vs cell mutations). See module docs.
 pub const CAV_BUDGET: CaveatType = 14;
 // 15 = Revocable — retired (handled by RevocationRegistry STARK pipeline).
+// 16, 17, 18 = discharge-gateway ticket conditions (Holder, Payment, Proof),
+//   defined in `dregg_macaroon::discharge_gateway`. They live inside sealed
+//   third-party tickets, not on tokens, but share this id space.
 
 // ============================================================================
 // Decoded grant enum

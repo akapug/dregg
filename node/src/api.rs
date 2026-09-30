@@ -9760,20 +9760,23 @@ fn compute_faucet_activity_hash(recipient: &dregg_cell::CellId, amount: u64) -> 
 // Discharge Gateway Endpoint
 // =============================================================================
 
-/// POST /api/discharge request body.
+/// POST /api/discharge request body. Mirrors the standalone gateway's: the
+/// request is signed by the holder key sealed in the ticket, and unknown fields
+/// (the retired `client_id` / `payment` / `metadata`) are refused.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NodeDischargeRequest {
     /// Base64-encoded ticket from the 3P caveat.
     pub ticket: String,
-    /// Optional client identifier.
-    pub client_id: Option<String>,
+    /// Unix seconds at which the holder signed.
+    pub issued_at: i64,
+    /// Base64 Ed25519 signature by the ticket's holder key over
+    /// `dregg_macaroon::DischargeRequest::signing_message`.
+    pub holder_signature: String,
     /// Optional base64-encoded proof.
     pub proof: Option<String>,
-    /// Optional payment amount.
-    pub payment: Option<u64>,
-    /// Arbitrary metadata.
-    #[serde(default)]
-    pub metadata: HashMap<String, String>,
+    /// Optional base64-encoded payment evidence.
+    pub payment_evidence: Option<String>,
 }
 
 /// POST /api/discharge response body.
@@ -9813,11 +9816,16 @@ async fn post_discharge(
         .decode(&req.ticket)
         .map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    // Decode optional proof from base64.
-    let proof = match &req.proof {
-        Some(p) => Some(engine.decode(p).map_err(|_| StatusCode::BAD_REQUEST)?),
-        None => None,
+    let holder_signature = engine
+        .decode(&req.holder_signature)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let decode_opt = |v: &Option<String>| {
+        v.as_ref()
+            .map(|p| engine.decode(p).map_err(|_| StatusCode::BAD_REQUEST))
+            .transpose()
     };
+    let proof = decode_opt(&req.proof)?;
+    let payment_evidence = decode_opt(&req.payment_evidence)?;
 
     let mut s = state.write().await;
     if !s.unlocked {
@@ -9831,9 +9839,14 @@ async fn post_discharge(
     if s.discharge_gateway.is_none() {
         let gateway_key = s.cclerk.derive_symmetric_key("dregg-discharge-gateway-v1");
         let location = format!("dregg-node://{}", hex_encode(&s.cclerk.public_key().0));
-        let mut gateway = dregg_macaroon::DischargeGateway::new(gateway_key, location);
-        // Default evaluator: require proof to prevent accidental open gateways.
-        gateway.add_evaluator(Box::new(dregg_macaroon::ProofRequiredEvaluator));
+        // No operator evaluators and no payment/proof verifiers are registered:
+        // this gateway discharges a ticket only to the holder key the ticket
+        // names (proved by the request signature), and REFUSES any ticket that
+        // demands a payment or a proof, because the node has nothing that can
+        // verify either. It used to install `ProofRequiredEvaluator` here "to
+        // prevent accidental open gateways" — an evaluator that accepted any
+        // non-empty bytes, i.e. a gateway open to anyone who typed a byte.
+        let gateway = dregg_macaroon::DischargeGateway::new(gateway_key, location);
         // Load the persisted replay set (survives restarts).
         //
         // ⚑ THE THREE OUTCOMES ARE NOT TWO. `Ok(None)` — nothing has ever been
@@ -9878,17 +9891,15 @@ async fn post_discharge(
 
     let discharge_req = dregg_macaroon::DischargeRequest {
         ticket,
-        client_id: req.client_id,
+        issued_at: req.issued_at,
+        holder_signature,
         proof,
-        payment: req.payment,
-        metadata: req.metadata,
+        payment_evidence,
     };
 
-    // `process_request` burns the ticket on PRESENTATION — the hash goes into the
-    // replay set before any condition is evaluated — so a DENIED request mutates
-    // the set exactly as an issued one does. Persisting only the success arm let a
-    // restart resurrect every denied ticket. Measure the set instead of guessing
-    // from the outcome; an undecryptable blob changes nothing and writes nothing.
+    // `process_request` burns a ticket only when it issues a discharge for it; a
+    // denied request leaves the set unchanged. Measure the set rather than infer
+    // from the outcome, so the durable copy tracks the in-memory one exactly.
     let issued_before = gateway.issued_len();
     let outcome = gateway.process_request(&discharge_req);
     let replay_set_changed = gateway.issued_len() != issued_before;

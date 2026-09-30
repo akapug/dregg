@@ -2,7 +2,10 @@
 //!
 //! Usage:
 //!   discharge-gateway --config gateway.toml
-//!   discharge-gateway --key-hex <64-char-hex> --location https://gateway.example.com
+//!   discharge-gateway --key-file /etc/dregg/gateway.key --location https://gateway.example.com
+//!
+//! The shared key is only ever read from a file: a key on the command line is
+//! readable by every local user through the process table.
 //!
 //! See the crate-level docs for the TOML configuration format.
 
@@ -24,19 +27,15 @@ struct Cli {
     #[arg(long, default_value = "0.0.0.0:8421")]
     bind: String,
 
-    /// Hex-encoded 32-byte shared key (overrides config).
+    /// Path to the hex-encoded 32-byte shared key file (overrides config).
     #[arg(long)]
-    key_hex: Option<String>,
+    key_file: Option<String>,
 
     /// Gateway location URL (overrides config).
     #[arg(long)]
     location: Option<String>,
 
-    /// Add an always-allow evaluator (for dev/testing).
-    #[arg(long)]
-    allow_all: bool,
-
-    /// Rate limit: max discharges per client per hour.
+    /// Rate limit: max discharges per holder key per hour.
     #[arg(long)]
     rate_limit: Option<u32>,
 }
@@ -80,13 +79,7 @@ async fn main() {
         config
             .conditions
             .iter()
-            .map(|c| match c {
-                ConditionConfig::AlwaysAllow => "always_allow",
-                ConditionConfig::RateLimit { .. } => "rate_limit",
-                ConditionConfig::Payment { .. } => "payment",
-                ConditionConfig::Allowlist { .. } => "allowlist",
-                ConditionConfig::ProofRequired => "proof_required",
-            })
+            .map(ConditionConfig::name)
             .collect::<Vec<_>>()
             .join(", ")
     );
@@ -112,8 +105,8 @@ fn build_config(cli: &Cli) -> Result<GatewayConfig, String> {
             toml::from_str(&contents).map_err(|e| format!("failed to parse TOML: {e}"))?;
 
         // CLI overrides.
-        if let Some(key) = &cli.key_hex {
-            config.gateway.signing_key_hex = Some(key.clone());
+        if let Some(path) = &cli.key_file {
+            config.gateway.signing_key_file = path.clone();
         }
         if let Some(loc) = &cli.location {
             config.gateway.location = loc.clone();
@@ -123,19 +116,16 @@ fn build_config(cli: &Cli) -> Result<GatewayConfig, String> {
         Ok(config)
     } else {
         // Build config entirely from CLI flags.
-        let key_hex = cli
-            .key_hex
+        let key_file = cli
+            .key_file
             .clone()
-            .ok_or("either --config or --key-hex must be provided")?;
+            .ok_or("either --config or --key-file must be provided")?;
         let location = cli
             .location
             .clone()
             .unwrap_or_else(|| format!("http://{}", cli.bind));
 
         let mut conditions = Vec::new();
-        if cli.allow_all {
-            conditions.push(ConditionConfig::AlwaysAllow);
-        }
         if let Some(rate) = cli.rate_limit {
             conditions.push(ConditionConfig::RateLimit { max_per_hour: rate });
         }
@@ -143,11 +133,12 @@ fn build_config(cli: &Cli) -> Result<GatewayConfig, String> {
         Ok(GatewayConfig {
             gateway: GatewaySettings {
                 bind: cli.bind.clone(),
-                signing_key_file: None,
-                signing_key_hex: Some(key_hex),
+                signing_key_file: key_file,
                 location,
                 discharge_ttl_secs: 300,
             },
+            payment: None,
+            proof_verifiers: Vec::new(),
             conditions,
         })
     }
