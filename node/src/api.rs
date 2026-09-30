@@ -1503,6 +1503,18 @@ pub struct ResolveConditionalResponse {
     pub reason: Option<String>,
 }
 
+impl ResolveConditionalResponse {
+    /// The one refusal shape for `POST /turn/resolve-conditional`: `resolved: false`, no
+    /// `turn_hash`, `reason` carrying why.
+    fn rejected(reason: impl std::fmt::Display) -> Self {
+        Self {
+            resolved: false,
+            turn_hash: None,
+            reason: Some(reason.to_string()),
+        }
+    }
+}
+
 #[derive(Serialize)]
 pub struct PendingConditionalInfo {
     pub hash: String,
@@ -7992,11 +8004,9 @@ async fn post_resolve_conditional(
     let idx = match idx {
         Some(i) => i,
         None => {
-            return Ok(Json(ResolveConditionalResponse {
-                resolved: false,
-                turn_hash: None,
-                reason: Some("conditional turn not found".to_string()),
-            }));
+            return Ok(Json(ResolveConditionalResponse::rejected(
+                "conditional turn not found",
+            )));
         }
     };
 
@@ -8040,6 +8050,10 @@ async fn post_resolve_conditional(
 
             let executor = crate::executor_setup::new_submit_executor(&s);
             let lean_producer_enabled = s.lean_producer_enabled;
+            // O(touched) atomic rollback, as on every other ingress: the executor mutates
+            // `s.ledger` in place (PHASE 1 fee debit + nonce tick even on `Rejected`), and only a
+            // receipt on the chain may keep those mutations.
+            s.ledger.begin_restore_point();
             // ONE executor gate (#171): resolved conditionals commit through the
             // same producer-aware path as every other ingress.
             let exec_result = crate::executor_setup::execute_via_producer(
@@ -8051,26 +8065,47 @@ async fn post_resolve_conditional(
 
             match exec_result {
                 dregg_turn::TurnResult::Committed { mut receipt, .. } => {
-                    // Solo mode: mark receipt as Tentative and log in nullifier log.
+                    // Solo mode: tentative finality + nullifier-log entry + height advance. The
+                    // finality downgrade must precede the append (finality is bound into
+                    // `receipt_hash`). The nullifier entry and the height advance must FOLLOW it:
+                    // they used to run first, and the append was `.expect`ed, so a refused
+                    // durable append panicked under the node write lock with the height already
+                    // moved and the ledger mutated.
                     let node_signing_key = s.cclerk.gossip_signing_key().to_bytes();
-                    if let Some(ref mut solo) = s.solo_consensus
-                        && solo.is_solo
-                    {
+                    let solo_mode = s.solo_consensus.as_ref().is_some_and(|solo| solo.is_solo);
+                    if solo_mode {
                         receipt.finality = dregg_turn::Finality::Tentative;
                         // Re-sign after the committed finality downgrade.
                         resign_receipt_committed(&mut receipt, &node_signing_key);
-                        let height = solo.height;
-                        let _ =
-                            solo.nullifier_log
-                                .insert(receipt.turn_hash, receipt.turn_hash, height);
-                        solo.advance_height();
                         #[cfg(debug_assertions)]
                         debug_assert_signed_last(&receipt, &node_signing_key);
                     }
-                    let turn_hash = hex_encode(&receipt.turn_hash);
-                    s.cclerk.append_receipt(receipt).expect(
-                        "local executor and cclerk chains must agree; divergence is a serious bug",
-                    );
+                    let turn_hash_bytes = receipt.turn_hash;
+                    if let Err(err) = s.cclerk.append_receipt(receipt) {
+                        // Nothing durable happened: restore the ledger, give the proof back and
+                        // re-queue the conditional, so a retry once the store recovers resolves it
+                        // instead of finding it consumed by a turn that never committed. (The
+                        // proof hash already written to the store only gates a restart, which
+                        // empties the RAM-only `pending_conditionals` anyway.)
+                        s.ledger.rollback_restore_point();
+                        s.used_proof_hashes.remove(&proof_hash);
+                        let at = idx.min(s.pending_conditionals.len());
+                        s.pending_conditionals.insert(at, conditional);
+                        crate::metrics::inc_turns_executed("rejected");
+                        drop(s);
+                        return Ok(Json(ResolveConditionalResponse::rejected(format!(
+                            "receipt append refused: {err}"
+                        ))));
+                    }
+                    s.ledger.commit_restore_point();
+                    if solo_mode && let Some(solo) = s.solo_consensus.as_mut() {
+                        let height = solo.height;
+                        let _ = solo
+                            .nullifier_log
+                            .insert(turn_hash_bytes, turn_hash_bytes, height);
+                        solo.advance_height();
+                    }
+                    let turn_hash = hex_encode(&turn_hash_bytes);
                     drop(s);
                     state.emit(NodeEvent::Receipt {
                         hash: turn_hash.clone(),
@@ -8082,47 +8117,42 @@ async fn post_resolve_conditional(
                     }))
                 }
                 dregg_turn::TurnResult::Rejected { reason, .. } => {
+                    s.ledger.rollback_restore_point();
                     crate::metrics::inc_turns_executed("rejected");
                     crate::metrics::note_turn_rejected(&reason);
-                    Ok(Json(ResolveConditionalResponse {
-                        resolved: false,
-                        turn_hash: None,
-                        reason: Some(format!("turn rejected: {reason}")),
-                    }))
+                    Ok(Json(ResolveConditionalResponse::rejected(format!(
+                        "turn rejected: {reason}"
+                    ))))
                 }
-                dregg_turn::TurnResult::Expired => Ok(Json(ResolveConditionalResponse {
-                    resolved: false,
-                    turn_hash: None,
-                    reason: Some("turn expired during execution".to_string()),
-                })),
-                dregg_turn::TurnResult::Pending => Ok(Json(ResolveConditionalResponse {
-                    resolved: false,
-                    turn_hash: None,
-                    reason: Some("turn pending during execution".to_string()),
-                })),
+                dregg_turn::TurnResult::Expired => {
+                    s.ledger.rollback_restore_point();
+                    Ok(Json(ResolveConditionalResponse::rejected(
+                        "turn expired during execution",
+                    )))
+                }
+                dregg_turn::TurnResult::Pending => {
+                    s.ledger.rollback_restore_point();
+                    Ok(Json(ResolveConditionalResponse::rejected(
+                        "turn pending during execution",
+                    )))
+                }
             }
         }
         dregg_turn::ConditionalResult::Expired => {
             crate::metrics::inc_proofs_verified("error");
             s.pending_conditionals.remove(idx);
-            Ok(Json(ResolveConditionalResponse {
-                resolved: false,
-                turn_hash: None,
-                reason: Some("conditional turn has expired".to_string()),
-            }))
+            Ok(Json(ResolveConditionalResponse::rejected(
+                "conditional turn has expired",
+            )))
         }
-        dregg_turn::ConditionalResult::Pending => Ok(Json(ResolveConditionalResponse {
-            resolved: false,
-            turn_hash: None,
-            reason: Some("condition not yet satisfied".to_string()),
-        })),
+        dregg_turn::ConditionalResult::Pending => Ok(Json(ResolveConditionalResponse::rejected(
+            "condition not yet satisfied",
+        ))),
         dregg_turn::ConditionalResult::InvalidProof(e) => {
             crate::metrics::inc_proofs_verified("invalid");
-            Ok(Json(ResolveConditionalResponse {
-                resolved: false,
-                turn_hash: None,
-                reason: Some(format!("invalid proof: {e}")),
-            }))
+            Ok(Json(ResolveConditionalResponse::rejected(format!(
+                "invalid proof: {e}"
+            ))))
         }
     }
 }
@@ -14525,6 +14555,223 @@ mod tests {
         );
         assert_ne!(cell, before.3, "the transfer and fee landed on the retry");
         assert_eq!(chain_len, before.4 + 1);
+    }
+
+    /// B8b: `POST /turn/resolve-conditional` with a durable receipt append that refuses. The append
+    /// used to be `.expect`ed AFTER the solo nullifier entry and height advance, so a refused
+    /// append panicked under the node write lock (poisoning every later request) with the height
+    /// already moved and the ledger mutated. Now: the documented refusal, nothing moved, the
+    /// conditional re-queued with its proof given back, and the SAME request on the SAME node
+    /// resolves once the sink works.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn resolve_conditional_receipt_append_failure_rolls_back_and_releases_the_lock() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = NodeState::new(tmp.path(), vec![]).expect("node state");
+        state.write().await.unlocked = true;
+        {
+            let mut s = state.write().await;
+            let sk = s.cclerk.gossip_signing_key().to_bytes();
+            s.solo_consensus = Some(dregg_federation::solo::SoloConsensusState::new(sk));
+        }
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let app = router(state.clone(), false, recorder.handle());
+        // The unlocked-no-passphrase gate admits loopback callers only.
+        let addr: std::net::SocketAddr = "127.0.0.1:4446".parse().unwrap();
+
+        let clerk = dregg_sdk::AgentCipherclerk::new();
+        let clerk2 = dregg_sdk::AgentCipherclerk::new();
+        let default_token_id = *blake3::hash(b"default").as_bytes();
+        let agent = clerk.cell_id("default");
+        let recipient = clerk2.cell_id("default");
+        {
+            let mut s = state.write().await;
+            for (cell, owner) in [(agent, &clerk), (recipient, &clerk2)] {
+                let ml_dsa_public_key = dregg_turn::pq::MlDsaTurnKey::from_ed25519_seed(
+                    &owner.gossip_signing_key().to_bytes(),
+                )
+                .public_bytes();
+                let funded = dregg_cell::Cell::with_hybrid_balance(
+                    owner.public_key().0,
+                    &ml_dsa_public_key,
+                    default_token_id,
+                    5_000,
+                )
+                .expect("canonical ML-DSA-65 identity");
+                assert_eq!(funded.id(), cell, "seeded cell must be the derived id");
+                s.ledger.insert_cell(funded).expect("seed cell");
+            }
+        }
+        let fed_id = crate::executor_setup::federation_id_for_executor(&*state.read().await);
+        let unsigned = Action {
+            target: agent,
+            method: *blake3::hash(b"execute").as_bytes(),
+            args: vec![],
+            authorization: Authorization::Unchecked,
+            preconditions: dregg_cell::Preconditions::default(),
+            effects: vec![Effect::Transfer {
+                from: agent,
+                to: recipient,
+                amount: 7,
+            }],
+            may_delegate: DelegationMode::None,
+            commitment_mode: CommitmentMode::Full,
+            balance_change: None,
+            witness_blobs: vec![],
+        };
+        let mut forest = CallForest::new();
+        forest.add_root(clerk.sign_action_hybrid(unsigned, &fed_id, 0));
+        let turn = Turn {
+            agent,
+            nonce: 0,
+            fee: 1_000,
+            memo: None,
+            valid_until: Some(dregg_turn::valid_until_at(
+                0,
+                dregg_turn::DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS,
+            )),
+            call_forest: forest,
+            depends_on: vec![],
+            previous_receipt_hash: None,
+            conservation_proof: None,
+            sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
+            custom_program_proofs: None,
+            effect_binding_proofs: Vec::new(),
+            cross_effect_dependencies: Vec::new(),
+            effect_witness_index_map: Vec::new(),
+        };
+        let turn_hash_bytes = turn.hash();
+        let preimage = [42u8; 32];
+        let conditional = dregg_turn::ConditionalTurn {
+            turn,
+            condition: dregg_turn::ProofCondition::HashPreimage {
+                hash: *blake3::hash(&preimage).as_bytes(),
+            },
+            timeout_height: 100,
+            submitted_at: 0,
+            deposit_amount: 0,
+        };
+        let conditional_hash = conditional.hash();
+        state.write().await.pending_conditionals.push(conditional);
+        let proof = dregg_turn::ConditionProof::Preimage(preimage);
+        let proof_hash = dregg_turn::compute_proof_hash(&proof);
+        let body = serde_json::json!({
+            "conditional_hash": hex_encode(&conditional_hash),
+            "proof": serde_json::to_value(&proof).expect("proof json"),
+        })
+        .to_string();
+
+        let resolve = || {
+            let app = app.clone();
+            let body = body.clone();
+            async move {
+                let response = app
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri("/turn/resolve-conditional")
+                            .header("content-type", "application/json")
+                            .extension(ConnectInfo(addr))
+                            .body(Body::from(body))
+                            .expect("resolve request"),
+                    )
+                    .await
+                    .expect("resolve response");
+                assert_eq!(response.status(), StatusCode::OK);
+                let bytes = response
+                    .into_body()
+                    .collect()
+                    .await
+                    .expect("body")
+                    .to_bytes();
+                serde_json::from_slice::<serde_json::Value>(&bytes).expect("resolve json")
+            }
+        };
+        let snapshot = |s: &crate::state::NodeStateInner| {
+            let solo = s.solo_consensus.as_ref().expect("solo");
+            (
+                solo.height,
+                solo.nullifier_log.len(),
+                solo.nullifier_log.contains(&turn_hash_bytes),
+                s.ledger
+                    .get(&agent)
+                    .map(|c| (c.state.balance(), c.state.nonce())),
+                s.cclerk.receipt_chain_length(),
+                s.pending_conditionals
+                    .iter()
+                    .any(|ct| ct.hash() == conditional_hash),
+                s.used_proof_hashes.contains(&proof_hash),
+            )
+        };
+
+        // ── INJECT: the durability sink refuses every append. ──
+        let before = {
+            let mut s = state.write().await;
+            s.cclerk.set_receipt_persist(std::sync::Arc::new(|_, _| {
+                Err("injected: durable receipt store refused the append".to_string())
+            }));
+            snapshot(&*s)
+        };
+        assert!(
+            before.5 && !before.6,
+            "queued and unconsumed before the resolve"
+        );
+        let json = resolve().await;
+        assert_eq!(
+            json["resolved"], false,
+            "a refused append must refuse the resolve: {json}"
+        );
+        assert_eq!(json["turn_hash"], serde_json::Value::Null, "{json}");
+        let reason = json["reason"].as_str().expect("reason string");
+        assert!(reason.starts_with("receipt append refused: "), "{json}");
+        assert!(
+            reason.contains("injected: durable receipt store refused"),
+            "{json}"
+        );
+        assert_eq!(
+            snapshot(&*state.read().await),
+            before,
+            "a refused append must leave the solo height, the nullifier log, the ledger, the \
+             receipt chain, the pending conditional and the proof nullifier exactly as they were"
+        );
+
+        // ── RETRY on the same node (the lock is not poisoned): the same request resolves, and
+        // only now do the nullifier log and the solo height move. ──
+        state
+            .write()
+            .await
+            .cclerk
+            .set_receipt_persist(std::sync::Arc::new(|_, _| Ok(())));
+        let json = resolve().await;
+        assert_eq!(
+            json["resolved"], true,
+            "the retried resolve must commit: {json}"
+        );
+        assert_eq!(
+            json["turn_hash"],
+            serde_json::json!(hex_encode(&turn_hash_bytes))
+        );
+        let (height, log_len, logged, cell, chain_len, queued, consumed) =
+            snapshot(&*state.read().await);
+        assert_eq!(
+            height,
+            before.0 + 1,
+            "one committed turn advances the solo height once"
+        );
+        assert_eq!(log_len, before.1 + 1);
+        assert!(logged, "the committed turn is in the nullifier log");
+        assert_eq!(
+            cell.map(|(_, nonce)| nonce),
+            Some(1),
+            "the nonce ticked exactly once"
+        );
+        assert_ne!(cell, before.3, "the transfer and fee landed on the retry");
+        assert_eq!(chain_len, before.4 + 1);
+        assert!(!queued, "the resolved conditional left the queue");
+        assert!(consumed, "the proof is consumed once its turn committed");
     }
 
     /// WHICH RECEIPT HEAD A CLIENT THREADS, against the real admission check.
