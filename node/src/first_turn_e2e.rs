@@ -39,6 +39,9 @@
 //!       `public_key` on a solo node, which anyone who knows the key can ask
 //!       for) takes its owner's first hybrid turn, which anchors the envelope's
 //!       ML-DSA key in place and FINALIZES (#91).
+//!   [7] both zero-amount faucet shapes, key-bound and zero-pk stub, take a
+//!       chat client's first fee-0 own-cell `EmitEvent` under the coordination
+//!       class and finalize anchored at nonce 1.
 //!
 //! THE CANARY (run it, it is cheap): in `claim_signer_actor_cell`, change
 //! `carried_balance` to `stub.state.balance() - 1`. [1] stays green through the
@@ -577,21 +580,24 @@ async fn client_emit_turn(state: &NodeState, client: &AgentCipherclerk) -> dregg
     client.sign_turn(&turn)
 }
 
-/// [6] THE ZERO-AMOUNT FAUCET'S TWO SHAPES, on the node `run` builds without a
-/// genesis: solo, no configured committee, the default posture (required PQ).
-/// A chat client materializes its cell this way and then sends fee-0 events.
+/// [7] THE ZERO-AMOUNT FAUCET'S TWO SHAPES, each taking a chat client's first
+/// fee-0 turn, on the node `run` builds without a genesis: solo, no configured
+/// committee, the default posture (required PQ), the coordination class on.
 ///
 ///   * WITH `public_key`, the node mints a hosted cell already bound to the
-///     Ed25519 key and carrying NO ML-DSA anchor. The first-turn claim declines
-///     it (it is already the signer's account), and `validate_signed_turn`
-///     refuses the hybrid turn as not enrolled, a branch that returns before it
-///     reads the posture. The cell can never act.
+///     Ed25519 key and carrying NO ML-DSA anchor. Before the #91 fix the claim
+///     declined it and the cell could never act; this arm asserted that
+///     refusal. It now asserts the fix: the first hybrid turn anchors the
+///     envelope's ML-DSA key on the cell and finalizes.
 ///   * WITHOUT it, the node leaves a zero-pk stub, and the same first turn
 ///     claims it with the envelope's hybrid identity and finalizes.
 ///
-/// So a client materializes without `public_key` on every node shape.
+/// [6] above drives the key-bound shape through a funded transfer and checks
+/// the anchor and balance in detail. This test is the other path a client takes
+/// into the same state: no funding, a fee-0 own-cell `EmitEvent` under the
+/// coordination class, and both materialization shapes side by side.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_key_bound_zero_amount_cell_cannot_act_but_a_stub_takes_its_first_turn() {
+async fn either_zero_amount_faucet_shape_takes_a_fee_zero_first_turn() {
     let (state, app, _faucet, _tmp) = faucet_node_with(|s| {
         // `run` arms solo consensus for a node with no peers; the faucet mints
         // the key-bound hosted cell only under it.
@@ -640,25 +646,11 @@ async fn a_key_bound_zero_amount_cell_cannot_act_but_a_stub_takes_its_first_turn
         );
 
         let response = post_signed_turn(&app, &client_emit_turn(&state, &client).await).await;
-        if bind_key {
-            let error = response["error"].as_str().unwrap_or_default();
-            assert_eq!(response["accepted"], false, "key-bound cell: {response}");
-            assert!(
-                error.contains("neither Cell-committed nor independently enrolled"),
-                "a key-bound cell with no PQ anchor is refused as not enrolled; got {response}"
-            );
-            let anchored = state
-                .read()
-                .await
-                .ledger
-                .get(&actor)
-                .map(|c| c.pq_identity().is_some());
-            assert_eq!(anchored, Some(false), "the refused turn anchored nothing");
-            continue;
-        }
         assert_eq!(
             response["accepted"], true,
-            "a stub's first hybrid turn must be admitted: {response}"
+            "bind_key={bind_key}: a never-acted cell's first hybrid turn must be admitted; \
+             `neither Cell-committed nor independently enrolled` on the key-bound arm is #91. \
+             Response: {response}"
         );
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
         loop {
@@ -673,8 +665,9 @@ async fn a_key_bound_zero_amount_cell_cannot_act_but_a_stub_takes_its_first_turn
             }
             assert!(
                 std::time::Instant::now() < deadline,
-                "the stub's first turn must FINALIZE: claimed by the signer, nonce 1, ML-DSA \
-                 anchor committed; last saw (key, nonce, anchored) = {claimed:?}"
+                "bind_key={bind_key}: the first turn must FINALIZE: the cell bound to the \
+                 signer, nonce 1, ML-DSA anchor committed; last saw (key, nonce, anchored) = \
+                 {claimed:?}"
             );
             tokio::time::sleep(Duration::from_millis(100)).await;
         }

@@ -720,18 +720,18 @@ async fn wait_for_balance(
 
 /// The `POST /api/faucet` body. It never carries `public_key`.
 ///
-/// With `public_key`, a solo node's zero-amount arm mints a hosted cell bound
-/// to the Ed25519 key and carrying no ML-DSA anchor. The node's first-turn
-/// claim (`signed_turn_validation::claimed_actor_cell`) declines a cell that is
-/// already the signer's, and `validate_signed_turn` refuses a hybrid turn
-/// against a cell with no anchor and no enrollment as not enrolled, before it
-/// reads the posture: that cell can never act (node test
-/// `a_key_bound_zero_amount_cell_cannot_act_but_a_stub_takes_its_first_turn`).
 /// Without it the node leaves a zero-pk stub in the default asset, and this
 /// signer's first hybrid turn claims it with the envelope's own identity. A
 /// funded grant lands as a stub either way. Measured on both node lines: an
 /// init-minted node and a genesis-less solo node from before the claim
 /// existed each commit a stub's first send.
+///
+/// With `public_key`, a solo node's zero-amount arm mints a hosted cell bound
+/// to the Ed25519 key and carrying no ML-DSA anchor. A node built from this
+/// tree anchors it on the first hybrid turn (`claimed_actor_cell`, #91; node
+/// test `either_zero_amount_faucet_shape_takes_a_fee_zero_first_turn`), but a
+/// node built before that fix refuses it as not enrolled forever, so the stub
+/// is the shape to ask for.
 fn faucet_request(cell_hex: &str, amount: u64) -> serde_json::Value {
     serde_json::json!({ "recipient": cell_hex, "amount": amount })
 }
@@ -1721,10 +1721,10 @@ mod tests {
         }
     }
 
-    /// THE WIRING, against a real-executor node: whatever the node lists on
-    /// `/api/federations` (no committee, or a configured one), the
-    /// materialization `ensure_cell` sends it carries no `public_key`, and the
-    /// cell the node is left holding is the zero-pk stub a first turn claims.
+    /// THE WIRING, against a real-executor node, with no committee and with a
+    /// configured one: the materialization `ensure_cell` sends carries no
+    /// `public_key`, and the cell the node is left holding is the zero-pk stub
+    /// a first turn claims.
     /// `TestNode` mints the key-bound hosted cell when a key arrives, as a solo
     /// node does, so a key that reaches the wire fails the stub assertion too.
     #[cfg(feature = "test-support")]

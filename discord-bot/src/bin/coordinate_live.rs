@@ -425,11 +425,11 @@ impl Agent {
 
 // ─── Thin node HTTP helpers ───────────────────────────────────────────────────
 
-/// Materialize `cell` as a zero-pk stub. No `public_key`: with one, a solo
-/// node mints a hosted cell bound to the Ed25519 key and carrying no ML-DSA
-/// anchor, which the first-turn claim declines and admission refuses as not
-/// enrolled, so it could never act. The agent's first hybrid turn claims the
-/// stub instead.
+/// Materialize `cell` as a zero-pk stub, which the agent's first hybrid turn
+/// claims. No `public_key`: with one, a solo node mints a key-bound cell with no
+/// ML-DSA anchor, which a node from this tree anchors on the first turn (#91)
+/// but a node built before that fix refuses as not enrolled forever. The stub
+/// is claimable on every node line.
 async fn materialize(http: &reqwest::Client, node: &str, cell: &str) -> Result<(), String> {
     let resp = http
         .post(format!("{node}/api/faucet"))

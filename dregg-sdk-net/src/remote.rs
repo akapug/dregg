@@ -256,12 +256,13 @@ impl RemoteRuntime {
     /// Devnet funding: `POST /api/faucet` to materialize this agent's cell and
     /// claim `amount` computrons.
     ///
-    /// The request carries no `public_key`. With one, a solo node mints a
-    /// hosted cell bound to the Ed25519 key and carrying no ML-DSA anchor; the
-    /// node's first-turn claim declines a cell that is already the signer's,
-    /// and admission refuses a hybrid turn against it as not enrolled, so that
-    /// cell could never act. Without one the node leaves a zero-pk stub, and
-    /// this agent's first hybrid turn claims it with the envelope's identity.
+    /// The request carries no `public_key`, so the node leaves a zero-pk stub
+    /// and this agent's first hybrid turn claims it with the envelope's
+    /// identity. With a key, a solo node mints a hosted cell bound to the
+    /// Ed25519 key and carrying no ML-DSA anchor; a node built from this tree
+    /// anchors that cell on its first hybrid turn too (#91), but a node built
+    /// before that fix refuses the cell as not enrolled forever. The stub is
+    /// the shape every node line claims.
     pub async fn faucet(&self, amount: u64) -> Result<(), SdkError> {
         let body = serde_json::json!({
             "recipient": hex_encode(&self.cell.0),
