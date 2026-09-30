@@ -640,24 +640,39 @@ impl EventHandler for Handler {
     }
 }
 
-/// The boot preflight's federation-id check against a reachable **SOLO** node: the node's
-/// executor signs under `blake3(node_pubkey)`, so a bot whose `FEDERATION_ID` differs (including
-/// the all-zero dev default) would have EVERY transfer rejected at runtime with
-/// "Ed25519 signature verification failed". `Ok(())` when they match; `Err` carries the clear
-/// operator message (naming the env var and the exact expected value). `main` fails FAST on
-/// `Err` unless `FEDERATION_ID_ALLOW_MISMATCH=1` (a deliberate dev escape hatch).
-fn check_solo_federation_id(node_pubkey: &[u8], federation_id: [u8; 32]) -> Result<(), String> {
-    let expected = *blake3::hash(node_pubkey).as_bytes();
-    if expected == federation_id {
+/// The boot preflight's federation-id check: the bot's `FEDERATION_ID` must equal the id the
+/// node's executor signs and verifies under, which the node serves on `/status` as
+/// `executor_federation_id`. A mismatch (the all-zero dev default included) would have EVERY
+/// transfer rejected at runtime with "Ed25519 signature verification failed".
+///
+/// Nothing is derived here. The previous check computed `blake3(node_pubkey)` whenever `/status`
+/// said "solo", but a configured committee of one also says "solo" and signs under its genesis
+/// federation id, so that derivation refused the correct value and accepted a wrong one (measured
+/// on the 2026-09-30 edge re-genesis: served `e2986aab…`, derived `ad09b15a…`). A node that does
+/// not serve the field is refused too: without it there is nothing to check against.
+/// `Ok(())` when they match; `Err` carries the operator message naming the env var and the exact
+/// served value. `main` fails FAST on `Err` unless `FEDERATION_ID_ALLOW_MISMATCH=1`.
+fn check_executor_federation_id(served_hex: &str, federation_id: [u8; 32]) -> Result<(), String> {
+    let served: [u8; 32] = hex::decode(served_hex)
+        .ok()
+        .and_then(|b| b.try_into().ok())
+        .ok_or_else(|| {
+            format!(
+                "the node's /status did not serve a 32-byte executor_federation_id \
+                 (got {served_hex:?}), so FEDERATION_ID cannot be checked against the executor's \
+                 signing domain. Upgrade the node, or set FEDERATION_ID_ALLOW_MISMATCH=1 to boot \
+                 unchecked for a deliberate dev setup."
+            )
+        })?;
+    if served == federation_id {
         return Ok(());
     }
     Err(format!(
-        "FEDERATION_ID mismatch: this is a SOLO node whose executor signs under \
-         blake3(node_pubkey)={expected}, but the bot's FEDERATION_ID is {actual}. Every transfer \
-         would fail at runtime with 'Ed25519 signature verification failed'. Set \
-         FEDERATION_ID={expected} to match (or FEDERATION_ID_ALLOW_MISMATCH=1 to boot anyway, \
-         for a deliberate dev setup).",
-        expected = hex::encode(expected),
+        "FEDERATION_ID mismatch: the node's executor signs under executor_federation_id={expected} \
+         (served on /status), but the bot's FEDERATION_ID is {actual}. Every transfer would fail at \
+         runtime with 'Ed25519 signature verification failed'. Set FEDERATION_ID={expected} to \
+         match (or FEDERATION_ID_ALLOW_MISMATCH=1 to boot anyway, for a deliberate dev setup).",
+        expected = hex::encode(served),
         actual = hex::encode(federation_id),
     ))
 }
@@ -934,10 +949,9 @@ async fn main() {
     // Startup preflight: probe the node and catch the two most common
     // misconfigurations BEFORE users hit them as cryptic command failures.
     //   1. node unreachable   -> warn (bot still boots; recovers when node up)
-    //   2. FEDERATION_ID wrong -> on a SOLO node the executor signs under
-    //      blake3(node_pubkey); if the bot's FEDERATION_ID doesn't match,
-    //      EVERY transfer is rejected with "Ed25519 signature verification
-    //      failed". We compute the expected value and warn on mismatch.
+    //   2. FEDERATION_ID wrong -> it must equal the executor_federation_id
+    //      the node serves on /status; otherwise EVERY transfer is rejected
+    //      with "Ed25519 signature verification failed". Fail fast on mismatch.
     {
         let pf = devnet.preflight().await;
         if pf.reachable {
@@ -945,27 +959,21 @@ async fn main() {
                 "node OK: mode={} consensus_live={} dag_height={} height={}",
                 pf.federation_mode, pf.consensus_live, pf.dag_height, pf.latest_height
             );
-            if pf.federation_mode == "solo" && !pf.public_key.is_empty() {
-                if let Ok(pk) = hex::decode(&pf.public_key) {
-                    match check_solo_federation_id(&pk, federation_id_bytes) {
-                        Ok(()) => {
-                            info!("FEDERATION_ID matches the solo node's executor signing domain")
-                        }
-                        Err(msg) => {
-                            // A mismatch here is not a degraded mode — EVERY transfer fails at
-                            // runtime. Fail FAST at boot so the operator fixes the env var now,
-                            // unless they deliberately opted out (a dev bot pointed at a node it
-                            // never transfers through).
-                            let allow = std::env::var("FEDERATION_ID_ALLOW_MISMATCH")
-                                .is_ok_and(|v| v == "1");
-                            if allow {
-                                warn!("{msg} (booting anyway: FEDERATION_ID_ALLOW_MISMATCH=1)");
-                            } else {
-                                error!("{msg}");
-                                eprintln!("error: {msg}");
-                                std::process::exit(1);
-                            }
-                        }
+            match check_executor_federation_id(&pf.executor_federation_id, federation_id_bytes) {
+                Ok(()) => info!("FEDERATION_ID matches the node's executor_federation_id"),
+                Err(msg) => {
+                    // A mismatch here is not a degraded mode — EVERY transfer fails at
+                    // runtime. Fail FAST at boot so the operator fixes the env var now,
+                    // unless they deliberately opted out (a dev bot pointed at a node it
+                    // never transfers through).
+                    let allow =
+                        std::env::var("FEDERATION_ID_ALLOW_MISMATCH").is_ok_and(|v| v == "1");
+                    if allow {
+                        warn!("{msg} (booting anyway: FEDERATION_ID_ALLOW_MISMATCH=1)");
+                    } else {
+                        error!("{msg}");
+                        eprintln!("error: {msg}");
+                        std::process::exit(1);
                     }
                 }
             }
@@ -1209,31 +1217,55 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{ROUTED_COMMAND_NAMES, check_solo_federation_id, commands};
+    use super::{ROUTED_COMMAND_NAMES, check_executor_federation_id, commands};
     use std::collections::BTreeSet;
 
-    /// A FEDERATION_ID matching the solo node's signing domain (blake3 of its pubkey) boots.
+    /// A FEDERATION_ID equal to the node's served executor_federation_id boots.
     #[test]
-    fn a_matching_solo_federation_id_passes_the_boot_preflight() {
-        let pk = [7u8; 32];
-        let fed = *blake3::hash(&pk).as_bytes();
-        assert!(check_solo_federation_id(&pk, fed).is_ok());
+    fn a_federation_id_matching_the_served_executor_id_passes_the_boot_preflight() {
+        let fed = [7u8; 32];
+        assert!(check_executor_federation_id(&hex::encode(fed), fed).is_ok());
+    }
+
+    /// The committee-of-one case this check exists for: `/status` says "solo", the executor signs
+    /// under the genesis federation id, and `blake3(node_pubkey)` is WRONG. Deriving it would
+    /// refuse the served value; the check must accept the served value and refuse the derived one.
+    #[test]
+    fn blake3_of_the_node_pubkey_is_refused_when_the_node_serves_another_id() {
+        let pk = [9u8; 32];
+        let served = [7u8; 32];
+        let derived = *blake3::hash(&pk).as_bytes();
+        assert_ne!(served, derived);
+        assert!(check_executor_federation_id(&hex::encode(served), served).is_ok());
+        let err = check_executor_federation_id(&hex::encode(served), derived).expect_err(
+            "a blake3(pubkey) FEDERATION_ID against a node serving another id must be refused",
+        );
+        assert!(
+            err.contains(&hex::encode(served)),
+            "the message names the served value: {err}"
+        );
     }
 
     /// A mismatched FEDERATION_ID (the all-zero dev-default footgun included) is fatal at boot,
     /// and the message names the env var, the exact expected value, and the escape hatch.
     #[test]
-    fn a_mismatched_solo_federation_id_is_fatal_with_the_fix_in_the_message() {
-        let pk = [7u8; 32];
-        let expected = hex::encode(blake3::hash(&pk).as_bytes());
-        let err = check_solo_federation_id(&pk, [0u8; 32])
-            .expect_err("an all-zero FEDERATION_ID against a solo node must be refused at boot");
+    fn a_mismatched_federation_id_is_fatal_with_the_fix_in_the_message() {
+        let served = [7u8; 32];
+        let err = check_executor_federation_id(&hex::encode(served), [0u8; 32])
+            .expect_err("an all-zero FEDERATION_ID must be refused at boot");
         assert!(err.contains("FEDERATION_ID"), "{err}");
-        assert!(
-            err.contains(&expected),
-            "the message names the exact expected value: {err}"
-        );
+        assert!(err.contains(&hex::encode(served)), "{err}");
         assert!(err.contains("FEDERATION_ID_ALLOW_MISMATCH"), "{err}");
+    }
+
+    /// A node that does not serve the field (older build) is refused, not answered by derivation.
+    #[test]
+    fn a_node_without_executor_federation_id_is_refused() {
+        for served in ["", "zz", "0707"] {
+            let err = check_executor_federation_id(served, [7u8; 32])
+                .expect_err("no served id means nothing to check against");
+            assert!(err.contains("executor_federation_id"), "{err}");
+        }
     }
 
     #[test]

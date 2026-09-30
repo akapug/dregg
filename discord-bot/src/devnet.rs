@@ -342,6 +342,12 @@ struct NodeStatusResponse {
     consensus_live: bool,
     #[serde(default)]
     public_key: String,
+    /// Hex of the id the node's executor signs and verifies under
+    /// (`executor_setup::federation_id_for_executor`). Empty when an older node
+    /// does not serve it; the preflight treats that as a refusal, not a cue to
+    /// derive a value.
+    #[serde(default)]
+    executor_federation_id: String,
 }
 
 /// A compact, operator-facing summary of a node's identity + liveness, used by
@@ -356,10 +362,12 @@ pub struct NodePreflight {
     pub federation_mode: String,
     pub dag_height: u64,
     pub latest_height: u64,
-    /// The node operator's public key (hex). On a SOLO node the executor's
-    /// federation-id signing domain is `blake3(public_key)`, so this is what
-    /// the bot's `FEDERATION_ID` must be derived from for transfers to verify.
-    pub public_key: String,
+    /// The id the node's executor signs and verifies under, as the node serves
+    /// it on `/status`. The bot's `FEDERATION_ID` must equal it for transfers to
+    /// verify. It is NOT derivable from `federation_mode`: a configured committee
+    /// of one reports "solo" and signs under its genesis federation id, not
+    /// `blake3(public_key)` (breadstuffs #90 / 33f150b16).
+    pub executor_federation_id: String,
     /// If unreachable, why (timeout / connect refused / HTTP error).
     pub error: Option<String>,
 }
@@ -1217,7 +1225,7 @@ impl DevnetClient {
                 federation_mode: s.federation_mode,
                 dag_height: s.dag_height,
                 latest_height: s.latest_height,
-                public_key: s.public_key,
+                executor_federation_id: s.executor_federation_id,
                 error: None,
             },
             Err(e) => NodePreflight {
@@ -1227,7 +1235,7 @@ impl DevnetClient {
                 federation_mode: String::new(),
                 dag_height: 0,
                 latest_height: 0,
-                public_key: String::new(),
+                executor_federation_id: String::new(),
                 error: Some(e.to_string()),
             },
         }
@@ -1331,7 +1339,8 @@ mod tests {
             "federation_mode": "solo",
             "dag_height": 30400,
             "consensus_live": true,
-            "public_key": "9b3512552d162619121bc0fa308b21fee8bc5a34f85fc2d785769d2e82aba9fa"
+            "public_key": "9b3512552d162619121bc0fa308b21fee8bc5a34f85fc2d785769d2e82aba9fa",
+            "executor_federation_id": "e2986aab050985b671907e0774410a02a593c040b2ba473cf93a44072faf0577"
         }))
         .expect("node /status response should deserialize");
 
@@ -1342,6 +1351,10 @@ mod tests {
         assert_eq!(status.dag_height, 30400);
         assert!(status.consensus_live);
         assert_eq!(status.public_key.len(), 64);
+        assert_eq!(
+            status.executor_federation_id,
+            "e2986aab050985b671907e0774410a02a593c040b2ba473cf93a44072faf0577"
+        );
     }
 
     #[test]
