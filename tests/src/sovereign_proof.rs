@@ -80,7 +80,7 @@ fn test_proof_carrying_sovereign_turn_accepted() {
     }];
 
     let turn = cclerk
-        .execute_sovereign_turn_with_proof(&cell_id, effects, 500, 0)
+        .execute_sovereign_turn_with_proof(&cell_id, effects, 500, 1)
         .expect("should generate proof-carrying turn");
 
     // Verify the turn has an execution_proof.
@@ -89,8 +89,9 @@ fn test_proof_carrying_sovereign_turn_accepted() {
     assert!(turn.execution_proof_new_commitment.is_some());
     assert!(turn.sovereign_witnesses.is_empty());
 
-    // Execute with the TurnExecutor.
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    // Execute with the TurnExecutor, at the height the turn was proven for: its deadline is a
+    // block height counted from there, and a height-0 executor refuses any deadline.
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let result = executor.execute(&turn, &mut ledger);
 
     match result {
@@ -132,13 +133,15 @@ fn test_proof_carrying_turn_tampered_commitment_rejected() {
     }];
 
     let mut turn = cclerk
-        .execute_sovereign_turn_with_proof(&cell_id, effects, 500, 0)
+        .execute_sovereign_turn_with_proof(&cell_id, effects, 500, 1)
         .expect("should generate proof-carrying turn");
 
     // Tamper with the new commitment (simulates attacker trying to claim wrong state).
     turn.execution_proof_new_commitment = Some([0xFFu8; 32]);
 
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    // At the height the turn was proven for, so the deadline gate admits it and the refusal
+    // comes from the proof.
+    let executor = TurnExecutor::new(ComputronCosts::zero()).at_block_height(1);
     let result = executor.execute(&turn, &mut ledger);
 
     // Should be rejected because the proof's public inputs won't match the tampered commitment.
