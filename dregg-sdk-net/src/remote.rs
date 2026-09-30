@@ -17,9 +17,9 @@
 //! Two bindings are discovered from the node before signing:
 //!
 //!  * **federation id** — the executor verifies each action's Ed25519
-//!    signature over the federation-BOUND signing message; an unconfigured
-//!    solo node binds `blake3(operator pubkey)` rather than the placeholder
-//!    its `/api/federations` serves.
+//!    signature over the federation-BOUND signing message; the node serves
+//!    the id it verifies under as `/status.executor_federation_id`, and the
+//!    client reads that field and derives nothing.
 //!  * **nonce / per-agent receipt-chain head** — the turn rides the agent cell's live
 //!    replay counter (fetched at SIGN time: `dregg-action-sig-v3` binds the
 //!    turn nonce into the per-action signature) and that same agent's committed
@@ -68,36 +68,11 @@ fn hex_decode_32(s: &str) -> Result<[u8; 32], SdkError> {
 
 // ─── node response shapes (the fields this client consumes) ───
 
+/// The one `/status` field this client reads. No `#[serde(default)]`: a
+/// status without it is refused, never read as an empty id.
 #[derive(Debug, Deserialize)]
-struct FederationInfoLite {
-    #[serde(default)]
-    federation_id: String,
-    #[serde(default)]
-    is_local: bool,
-    #[serde(default)]
-    member_count: usize,
-}
-
-impl FederationInfoLite {
-    /// The `is_local` entry of `/api/federations` with members is the
-    /// configured committee the executor signs under
-    /// (`executor_setup::federation_id_for_executor`). An unconfigured node
-    /// lists its local entry with NO members (`api::federation_infos` counts
-    /// `known_federation_keys`, empty until a committee is loaded), so the
-    /// member count alone separates the two. `committee_epoch` does not:
-    /// `dregg-node init` mints its committee at epoch 0, so requiring a
-    /// positive epoch sent every init-minted node down the
-    /// `blake3(operator pubkey)` path and signed its actions over the wrong
-    /// binding (the same defect `NodeHttpClient::fetch_executor_federation_id`
-    /// had against the `/status` solo flag).
-    fn is_configured_local(&self) -> bool {
-        self.is_local && self.member_count > 0
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct NodeIdentityLite {
-    public_key: String,
+struct NodeStatusLite {
+    executor_federation_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -203,19 +178,6 @@ impl RemoteRuntime {
     }
 
     async fn get_json<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, SdkError> {
-        self.get_json_or_status(path)
-            .await?
-            .map_err(|status| SdkError::Wire(format!("GET {path}: HTTP {status}")))
-    }
-
-    /// GET `path` and parse its JSON body. The inner `Err` is the status of a
-    /// node that answered without success; the outer `Err` is a transport
-    /// failure or an unreadable body. A caller that treats "not served" as an
-    /// answer must still refuse on the outer one.
-    async fn get_json_or_status<T: serde::de::DeserializeOwned>(
-        &self,
-        path: &str,
-    ) -> Result<Result<T, reqwest::StatusCode>, SdkError> {
         let url = format!("{}{}", self.base, path);
         let resp = self
             .http
@@ -224,19 +186,22 @@ impl RemoteRuntime {
             .await
             .map_err(|e| SdkError::Wire(format!("GET {path}: {e}")))?;
         if !resp.status().is_success() {
-            return Ok(Err(resp.status()));
+            return Err(SdkError::Wire(format!(
+                "GET {path}: HTTP {}",
+                resp.status()
+            )));
         }
         resp.json::<T>()
             .await
-            .map(Ok)
             .map_err(|e| SdkError::Wire(format!("GET {path}: bad body: {e}")))
     }
 
     /// The federation id the node's EXECUTOR verifies action signatures
-    /// against. A configured federation: the local `/api/federations` entry
-    /// with a real committee. An unconfigured solo node (the devnet default)
-    /// serves a placeholder there while its executor binds
-    /// `blake3(operator pubkey)` — mirrored here.
+    /// against: `/status.executor_federation_id`, which the node computes with
+    /// the function its executor uses (`federation_id_for_executor`). Nothing
+    /// is derived here. A missing or malformed field, a non-success status or
+    /// a transport failure is an error: signing over a guessed id is what
+    /// vetoed every turn on a configured committee of one (#90).
     ///
     /// Only a discovered id is cached. A failed discovery returns before the
     /// `OnceLock` is touched, so the next call asks the node again instead of
@@ -250,30 +215,8 @@ impl RemoteRuntime {
     }
 
     async fn discover_federation_id(&self) -> Result<[u8; 32], SdkError> {
-        // Only a 404 means the node does not serve the listing (an older
-        // node), which reads as unconfigured. Any other failure (another
-        // status, a 5xx included, a transport failure, an unreadable listing)
-        // is an error, never the `blake3(operator pubkey)` fallback: guessing
-        // there signs every action of a configured node over the wrong binding.
-        let feds = match self
-            .get_json_or_status::<Vec<FederationInfoLite>>("/api/federations")
-            .await?
-        {
-            Ok(feds) => feds,
-            Err(reqwest::StatusCode::NOT_FOUND) => Vec::new(),
-            Err(status) => {
-                return Err(SdkError::Wire(format!(
-                    "GET /api/federations: HTTP {status}"
-                )));
-            }
-        };
-        if let Some(local) = feds.iter().find(|f| f.is_configured_local()) {
-            return hex_decode_32(&local.federation_id);
-        }
-        // Solo-node derivation: blake3(operator pubkey).
-        let identity: NodeIdentityLite = self.get_json("/api/node/identity").await?;
-        let pk = hex_decode_32(&identity.public_key)?;
-        Ok(*blake3::hash(&pk).as_bytes())
+        let status: NodeStatusLite = self.get_json("/status").await?;
+        hex_decode_32(&status.executor_federation_id)
     }
 
     /// The agent cell's live replay counter on the node's ledger (0 when the
@@ -713,13 +656,12 @@ mod tests {
         server.await.expect("fixture server task");
     }
 
-    /// A fixture node for the listing route. Each `/api/federations` request
-    /// takes the next scripted answer, and `None` (or an exhausted script)
-    /// closes the connection with no response. `/api/node/identity` always
-    /// answers `node_pk`.
-    async fn listing_fixture(
-        node_pk: [u8; 32],
-        listing: Vec<Option<(&'static str, String)>>,
+    /// A fixture node for `/status`. Each `/status` request takes the next
+    /// scripted answer, and `None` (or an exhausted script) closes the
+    /// connection with no response. Every other route is a 404, so a client
+    /// that derived the id from any other route would fail these tests.
+    async fn status_fixture(
+        answers: Vec<Option<(&'static str, String)>>,
     ) -> (RemoteRuntime, tokio::task::JoinHandle<()>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -728,19 +670,16 @@ mod tests {
             .expect("bind fixture server");
         let addr = listener.local_addr().expect("fixture address");
         let server = tokio::spawn(async move {
-            let mut listing = listing.into_iter();
+            let mut answers = answers.into_iter();
             while let Ok((mut stream, _)) = listener.accept().await {
                 let mut request = vec![0u8; 4096];
                 let n = stream.read(&mut request).await.unwrap_or(0);
                 let request = String::from_utf8_lossy(&request[..n]).to_string();
-                let (status, body) = if request.starts_with("GET /api/federations ") {
-                    match listing.next().flatten() {
+                let (status, body) = if request.starts_with("GET /status ") {
+                    match answers.next().flatten() {
                         Some(answer) => answer,
                         None => continue, // closes the connection with no response
                     }
-                } else if request.starts_with("GET /api/node/identity ") {
-                    let body = serde_json::json!({ "public_key": hex_encode(&node_pk) });
-                    ("200 OK", body.to_string())
                 } else {
                     ("404 Not Found", String::new())
                 };
@@ -760,65 +699,84 @@ mod tests {
 
     const FIXTURE_NODE_PK: [u8; 32] = [0x5C; 32];
 
-    /// A node that drops the `/api/federations` request is a transport failure,
-    /// not an unconfigured node: discovery refuses rather than fall back to
-    /// `blake3(operator pubkey)`, even though the identity route answers.
-    #[tokio::test]
-    async fn a_dropped_federation_listing_is_an_error_not_the_solo_fallback() {
-        let (runtime, server) = listing_fixture(FIXTURE_NODE_PK, vec![None]).await;
-        let got = runtime.federation_id().await;
-        server.abort();
-        assert!(got.is_err(), "a dropped listing must refuse: {got:?}");
+    /// A `/status` body of the shape a node with a configured committee of one
+    /// serves: `"solo"`, its public key, and the committee id as the executor
+    /// binding.
+    fn status_body(executor_federation_id: Option<[u8; 32]>) -> String {
+        let mut body = serde_json::json!({
+            "federation_mode": "solo",
+            "public_key": hex_encode(&FIXTURE_NODE_PK),
+        });
+        if let Some(id) = executor_federation_id {
+            body["executor_federation_id"] = hex_encode(&id).into();
+        }
+        body.to_string()
     }
 
-    /// A 404 is a node that does not serve the listing: it falls back to the
-    /// solo derivation.
+    /// The served field is the binding, bound as served. On a configured
+    /// committee of one, `/status` says `"solo"` and the id is NOT
+    /// `blake3(public_key)`; a client that derived it would sign over the
+    /// wrong binding (#90).
     #[tokio::test]
-    async fn a_404_listing_is_an_older_node_and_falls_back_to_blake3() {
-        let listing = vec![Some(("404 Not Found", String::new()))];
-        let (runtime, server) = listing_fixture(FIXTURE_NODE_PK, listing).await;
+    async fn federation_id_is_the_served_field_not_a_derivation() {
+        let committee = [0xC0; 32];
+        let answers = vec![Some(("200 OK", status_body(Some(committee))))];
+        let (runtime, server) = status_fixture(answers).await;
         let got = runtime.federation_id().await;
         server.abort();
-        assert_eq!(
-            got.expect("a 404 listing falls back"),
-            *blake3::hash(&FIXTURE_NODE_PK).as_bytes()
-        );
+        let got = got.expect("a served executor_federation_id binds");
+        assert_eq!(got, committee);
+        assert_ne!(got, *blake3::hash(&FIXTURE_NODE_PK).as_bytes());
     }
 
-    /// Any other failing status, a 5xx included, is an error: a node that serves
-    /// the listing but failed to answer it may well be configured.
+    /// A `/status` without `executor_federation_id` is refused, although it
+    /// carries everything the old `blake3(public_key)` derivation read.
     #[tokio::test]
-    async fn a_server_error_on_the_listing_is_an_error_not_the_solo_fallback() {
-        let listing = vec![Some(("503 Service Unavailable", String::new()))];
-        let (runtime, server) = listing_fixture(FIXTURE_NODE_PK, listing).await;
+    async fn federation_id_refuses_a_status_without_the_field() {
+        let answers = vec![Some(("200 OK", status_body(None)))];
+        let (runtime, server) = status_fixture(answers).await;
         let got = runtime.federation_id().await;
         server.abort();
-        assert!(got.is_err(), "a 503 listing must refuse: {got:?}");
+        assert!(got.is_err(), "a status without the field must refuse: {got:?}");
+    }
+
+    /// A dropped `/status` request is a transport failure and refuses.
+    #[tokio::test]
+    async fn federation_id_refuses_a_dropped_status() {
+        let (runtime, server) = status_fixture(vec![None]).await;
+        let got = runtime.federation_id().await;
+        server.abort();
+        assert!(got.is_err(), "a dropped status must refuse: {got:?}");
+    }
+
+    /// Any failing status, a 5xx included, refuses.
+    #[tokio::test]
+    async fn federation_id_refuses_a_server_error() {
+        let answers = vec![Some(("503 Service Unavailable", String::new()))];
+        let (runtime, server) = status_fixture(answers).await;
+        let got = runtime.federation_id().await;
+        server.abort();
+        assert!(got.is_err(), "a 503 status must refuse: {got:?}");
     }
 
     /// A failed discovery is not cached: after one transient 503, the next call
-    /// asks again and binds the configured committee the node then lists.
+    /// asks again and binds the id the node then serves.
     #[tokio::test]
-    async fn a_transient_listing_failure_is_retried_not_pinned() {
+    async fn federation_id_failure_is_retried_not_pinned() {
         let committee = [0xC0; 32];
-        let listed = serde_json::json!([{
-            "federation_id": hex_encode(&committee),
-            "is_local": true,
-            "member_count": 1,
-        }]);
-        let listing = vec![
+        let answers = vec![
             Some(("503 Service Unavailable", String::new())),
-            Some(("200 OK", listed.to_string())),
+            Some(("200 OK", status_body(Some(committee)))),
         ];
-        let (runtime, server) = listing_fixture(FIXTURE_NODE_PK, listing).await;
+        let (runtime, server) = status_fixture(answers).await;
         let first = runtime.federation_id().await;
         let second = runtime.federation_id().await;
         server.abort();
         assert!(first.is_err(), "the 503 must refuse: {first:?}");
         assert_eq!(
-            second.expect("the retry reads the listing"),
+            second.expect("the retry reads /status"),
             committee,
-            "the second call must bind the committee, not a cached fallback"
+            "the second call must bind the served id, not a cached failure"
         );
     }
 
@@ -1123,37 +1081,17 @@ mod tests {
         assert!(hex_decode_32("abcd").is_err(), "wrong length refuses");
     }
 
-    /// The committee `dregg-node init` mints is a configured committee of one
-    /// at epoch 0; its executor signs under the committee id. The unconfigured
-    /// node lists its local entry with no members and must NOT read as
-    /// configured, whatever epoch it reports.
-    #[test]
-    fn an_init_minted_committee_at_epoch_zero_is_configured() {
-        let feds: Vec<FederationInfoLite> = serde_json::from_str(
-            r#"[{"federation_id":"aa","is_local":true,"member_count":1,"committee_epoch":0}]"#,
-        )
-        .expect("federations shape");
-        assert!(feds[0].is_configured_local(), "epoch 0 is not unconfigured");
-
-        let unconfigured: Vec<FederationInfoLite> = serde_json::from_str(
-            r#"[{"federation_id":"bb","is_local":true,"member_count":0,"committee_epoch":3},
-                {"federation_id":"cc","is_local":false,"member_count":4,"committee_epoch":1}]"#,
-        )
-        .expect("federations shape");
-        assert!(
-            unconfigured.iter().all(|f| !f.is_configured_local()),
-            "a memberless local entry and a foreign committee are not the executor's"
-        );
-    }
-
     #[test]
     fn node_response_shapes_parse() {
-        let feds: Vec<FederationInfoLite> = serde_json::from_str(
-            r#"[{"federation_id":"aa","is_local":true,"member_count":3,"committee_epoch":2,"extra":1}]"#,
+        let status: NodeStatusLite = serde_json::from_str(
+            r#"{"executor_federation_id":"aa","federation_mode":"solo","extra":1}"#,
         )
-        .expect("federations shape");
-        assert!(feds[0].is_local);
-        assert_eq!(feds[0].member_count, 3);
+        .expect("status shape");
+        assert_eq!(status.executor_federation_id, "aa");
+        assert!(
+            serde_json::from_str::<NodeStatusLite>(r#"{"federation_mode":"solo"}"#).is_err(),
+            "a status without executor_federation_id does not parse"
+        );
 
         let head = [0xA5; 32];
         let cell: CellDetailLite = serde_json::from_value(serde_json::json!({

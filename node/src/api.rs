@@ -217,6 +217,14 @@ pub struct StatusResponse {
     pub note_count: Option<u64>,
     pub federation_mode: String,
     pub public_key: String,
+    /// The federation id this node's executor signs and verifies action
+    /// signatures under, hex: `executor_setup::federation_id_for_executor`,
+    /// the committee-derived `federation_id` once a committee is configured,
+    /// else `blake3(public_key)`. A client signing a turn for this node reads
+    /// this field and derives nothing: `federation_mode` says `"solo"` for any
+    /// committee of one, including the configured one `dregg-node init` mints,
+    /// so no client-side rule over the other fields names the binding (#90).
+    pub executor_federation_id: String,
     /// THE SWAP — honest verified-execution surface. The authoritative state
     /// producer on the commit path:
     ///   * `"lean"`  — the VERIFIED Lean executor produces the committed state
@@ -3106,6 +3114,9 @@ async fn get_status(State(state): State<NodeState>) -> Json<StatusResponse> {
         note_count,
         federation_mode,
         public_key: hex_encode(&s.cclerk.public_key().0),
+        executor_federation_id: hex_encode(&crate::executor_setup::federation_id_for_executor(
+            &s,
+        )),
         state_producer,
         lean_producer,
         full_turn_proving,
@@ -12750,6 +12761,52 @@ mod tests {
         );
     }
 
+    /// `/status.executor_federation_id` is the executor's binding in both
+    /// states: `blake3(public_key)` before a committee is configured, and the
+    /// configured `federation_id` after, while `/status` would still say
+    /// `"solo"` for a committee of one. Clients sign over this field and derive
+    /// nothing (#90), so it must be the value the executor verifies under.
+    #[tokio::test]
+    async fn status_serves_the_executor_federation_id() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = NodeState::new(tmp.path(), vec![]).expect("node state");
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let app = router(state.clone(), false, recorder.handle());
+
+        let status_id = |json: &serde_json::Value| {
+            json.get("executor_federation_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_else(|| panic!("/status must carry executor_federation_id; got {json}"))
+                .to_string()
+        };
+
+        let (code, json) = get_json(&app, "/status").await;
+        assert_eq!(code, StatusCode::OK);
+        let (executor_id, public_key) = {
+            let s = state.read().await;
+            (
+                crate::executor_setup::federation_id_for_executor(&s),
+                s.cclerk.public_key().0,
+            )
+        };
+        assert_eq!(status_id(&json), hex_encode(&executor_id));
+        assert_eq!(executor_id, *blake3::hash(&public_key).as_bytes());
+
+        configure_test_poa_authority(&state).await;
+        let (code, json) = get_json(&app, "/status").await;
+        assert_eq!(code, StatusCode::OK);
+        let executor_id = {
+            let s = state.read().await;
+            crate::executor_setup::federation_id_for_executor(&s)
+        };
+        assert_eq!(executor_id, TEST_POA_AUTHORITY);
+        assert_eq!(
+            status_id(&json),
+            hex_encode(&TEST_POA_AUTHORITY),
+            "a configured committee must be served as its own id, not blake3(public_key)"
+        );
+    }
+
     /// THE PUBLIC READ CONTRACT. Every path here must be reachable WITHOUT auth
     /// and must answer in the SHAPE its clients decode.
     ///
@@ -12804,6 +12861,7 @@ mod tests {
                     "consensus_live",
                     "federation_mode",
                     "public_key",
+                    "executor_federation_id",
                     "state_producer",
                     "producer_root_agreeing_effects",
                 ]),
