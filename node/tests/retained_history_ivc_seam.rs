@@ -100,6 +100,7 @@ fn prove_commit_and_retain(
         &effects,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
     );
     assert!(
         rotation.is_some(),
@@ -127,6 +128,7 @@ fn prove_commit_and_retain(
         &receipt_hashes,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         proven.old_commit,
         proven.new_commit,
     )

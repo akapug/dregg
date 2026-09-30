@@ -185,6 +185,7 @@ async fn a_proof_of_one_turn_is_refused_against_another_turns_committee_anchor()
         &effects,
         &dregg_turn::rotation_witness::empty_nullifier_root_8(),
         &dregg_turn::rotation_witness::empty_commitments_root_8(),
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
     )
     .expect("the actor cell must be representable by the rotated leg");
 

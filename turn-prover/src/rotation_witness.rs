@@ -94,6 +94,35 @@ pub fn mint_rotated_participant_leg(
     commitments_root: &dregg_circuit::Faithful8,
     receipt_log: &[[u8; 32]],
 ) -> Result<dregg_circuit_prove::joint_turn_aggregation::RotatedParticipantLeg, String> {
+    // The recipe form for callers that hold no revocation set (fixtures, the light-client and
+    // recursion benches): the EMPTY revoked accumulator, said here once.
+    mint_rotated_participant_leg_in_revoked_set(
+        initial_state,
+        effects,
+        before_cell,
+        after_cell,
+        nullifier_root,
+        commitments_root,
+        &empty_revoked_root_8(),
+        receipt_log,
+    )
+}
+
+/// [`mint_rotated_participant_leg`] against a caller-threaded `revoked_root` (base limb 37 +
+/// completion 82..88). The node's finalized-turn retention passes the executor's LIVE
+/// `note_revoked.root8()` here — the same root its served `FullTurnProof` commits — so the wrap
+/// leg's anchors can match the proof's on a node whose revocation set is non-empty.
+#[allow(clippy::too_many_arguments)]
+pub fn mint_rotated_participant_leg_in_revoked_set(
+    initial_state: &dregg_circuit::effect_vm::CellState,
+    effects: &[dregg_circuit::effect_vm::Effect],
+    before_cell: &Cell,
+    after_cell: &Cell,
+    nullifier_root: &dregg_circuit::Faithful8,
+    commitments_root: &dregg_circuit::Faithful8,
+    revoked_root: &dregg_circuit::Faithful8,
+    receipt_log: &[[u8; 32]],
+) -> Result<dregg_circuit_prove::joint_turn_aggregation::RotatedParticipantLeg, String> {
     use dregg_circuit::descriptor_ir2::{
         UMemBoundaryWitness, prove_vm_descriptor2_for_config, verify_vm_descriptor2_with_config,
     };
@@ -116,10 +145,7 @@ pub fn mint_rotated_participant_leg(
         &ledger,
         nullifier_root,
         commitments_root,
-        // REVOKED-ROOT: these proving-recipe wrappers commit the EMPTY revocation accumulator
-        // (no live revoked root flows through a mint recipe today); stage E/G threads a live root
-        // by promoting this to a wrapper param when a revoke-carrying turn needs it.
-        &empty_revoked_root_8(),
+        revoked_root,
         receipt_log,
         // recipe path: no effective_vk / contract_hash in hand (the faithful capture is at the
         // executor's `effective_vk` / hatchery site) — ZERO carrier material.
@@ -130,10 +156,7 @@ pub fn mint_rotated_participant_leg(
         &ledger,
         nullifier_root,
         commitments_root,
-        // REVOKED-ROOT: these proving-recipe wrappers commit the EMPTY revocation accumulator
-        // (no live revoked root flows through a mint recipe today); stage E/G threads a live root
-        // by promoting this to a wrapper param when a revoke-carrying turn needs it.
-        &empty_revoked_root_8(),
+        revoked_root,
         receipt_log,
         // recipe path: no effective_vk / contract_hash in hand (the faithful capture is at the
         // executor's `effective_vk` / hatchery site) — ZERO carrier material.
@@ -227,8 +250,8 @@ pub fn mint_rotated_participant_leg(
 /// fold.
 ///
 /// `initial_state` / `effects` / `before_cell` / `after_cell` / `nullifier_root` /
-/// `commitments_root` / `receipt_log` are exactly the arguments
-/// [`mint_rotated_participant_leg`] consumes (the turn's execution context the node holds at
+/// `commitments_root` / `revoked_root` / `receipt_log` are exactly the arguments
+/// [`mint_rotated_participant_leg_in_revoked_set`] consumes (the turn's execution context the node holds at
 /// `blocklace_sync::execute_finalized_turn`). `proven_old_commit` / `proven_new_commit` are the
 /// served `FullTurnProof`'s proven wide anchors (`ProvenFinalizedTurn::{old_commit, new_commit}`).
 #[allow(clippy::too_many_arguments)]
@@ -239,6 +262,7 @@ pub fn finalized_turn_from_full_turn(
     after_cell: &Cell,
     nullifier_root: &dregg_circuit::Faithful8,
     commitments_root: &dregg_circuit::Faithful8,
+    revoked_root: &dregg_circuit::Faithful8,
     receipt_log: &[[u8; 32]],
     proven_old_commit: [BabyBear; 8],
     proven_new_commit: [BabyBear; 8],
@@ -249,13 +273,14 @@ pub fn finalized_turn_from_full_turn(
     // 1. Re-prove the rotated leg under the leaf-wrap config (statement-equality: same descriptor,
     //    same trace, same PI vector as the FullTurnProof's rotated leg). `mint_rotated_participant_leg`
     //    already self-verifies the minted proof before returning.
-    let leg = mint_rotated_participant_leg(
+    let leg = mint_rotated_participant_leg_in_revoked_set(
         initial_state,
         effects,
         before_cell,
         after_cell,
         nullifier_root,
         commitments_root,
+        revoked_root,
         receipt_log,
     )?;
 
