@@ -249,7 +249,7 @@ async fn fee_cost_model(node: &NodeHttpClient) -> Result<ComputronCosts> {
 }
 
 /// The two finality words `ReceiptInfo` can carry, lowercased. `Final` is a
-/// BFT quorum (or a fast-path certificate with quorum signatures); `Tentative`
+/// BFT quorum; `Tentative`
 /// is one node in solo mode, safe only under a no-Byzantine assumption and
 /// awaiting quorum validation on rejoin. A genesis-less single-operator devnet
 /// downgrades EVERY committed receipt to `Tentative`, which is why accepting it

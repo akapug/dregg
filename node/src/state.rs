@@ -574,12 +574,6 @@ pub struct NodeStateInner {
     /// Budget epoch version (tracks coordinator rebalance cycles).
     pub budget_epoch: u64,
 
-    // ─── Fast-Path Cell Lock Table ─────────────────────────────────────────────
-    /// Cell lock table for the owned-cell fast path (LUTRIS-style).
-    /// Maps (CellId, nonce) -> CellLockEntry. Used by the fast-path API endpoints
-    /// and periodically expired by the federation sync background task.
-    pub cell_lock_table: dregg_turn::CellLockTable,
-
     // ─── Atomic Multi-Party Turn Coordination ─────────────────────────────────
     /// Active 2PC coordinators keyed by proposal_id (hex string).
     /// Each entry holds the coordinator state machine plus creation timestamp
@@ -1487,7 +1481,6 @@ impl NodeState {
                 pending_spending_certificates: Vec::new(),
                 pending_unlock_requests: Vec::new(),
                 budget_epoch: 0,
-                cell_lock_table: dregg_turn::CellLockTable::with_defaults(),
                 atomic_proposals: HashMap::new(),
                 cross_federation_revocations: HashMap::new(),
                 revocation_accumulator: None,
@@ -1686,7 +1679,6 @@ impl NodeState {
                 pending_spending_certificates: Vec::new(),
                 pending_unlock_requests: Vec::new(),
                 budget_epoch: 0,
-                cell_lock_table: dregg_turn::CellLockTable::with_defaults(),
                 atomic_proposals: HashMap::new(),
                 cross_federation_revocations: HashMap::new(),
                 revocation_accumulator: None,

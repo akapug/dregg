@@ -456,8 +456,8 @@ mod tests {
     }
 
     #[test]
-    fn test_solo_fast_path_single_signature_sufficient() {
-        // Solo: 1 signature is enough for fast-path certificate.
+    fn test_solo_single_signature_sufficient() {
+        // Solo: the effective quorum threshold is 1 regardless of roster size.
         let key = [0xCC; 32];
         let state = SoloConsensusState::new(key);
         assert_eq!(state.effective_threshold(3), 1);
