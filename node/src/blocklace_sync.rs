@@ -8608,6 +8608,7 @@ fn exact_store_failure_class(error: &dregg_persist::StoreError) -> ExactFinalize
         dregg_persist::StoreError::Serialization(_)
         | dregg_persist::StoreError::Crypto(_)
         | dregg_persist::StoreError::Integrity(_)
+        | dregg_persist::StoreError::IntermediateRootMismatch { .. }
         | dregg_persist::StoreError::NotFound => ExactFinalizedFailureClass::FatalIntegrity,
     }
 }

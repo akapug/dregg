@@ -259,6 +259,21 @@ pub enum StoreError {
     NotFound,
     /// Data integrity check failed.
     Integrity(String),
+    /// The durable commit log is corrupt INSIDE its committed prefix: the
+    /// reconstruction through `ordinal` does not reach that record's recorded
+    /// `ledger_root`, yet a LATER record (`converged_at`) does. That is not a
+    /// torn tail — a crash tears a suffix, never a middle — so there is nothing
+    /// to truncate to, and the image is refused (F3). Before 2026-09-30 the
+    /// torn-tail walk evaluated every ordinal, remembered only the last match,
+    /// and opened the image as clean whenever the head converged.
+    IntermediateRootMismatch {
+        /// The first commit ordinal whose recorded root the reconstruction misses.
+        ordinal: u64,
+        /// That record's finalized height.
+        height: u64,
+        /// The later ordinal whose recorded root the reconstruction DOES reach.
+        converged_at: u64,
+    },
 }
 
 impl std::fmt::Display for StoreError {
@@ -269,6 +284,17 @@ impl std::fmt::Display for StoreError {
             Self::Crypto(msg) => write!(f, "crypto error: {msg}"),
             Self::NotFound => write!(f, "not found"),
             Self::Integrity(msg) => write!(f, "integrity error: {msg}"),
+            Self::IntermediateRootMismatch {
+                ordinal,
+                height,
+                converged_at,
+            } => write!(
+                f,
+                "commit-log intermediate root mismatch: record at ordinal {ordinal} (height \
+                 {height}) does not reconstruct to its recorded ledger_root, while ordinal \
+                 {converged_at} after it does — corruption inside the committed prefix, not a \
+                 torn tail; refusing the image"
+            ),
         }
     }
 }

@@ -3796,6 +3796,28 @@ impl PersistentStore {
     /// and crash-safe: re-running it reaches the same last-good point.
     ///
     /// Returns the number of divergent records truncated (0 ⇒ already consistent).
+    ///
+    /// # A mismatch in the MIDDLE is refused, not recovered (F3)
+    ///
+    /// A crash tears a SUFFIX. When the walk finds an ordinal `k` that misses its
+    /// recorded root and a later ordinal `j` that reaches its own, the damage is
+    /// inside the committed prefix — a corrupted `ledger_root` at `k`, or a
+    /// corrupted `touched_cells` at `k` that `j` later overwrites — and no
+    /// truncation can remove it without also removing `j`. The walk returns
+    /// [`StoreError::IntermediateRootMismatch`] naming `k`, and truncates
+    /// nothing. Until 2026-09-30 it remembered only `last_good` and returned
+    /// `Ok(0)` whenever the head converged, so such an image opened as clean.
+    ///
+    /// That comparison is only as good as the reconstruction base, so it is made
+    /// only for records the base can actually reproduce: those ABOVE the latest
+    /// ledger checkpoint's height (below it the running ledger is the checkpoint,
+    /// which already folds in later records), and only when the base is
+    /// complete — a checkpoint exists, or the caller supplied its genesis
+    /// baseline through [`Self::recover_to_last_consistent_from_base`]. With an
+    /// EMPTY base and no checkpoint, every untouched genesis cell is missing and a
+    /// mismatch followed by a match is what an honest image looks like once the
+    /// last genesis cell has been touched; that walk stays inconclusive, as the
+    /// node's boot path already treats it.
     pub fn recover_to_last_consistent(&self) -> Result<u64> {
         // No genesis baseline: the reconstruction starts from the latest
         // checkpoint, or an EMPTY ledger when none exists. Correct for a store
@@ -3803,7 +3825,7 @@ impl PersistentStore {
         // World) — there are no UNTOUCHED genesis cells to restore. A node with a
         // genesis baseline (fee/issuer wells, faucet) must use
         // [`Self::recover_to_last_consistent_from_base`] instead.
-        self.recover_to_last_consistent_from_base(&dregg_cell::Ledger::new())
+        self.recover_walk(&dregg_cell::Ledger::new(), false)
     }
 
     /// [`Self::recover_to_last_consistent`] reconstructing on top of an explicit
@@ -3830,7 +3852,17 @@ impl PersistentStore {
     /// GENUINE divergence (no prefix reconstructs to its recorded root even with
     /// the baseline in place) still fails closed. `base` empty reproduces
     /// [`Self::recover_to_last_consistent`] exactly.
+    ///
+    /// The caller asserts `base` is the COMPLETE pre-log baseline, so every
+    /// record above the checkpoint is checkable and an intermediate mismatch is
+    /// refused (see [`Self::recover_to_last_consistent`]).
     pub fn recover_to_last_consistent_from_base(&self, base: &dregg_cell::Ledger) -> Result<u64> {
+        self.recover_walk(base, true)
+    }
+
+    /// The torn-tail walk. `base_is_complete`: the caller vouches that `base`
+    /// holds every cell the log's roots commit that no record touches.
+    fn recover_walk(&self, base: &dregg_cell::Ledger, base_is_complete: bool) -> Result<u64> {
         let floor = self.commit_compacted_floor()?;
         let cursor = self.commit_cursor()?;
         if cursor <= floor {
@@ -3848,16 +3880,25 @@ impl PersistentStore {
         // evaluating the canonical root after EACH record so we find the last
         // ordinal that converges to its claim.
         let mut ledger = base.clone();
-        if let Some((_, checkpoint)) = self.load_latest_ledger_checkpoint()? {
+        let mut checkpoint_height: Option<u64> = None;
+        if let Some((height, checkpoint)) = self.load_latest_ledger_checkpoint()? {
+            checkpoint_height = Some(height);
             for (_, cell) in checkpoint.iter() {
                 let _ = ledger.remove(&cell.id());
                 let _ = ledger.insert_cell(cell.clone());
             }
         }
+        // Can a mismatch followed by a match be told apart from an incomplete
+        // base? Only when the base is complete: a checkpoint (a full snapshot)
+        // or a caller-vouched genesis baseline.
+        let intermediate_checked = base_is_complete || checkpoint_height.is_some();
 
         // Scan the live log in ordinal order, applying each record's touched cells
-        // and remembering the last ordinal whose running root matches its claim.
+        // and remembering the last ordinal whose running root matches its claim —
+        // and the FIRST checkable ordinal that misses, which is fatal the moment
+        // any later checkable ordinal converges.
         let mut last_good: Option<u64> = None;
+        let mut first_miss: Option<(u64, u64)> = None;
         {
             let read_txn = self.db.begin_read()?;
             let log = read_txn.open_table(tables::COMMIT_LOG)?;
@@ -3883,8 +3924,22 @@ impl PersistentStore {
                 for id in &record.removed {
                     let _ = ledger.remove(&CellId(*id));
                 }
+                // Above the checkpoint the running ledger IS this record's
+                // post-state; at or below it, the ledger is the checkpoint (which
+                // already holds later records), so a miss there says nothing.
+                let checkable =
+                    intermediate_checked && checkpoint_height.is_none_or(|h| record.height > h);
                 if crate::canonical_ledger_root(&ledger) == record.ledger_root {
+                    if checkable && let Some((ordinal_missed, height)) = first_miss {
+                        return Err(StoreError::IntermediateRootMismatch {
+                            ordinal: ordinal_missed,
+                            height,
+                            converged_at: ordinal,
+                        });
+                    }
                     last_good = Some(ordinal);
+                } else if checkable && first_miss.is_none() {
+                    first_miss = Some((ordinal, record.height));
                 }
             }
         }
@@ -8071,6 +8126,156 @@ pub(crate) mod tests {
         );
         // Fail-closed = untouched: the cursor did not regress, nothing truncated.
         assert_eq!(store.commit_cursor().unwrap(), 3, "no silent truncation");
+    }
+
+    /// Commit `n` turns over `genesis`, each touching a distinct cell, with every
+    /// record's root the TRUE root except that `mutate(k, &mut record)` may
+    /// corrupt one. Returns the true per-ordinal roots.
+    fn commit_over_with(
+        store: &PersistentStore,
+        genesis: &Ledger,
+        n: u64,
+        mutate: impl Fn(u64, &mut CommitRecord),
+    ) -> Vec<[u8; 32]> {
+        let mut ledger = genesis.clone();
+        let mut roots = Vec::new();
+        for k in 0..n {
+            let c = cell(k as u8, 100 + k);
+            let _ = ledger.remove(&c.id());
+            let _ = ledger.insert_cell(c.clone());
+            let mut rec = record(k, k * 10, vec![c]);
+            rec.turn_hash[0] = 0x90;
+            rec.turn_hash[1] = k as u8;
+            rec.receipt_hash[0] = 0x91;
+            rec.receipt_hash[1] = k as u8;
+            rec.ledger_root = crate::canonical_ledger_root(&ledger);
+            roots.push(rec.ledger_root);
+            mutate(k, &mut rec);
+            store.commit_finalized_turn(k, &rec).unwrap();
+        }
+        roots
+    }
+
+    /// ⚑ F3 — a corrupted `ledger_root` in the MIDDLE of the log is refused,
+    /// naming the ordinal. Pre-fix, the walk evaluated ordinal 2, did not record
+    /// the miss, matched 3 and 4, and returned `Ok(0)`: "consistent". The
+    /// mutation is asserted present and the head asserted convergent first.
+    #[test]
+    fn recover_refuses_a_corrupt_intermediate_root_naming_the_ordinal() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        let genesis = genesis_baseline();
+        let roots = commit_over_with(&store, &genesis, 5, |k, rec| {
+            if k == 2 {
+                rec.ledger_root[31] ^= 0x80;
+            }
+        });
+
+        let middle = store.commit_record_at(2).unwrap().unwrap();
+        assert_ne!(middle.ledger_root, roots[2], "the mutation must be present");
+        assert_eq!(
+            store.recovered_ledger_root().unwrap(),
+            Some(roots[4]),
+            "the head converges — the head-only check passes this image"
+        );
+
+        match store.recover_to_last_consistent_from_base(&genesis) {
+            Err(StoreError::IntermediateRootMismatch {
+                ordinal,
+                height,
+                converged_at,
+            }) => {
+                assert_eq!(ordinal, 2);
+                assert_eq!(height, middle.height);
+                assert_eq!(converged_at, 3);
+            }
+            other => panic!("expected IntermediateRootMismatch at ordinal 2, got {other:?}"),
+        }
+        assert_eq!(store.commit_cursor().unwrap(), 5, "refused, not truncated");
+    }
+
+    /// ⚑ F3 — the other shape lane 12 named: record `k` carries corrupted
+    /// `touched_cells` (its recorded root is honest) and a later record
+    /// overwrites the same cell, so the head reconverges.
+    #[test]
+    fn recover_refuses_corrupt_touched_cells_a_later_record_overwrites() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        let genesis = genesis_baseline();
+        let mut ledger = genesis.clone();
+        let shared = |balance: u64| cell(0x42, balance);
+        let mut last_root = [0u8; 32];
+        for k in 0..4u64 {
+            let honest = shared(1_000 + k);
+            let _ = ledger.remove(&honest.id());
+            let _ = ledger.insert_cell(honest.clone());
+            let mut rec = record(k, k * 10, vec![honest]);
+            rec.turn_hash[0] = 0x92;
+            rec.turn_hash[1] = k as u8;
+            rec.receipt_hash[0] = 0x93;
+            rec.receipt_hash[1] = k as u8;
+            rec.ledger_root = crate::canonical_ledger_root(&ledger);
+            last_root = rec.ledger_root;
+            if k == 1 {
+                // The recorded root is honest; the stored post-state is not.
+                rec.touched_cells = vec![shared(9_999_999)];
+            }
+            store.commit_finalized_turn(k, &rec).unwrap();
+        }
+        let middle = store.commit_record_at(1).unwrap().unwrap();
+        assert_eq!(middle.touched_cells, vec![shared(9_999_999)], "mutation present");
+        assert_eq!(store.recovered_ledger_root().unwrap(), Some(last_root));
+
+        assert!(
+            matches!(
+                store.recover_to_last_consistent_from_base(&genesis),
+                Err(StoreError::IntermediateRootMismatch {
+                    ordinal: 1,
+                    converged_at: 2,
+                    ..
+                })
+            ),
+            "a corrupt intermediate post-state must be refused even though record 2 hides it"
+        );
+    }
+
+    /// ⚑ F3 at the node's boot shape: EMPTY base, the genesis baseline pinned as
+    /// a height-0 checkpoint. Records above the checkpoint are checkable; the
+    /// same corruption is refused by the no-argument walk the node calls.
+    #[test]
+    fn recover_over_a_checkpoint_refuses_a_corrupt_intermediate_root() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        let genesis = genesis_baseline();
+        store.checkpoint_ledger(&genesis, 0).unwrap();
+        // `record(k, ..)` puts ordinal k at height k + 1: every record is above
+        // the height-0 checkpoint.
+        let roots = commit_over_with(&store, &genesis, 4, |k, rec| {
+            if k == 1 {
+                rec.ledger_root = [0x77; 32];
+            }
+        });
+        assert_ne!(store.commit_record_at(1).unwrap().unwrap().ledger_root, roots[1]);
+        assert_eq!(store.recovered_ledger_root().unwrap(), Some(roots[3]));
+        assert!(matches!(
+            store.recover_to_last_consistent(),
+            Err(StoreError::IntermediateRootMismatch { ordinal: 1, .. })
+        ));
+
+        // The honest image over the same checkpoint is untouched: 0 truncated.
+        let clean = PersistentStore::open_in_memory().unwrap();
+        clean.checkpoint_ledger(&genesis, 0).unwrap();
+        commit_over_with(&clean, &genesis, 4, |_, _| {});
+        assert_eq!(clean.recover_to_last_consistent().unwrap(), 0);
+
+        // And a TORN TAIL over it is still recovered, not refused: a suffix of
+        // misses with no later match is what a crash leaves.
+        let torn = PersistentStore::open_in_memory().unwrap();
+        torn.checkpoint_ledger(&genesis, 0).unwrap();
+        commit_over_with(&torn, &genesis, 4, |k, rec| {
+            if k >= 2 {
+                rec.ledger_root = [0x66; 32];
+            }
+        });
+        assert_eq!(torn.recover_to_last_consistent().unwrap(), 2);
+        assert_eq!(torn.commit_cursor().unwrap(), 2);
     }
 
     /// THE SINGLE-WRITER GUARD (against the OTHER corruption cause — concurrent
