@@ -47,7 +47,12 @@ pub struct CellStatePrecondition {
     /// Use this for "see-then-set" patterns that need monotonic nonce
     /// progression without pinning to an exact value (which would race
     /// against concurrent submitters).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ///
+    /// SERDE: `#[serde(default)]` only (NOT `skip_serializing_if`). Preconditions ride inside
+    /// `Turn` and `AtomicForest`, which travel as postcard, a non-self-describing codec: a field
+    /// skipped on serialize is still read on deserialize, so the decode runs off the end of the
+    /// buffer. The same repair `Turn` and `Capability::allowed_effects` already carry.
+    #[serde(default)]
     pub min_nonce: Option<u64>,
     /// Minimum computron balance required.
     pub min_balance: Option<u64>,
@@ -627,5 +632,27 @@ mod clause_tests {
             postcard::from_bytes::<Preconditions>(&[0xFFu8; 16]).is_err(),
             "invalid Option discriminant must fail to decode"
         );
+    }
+}
+
+#[cfg(test)]
+mod postcard_tests {
+    use super::*;
+
+    /// A `cell_state` with no `min_nonce` round-trips through postcard, the codec `Turn` and
+    /// `AtomicForest` travel in. With `skip_serializing_if` on `min_nonce` this decode failed
+    /// with "Hit the end of buffer".
+    #[test]
+    fn a_cell_state_without_min_nonce_round_trips_through_postcard() {
+        let p = Preconditions {
+            cell_state: Some(CellStatePrecondition {
+                min_balance: Some(500),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let bytes = postcard::to_stdvec(&p).expect("encode");
+        let back: Preconditions = postcard::from_bytes(&bytes).expect("decode");
+        assert_eq!(back, p);
     }
 }
