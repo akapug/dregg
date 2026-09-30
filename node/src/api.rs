@@ -6027,6 +6027,27 @@ async fn post_submit_encrypted_turn(
         return Err(StatusCode::FORBIDDEN);
     }
 
+    // The envelope's signed claims against the agent cell, before decrypt work:
+    // `claimed_nonce` is the agent cell's nonce and its balance covers `min_fee`.
+    // `apply_encrypted_turn` re-checks these and binds the decrypted turn to them.
+    if let Err(err) = encrypted.check_claims_against_agent_cell(&s.ledger) {
+        crate::metrics::inc_turns_executed("rejected");
+        drop(s);
+        return Ok(Json(SubmitEncryptedTurnResponse {
+            accepted: false,
+            turn_hash: Some(format!(
+                "rejected: encrypted turn claim refused at admission: {err:?}"
+            )),
+            was_encrypted: false,
+            proof_status: ActivityProofStatus::NotCommitted,
+            has_witness: false,
+            witness_count: 0,
+            error: Some(format!(
+                "encrypted turn claim refused at admission: {err:?}"
+            )),
+        }));
+    }
+
     // Derive the executor's unsealer secret from the cipherclerk. Held in a
     // local for the lifetime of this handler only.
     let sealer_secret = s.cclerk.derive_symmetric_key(TURN_UNSEALER_DOMAIN);
