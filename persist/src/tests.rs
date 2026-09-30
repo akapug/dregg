@@ -1710,3 +1710,27 @@ fn channel_rosters_roundtrip_and_survive_reopen() {
     let loaded = store.load_channel_rosters().unwrap();
     assert_eq!(loaded, vec![(channel_b, roster_b)]);
 }
+
+// Issue #97: redb reuses freed pages but never shrinks its file on its own, so a long-running
+// node's dregg.redb only grows. `compact()` is the one call that gives the space back; this pins
+// that it does, on the same store API the node uses to delete (TTL-pruned proof hashes).
+#[test]
+fn compact_shrinks_the_file_after_deletes() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("compact.redb");
+    let mut store = PersistentStore::open(&path).unwrap();
+    for i in 0..4_000u64 {
+        let mut hash = [0u8; 32];
+        hash[..8].copy_from_slice(&i.to_le_bytes());
+        assert!(store.insert_proof_hash_with_height(&hash, i).unwrap());
+    }
+    assert_eq!(store.prune_old_proof_hashes(1_000_000, 10).unwrap(), 4_000);
+    let before = std::fs::metadata(&path).unwrap().len();
+    store.compact().unwrap();
+    let after = std::fs::metadata(&path).unwrap().len();
+    assert!(after < before, "compact left the file at {after} bytes (was {before})");
+    drop(store);
+    // The compacted file still opens, and a pruned hash inserts again as new.
+    let store = PersistentStore::open(&path).unwrap();
+    assert!(store.insert_proof_hash_with_height(&[0u8; 32], 5).unwrap());
+}
