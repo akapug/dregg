@@ -327,7 +327,7 @@ mechanical.
 Native proof-carrying onto Midnight remains **foreclosed by Midnight's
 architecture** (no general in-circuit proof-verification primitive; fixed-VK
 per-entry-point Halo2/KZG-BLS12-381). Ship the optimistic + watchtower bridge that
-already exists (`bridge/src/midnight_verified.rs`). See
+already exists (`midnight_verified.rs` (deleted by `94c14004f`)). See
 `docs/SUPERSEDED/NATIVE-PROOF-BRIDGES.md §2`. This doc covers only the *Ethereum* wrap
 prover.
 </content>

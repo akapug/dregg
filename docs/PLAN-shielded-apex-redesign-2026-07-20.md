@@ -7,8 +7,8 @@ single shielded-transfer path through the existing ring-clearing apex so it clos
 PQ Poseidon2 gate, and retires the Rust-authored `spend_circuit` AIR (house law #1).
 
 This plan cites file:line at HEAD. Where it says "the apex," it means the machinery in
-`circuit-prove/src/shielded_ring_clearing_nleg_air.rs` and `…_air.rs` (2-leg endpoint) plus
-`circuit-prove/src/shielded_spend_leaf_adapter.rs`.
+`shielded_ring_clearing_nleg_air.rs` (deleted by `3ec27de26`) and `…_air.rs` (2-leg endpoint) plus
+`shielded_spend_leaf_adapter.rs` (deleted by `3ec27de26`).
 
 ---
 
@@ -166,7 +166,7 @@ fold + #17 PQ-commitment + the full `spend_circuit` AIR port) is unchanged.
 
 **The wound** (#16): `verify_value_link` (`cell-crypto/src/value_commitment.rs:1659`) — which checks that
 the STARK leaf value equals the Pedersen-leg value — runs **only in tests**
-(`circuit-prove/tests/shielded_transfer_m2a.rs:475,495,509`), never in `apply_shielded_transfer` (it
+(`shielded_transfer_m2a.rs:475,495,509` (deleted by `5f33b6b43`)), never in `apply_shielded_transfer` (it
 needs the secret opening, so it *cannot* run there as written). Deployed conservation
 (`verify_full_conservation_bytes`, GATE 2) proves only that the *Ristretto legs* balance — a prover can
 decouple the STARK-witnessed leaf values from the legs and mint.

@@ -271,5 +271,5 @@ Reds that are **expected and load-bearing** — do not "fix" them wrong:
 ## 6. Scratch left in the worktree, deliberately
 
 `before-full.png`, `rack-after-unblock.yml` (Path-of-Angels session's), and
-`metatheory/wip/Measure19d.lean` (a lane's wip scratch). None is source; none is
+`Measure19d.lean` in `metatheory/wip`, never committed (a lane's wip scratch). None is source; none is
 load-bearing.

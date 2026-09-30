@@ -173,7 +173,7 @@ What the verified circuit *does* enable on Midnight is the **dregg-side fraud
 proof**: an optimistic Level-1.5 bridge where the circuit proof is the objective
 evidence a permissionless watchtower uses to challenge a false federation
 attestation, turning 2/3-threshold trust into 1-of-N. That is already wired
-(`bridge/src/midnight_verified.rs`, `midnight_gateway.rs`) and is the recommended
+(`midnight_verified.rs` (deleted by `94c14004f`), `midnight_gateway.rs`) and is the recommended
 Midnight path — not a proof-carrying-onto-Midnight chase.
 
 ## 3. Verdict + first milestone
