@@ -27,6 +27,8 @@
 
 use std::sync::{Arc, RwLock};
 
+mod confine_env;
+
 use deos_hermes::confined::probe;
 use deos_hermes::host::escape;
 use deos_hermes::mcp_server::{McpServer, McpToolHost};
@@ -80,6 +82,7 @@ fn leg_a_dregg_tools_are_the_only_effect_path_and_are_receipted() {
     let (runtime, root) = grantor();
     let registry =
         GrantRegistry::default_for_session(1_000_000).with_standard_tool_grants(1_000_000);
+    let env = confine_env::probe_and_announce("leg_a_dregg_tools");
     let host = McpToolHost::new(HermesGateway::new(&runtime, root, registry), 0);
     let mut server = McpServer::new(host);
 
@@ -99,15 +102,35 @@ fn leg_a_dregg_tools_are_the_only_effect_path_and_are_receipted() {
         .find(|r| r["id"] == json!(2))
         .expect("tools/call reply")["result"];
 
-    // Admitted (cap-gated) + receipted (a real verified turn committed).
+    // Admitted (cap-gated) + receipted (a real verified turn committed) on
+    // either branch: the sandbox's refusal, if any, comes after admission.
+    assert!(
+        result["_deos"]["receipt"].is_string(),
+        "the dregg-tool turn left a receipt: {result}"
+    );
+    if let confine_env::ConfineEnv::NoNamespaces(why) = &env {
+        // UNCONFINABLE host: the launch is REFUSED (typed), no PD ran, and the
+        // call still routed through dregg (never the host's shell).
+        assert_eq!(result["isError"], json!(true), "refused launch: {result}");
+        assert!(
+            result["_deos"]["sandboxVerdict"].is_null(),
+            "no PD ran (host: {why}): {result}"
+        );
+        let text = result["content"][0]["text"].as_str().unwrap_or_default();
+        assert!(
+            text.contains("Namespaces"),
+            "the refusal names the layer: {text}"
+        );
+        let tape = server.into_host().tape().to_vec();
+        assert_eq!(tape.len(), 1);
+        assert_eq!(tape[0].tool, "confinement_probe");
+        assert_eq!(tape[0].sandbox_verdict, None);
+        return;
+    }
     assert_eq!(
         result["isError"],
         json!(false),
         "confinement_probe admitted: {result}"
-    );
-    assert!(
-        result["_deos"]["receipt"].is_string(),
-        "the dregg-tool turn left a receipt: {result}"
     );
     // The probe ran in OUR container — a confined PD that could not reach the
     // host file or the network.

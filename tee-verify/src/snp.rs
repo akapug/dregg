@@ -291,13 +291,11 @@ pub struct SnpPolicy {
     allowed_vmpls: u8,
     allow_debug: bool,
     allow_migration_agent: bool,
-    /// Policy bits the guest MUST have set (e.g. [`policy_bits::SINGLE_SOCKET`]).
-    required_policy_bits: u64,
 }
 
 impl SnpPolicy {
     /// The strict policy with the two floors named: debug and migration-agent guests
-    /// refused, VMPL 0 only, no additional required policy bits.
+    /// refused, VMPL 0 only.
     pub fn new(min_tcb: TcbVersion, min_guest_svn: u32) -> SnpPolicy {
         SnpPolicy {
             min_tcb,
@@ -305,7 +303,6 @@ impl SnpPolicy {
             allowed_vmpls: 0b0001,
             allow_debug: false,
             allow_migration_agent: false,
-            required_policy_bits: 0,
         }
     }
 
@@ -322,15 +319,6 @@ impl SnpPolicy {
             return Err("an empty VMPL set accepts nothing; name at least one".into());
         }
         self.allowed_vmpls = m;
-        Ok(self)
-    }
-
-    /// Require these guest-policy bits to be set (only bits this verifier knows).
-    pub fn require_policy_bits(mut self, bits: u64) -> Result<SnpPolicy, String> {
-        if bits & !policy_bits::KNOWN != 0 {
-            return Err(format!("unknown guest-policy bits {bits:#x}"));
-        }
-        self.required_policy_bits |= bits;
         Ok(self)
     }
 
@@ -394,11 +382,6 @@ pub enum SnpError {
     MigrationAgentAllowed {
         policy: u64,
     },
-    /// F2: a guest-policy bit the verifier requires is clear.
-    RequiredPolicyBitsMissing {
-        policy: u64,
-        required: u64,
-    },
     /// F2: the report was requested from a VMPL outside the accepted set.
     VmplNotAllowed {
         vmpl: u32,
@@ -451,10 +434,6 @@ impl std::fmt::Display for SnpError {
             SnpError::MigrationAgentAllowed { policy } => write!(
                 f,
                 "SNP guest policy {policy:#x} allows a migration agent; refused"
-            ),
-            SnpError::RequiredPolicyBitsMissing { policy, required } => write!(
-                f,
-                "SNP guest policy {policy:#x} lacks required bits {required:#x}; refused"
             ),
             SnpError::VmplNotAllowed { vmpl } => {
                 write!(f, "SNP report from VMPL {vmpl} is outside the accepted set; refused")
@@ -618,12 +597,6 @@ impl SnpVerifier {
         }
         if p & policy_bits::MIGRATE_MA != 0 && !policy.allow_migration_agent {
             return Err(SnpError::MigrationAgentAllowed { policy: p });
-        }
-        if p & policy.required_policy_bits != policy.required_policy_bits {
-            return Err(SnpError::RequiredPolicyBitsMissing {
-                policy: p,
-                required: policy.required_policy_bits,
-            });
         }
         if !policy.vmpl_allowed(report.vmpl) {
             return Err(SnpError::VmplNotAllowed { vmpl: report.vmpl });
@@ -1168,21 +1141,6 @@ mod tests {
             matches!(err, SnpError::PolicyUnknownBitsSet { .. }),
             "{err}"
         );
-    }
-
-    #[test]
-    fn forged_policy_missing_a_required_bit_is_refused() {
-        let pki = build_pki();
-        let policy = honest_policy(&pki)
-            .require_policy_bits(policy_bits::SMT)
-            .unwrap();
-        let v = verifier(&pki, policy);
-        let err = forge(&pki, &v, |f| f.policy &= !policy_bits::SMT).unwrap_err();
-        assert!(
-            matches!(err, SnpError::RequiredPolicyBitsMissing { required, .. } if required == policy_bits::SMT),
-            "{err}"
-        );
-        assert!(honest_policy(&pki).require_policy_bits(1 << 40).is_err());
     }
 
     #[test]
