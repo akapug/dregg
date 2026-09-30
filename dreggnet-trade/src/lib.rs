@@ -127,8 +127,21 @@ pub enum LegSpec {
     /// the note into escrow custody.
     Asset(AssetId),
     /// A quantity of $DREGG value. Deposited by moving value from the party's wallet
-    /// into the trade's value custody.
+    /// into the trade's value custody. Only `1..=i64::MAX` is movable (the value layer
+    /// holds signed balances and refuses a non-positive move); [`dregg_amount`] is the
+    /// one gate, and [`TradeWorld::open_trade`] / [`TradeWorld::list`] refuse anything
+    /// outside it before a leg exists.
     Dregg(u64),
+}
+
+/// The movable form of a $DREGG amount: `1..=i64::MAX` as the `i64` the value layer
+/// and the sealed escrow carry, or the named refusal. Every `u64` price or leg amount
+/// crosses into `i64` here and nowhere else.
+pub fn dregg_amount(amount: u64) -> Result<i64, TradeError> {
+    if amount == 0 {
+        return Err(TradeError::ZeroDreggAmount);
+    }
+    i64::try_from(amount).map_err(|_| TradeError::DreggAmountTooLarge { amount })
 }
 
 impl LegSpec {
@@ -140,11 +153,11 @@ impl LegSpec {
     }
     /// The value the sealed escrow binds for this leg. An asset leg locks a presence
     /// marker of `1` (its *value* is its provenance, not a fungible amount); a $DREGG
-    /// leg locks its amount.
-    fn leg_amount(&self) -> i64 {
+    /// leg locks its amount, refused unless [`dregg_amount`] admits it.
+    fn leg_amount(&self) -> Result<i64, TradeError> {
         match self {
-            LegSpec::Asset(_) => 1,
-            LegSpec::Dregg(v) => *v as i64,
+            LegSpec::Asset(_) => Ok(1),
+            LegSpec::Dregg(v) => dregg_amount(*v),
         }
     }
 }
@@ -170,6 +183,22 @@ pub enum TradeError {
     /// The side's leg is already deposited (a re-deposit is refused before any value
     /// moves).
     AlreadyDeposited(Side),
+    /// A $DREGG price or leg of `0`: the value layer cannot move nothing, so such a
+    /// leg could never deposit. Refused at listing / trade-open, before custody.
+    ZeroDreggAmount,
+    /// A $DREGG price or leg above `i64::MAX`, which the signed value layer cannot
+    /// represent. Refused at listing / trade-open, before custody.
+    DreggAmountTooLarge {
+        /// The refused amount.
+        amount: u64,
+    },
+    /// The value layer refused a $DREGG move the funds check had admitted. The
+    /// deposit returns this instead of asserting; `buy` reclaims the asset leg on it
+    /// like on any other deposit error.
+    DreggMoveRefused {
+        /// The amount that did not move.
+        amount: i64,
+    },
 }
 
 impl std::fmt::Display for TradeError {
@@ -181,6 +210,13 @@ impl std::fmt::Display for TradeError {
                 write!(f, "insufficient $DREGG: have {have}, need {need}")
             }
             TradeError::AlreadyDeposited(s) => write!(f, "leg {s:?} is already deposited"),
+            TradeError::ZeroDreggAmount => write!(f, "a $DREGG amount of 0 cannot be traded"),
+            TradeError::DreggAmountTooLarge { amount } => {
+                write!(f, "$DREGG amount {amount} exceeds the value layer's i64::MAX")
+            }
+            TradeError::DreggMoveRefused { amount } => {
+                write!(f, "the value layer refused to move {amount} $DREGG")
+            }
         }
     }
 }
@@ -394,7 +430,7 @@ impl TradeWorld {
             .get(buyer)
             .map(|wallet| wallet.state.balance())
             .unwrap_or(0);
-        let need = i64::try_from(price).unwrap_or(i64::MAX);
+        let need = dregg_amount(price)?;
         if have < need {
             return Err(TradeError::InsufficientDregg { have, need });
         }
@@ -469,8 +505,17 @@ impl TradeWorld {
     }
 
     /// **Open a trade** — "`a_label` gives `a` iff `b_label` gives `b`". Seals the swap
-    /// terms into a fresh sealed-escrow coordination cell; no leg is deposited yet.
-    pub fn open_trade(&mut self, a_label: &str, a: LegSpec, b_label: &str, b: LegSpec) -> Trade {
+    /// terms into a fresh sealed-escrow coordination cell; no leg is deposited yet. A
+    /// $DREGG leg outside `1..=i64::MAX` is refused here ([`dregg_amount`]), so no
+    /// trade exists whose value leg could never deposit.
+    pub fn open_trade(
+        &mut self,
+        a_label: &str,
+        a: LegSpec,
+        b_label: &str,
+        b: LegSpec,
+    ) -> Result<Trade, TradeError> {
+        let (a_amount, b_amount) = (a.leg_amount()?, b.leg_amount()?);
         // Ensure both identities (and the neutral custodian) exist.
         let a_party = party_cell(a_label);
         let b_party = party_cell(b_label);
@@ -479,13 +524,13 @@ impl TradeWorld {
         let _ = self.assets.pubkey_of(ESCROW_CUSTODY_LABEL);
 
         let terms = EscrowTerms::swap(
-            LegRequirement::new(a_party, a.leg_token(), a.leg_amount()),
-            LegRequirement::new(b_party, b.leg_token(), b.leg_amount()),
+            LegRequirement::new(a_party, a.leg_token(), a_amount),
+            LegRequirement::new(b_party, b.leg_token(), b_amount),
         );
         let mut escrow = Cell::with_balance(ESCROW_HOST_PK, ESCROW_HOST_TOKEN, 0);
         open_escrow(&mut escrow, &terms);
 
-        Trade {
+        Ok(Trade {
             escrow,
             terms,
             a: SideBinding {
@@ -499,7 +544,7 @@ impl TradeWorld {
                 party: b_party,
             },
             dregg_custody: Cell::with_balance(ESCROW_HOST_PK, DREGG_ASSET, 0),
-        }
+        })
     }
 
     /// **Deposit** a side's leg into the trade. An ASSET leg is a real owner-signed
@@ -526,23 +571,21 @@ impl TradeWorld {
                 self.assets.transfer(asset, &label, ESCROW_CUSTODY_LABEL)?;
             }
             LegSpec::Dregg(amount) => {
+                let need = dregg_amount(amount)?;
                 let have = self.wallet(&label).state.balance();
-                if have < amount as i64 {
-                    return Err(TradeError::InsufficientDregg {
-                        have,
-                        need: amount as i64,
-                    });
+                if have < need {
+                    return Err(TradeError::InsufficientDregg { have, need });
                 }
-                let moved =
-                    move_value(self.wallet(&label), &mut trade.dregg_custody, amount as i64);
-                assert!(moved, "the funds check above guarantees the move succeeds");
+                if !move_value(self.wallet(&label), &mut trade.dregg_custody, need) {
+                    return Err(TradeError::DreggMoveRefused { amount: need });
+                }
             }
         }
 
         // Record the (now-genuinely-locked) leg into the sealed-escrow commitment. It
         // conforms by construction, so this only fails on a terms/one-shot violation
         // (already excluded above).
-        let leg = Leg::new(party, spec.leg_token(), spec.leg_amount());
+        let leg = Leg::new(party, spec.leg_token(), spec.leg_amount()?);
         deposit_leg(&mut trade.escrow, &trade.terms, side, &leg)?;
         Ok(())
     }
@@ -579,11 +622,9 @@ impl TradeWorld {
                     .expect("the custodian owns the deposited asset; the cross is admissible");
             }
             LegSpec::Dregg(amount) => {
-                let moved = move_value(
-                    &mut trade.dregg_custody,
-                    self.wallet(to_label),
-                    amount as i64,
-                );
+                let amount = dregg_amount(amount)
+                    .expect("a $DREGG leg in custody passed dregg_amount at open_trade");
+                let moved = move_value(&mut trade.dregg_custody, self.wallet(to_label), amount);
                 assert!(moved, "custody holds the locked value; the cross succeeds");
             }
         }
@@ -659,6 +700,10 @@ impl TradeWorld {
         asset: AssetId,
         price: u64,
     ) -> Result<Listing, TradeError> {
+        // A price the value layer cannot move (0, or above i64::MAX) is refused before
+        // the listing exists — `buy` would otherwise put the seller's asset in custody
+        // and then fail the buyer's leg.
+        dregg_amount(price)?;
         let seller_pk = self.pubkey_of(seller);
         if self.current_owner(asset) != Some(seller_pk) {
             return Err(TradeError::Asset(AssetError::Refused(
@@ -693,15 +738,17 @@ impl TradeWorld {
             return Err(TradeError::Escrow(EscrowError::LegAlreadyConsumed(Side::A)));
         }
         let seller = listing.seller.clone();
+        // `open_trade` refuses a price outside `1..=i64::MAX` before anything moves
+        // (`listing.price` is a pub field, so `list`'s check is not relied on here).
         let mut trade = self.open_trade(
             &seller,
             LegSpec::Asset(listing.asset),
             buyer,
             LegSpec::Dregg(listing.price),
-        );
+        )?;
         // The seller's asset enters custody (owner-signed; refused if not owned).
         self.deposit(&mut trade, Side::A)?;
-        // The buyer's price enters custody. On a shortfall, undo the asset leg so the
+        // The buyer's price enters custody. On any refusal, undo the asset leg so the
         // seller keeps their item (atomicity: no leg is left stranded).
         if let Err(e) = self.deposit(&mut trade, Side::B) {
             self.reclaim(&mut trade, Side::A)

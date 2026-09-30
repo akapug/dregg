@@ -1441,7 +1441,8 @@ impl Adventure {
             LegSpec::Asset(relic),
             BUYER,
             LegSpec::Dregg(50),
-        );
+        )
+        .map_err(|error| AdventureError::at("trade", format!("open: {error:?}")))?;
         market
             .deposit(&mut trade, TradeSide::A)
             .map_err(|error| AdventureError::at("trade", format!("seller: {error:?}")))?;
