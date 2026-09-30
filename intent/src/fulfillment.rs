@@ -926,31 +926,10 @@ pub fn compute_intent_request_hash(intent: &Intent) -> BabyBear {
 // Automatic fulfillment payment: intent -> verified fulfillment -> payment turn
 // ---------------------------------------------------------------------------
 
-/// Default grace period (in blocks) for the fulfillment payment conditional turn.
+/// Default grace period (in blocks) for the fulfillment payment conditional turn. It is also
+/// the payment turn's own deadline: `Turn::valid_until` is a block height, and the inner turn's
+/// is the conditional's `timeout_height`, so the conditional owns the only deadline.
 const FULFILLMENT_PAYMENT_GRACE_BLOCKS: u64 = 100;
-
-/// Validity horizon (wall-clock seconds) stamped onto turns this module constructs.
-///
-/// `Turn::valid_until` (`turn/src/turn.rs`) is compared against the executor's
-/// `current_timestamp` — a wall-clock Unix timestamp, entirely separate from
-/// `block_height` (`turn/src/executor/mod.rs`). Do NOT stamp `current_height` (this
-/// module's block-height parameter) in here: as a "timestamp" it would already be far
-/// in the past and expire the turn on arrival. Leaving `valid_until` as `None` is worse
-/// than either: the executor's expiration check is `if let Some(valid_until) =
-/// turn.valid_until { .. }` (`turn/src/executor/execute.rs:426`) — entirely SKIPPED on
-/// `None`, so a turn built that way never expires, no matter how stale. Mirrors
-/// `default_valid_until` in `node/src/api.rs` / `sdk/src/runtime.rs` (same rationale,
-/// same fix, same 1-hour horizon); this crate has no dependency on either, hence its
-/// own copy.
-const FULFILLMENT_TURN_VALIDITY_HORIZON_SECS: i64 = 3600;
-
-fn default_valid_until() -> Option<i64> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    Some(now + FULFILLMENT_TURN_VALIDITY_HORIZON_SECS)
-}
 
 /// Create a ConditionalTurn that transfers payment from the intent creator to the
 /// fulfiller, conditioned on the fulfillment proof being valid.
@@ -1039,10 +1018,9 @@ pub fn create_fulfillment_turn(
             "fulfillment payment for intent {:02x}{:02x}...",
             intent.id[0], intent.id[1]
         )),
-        // `valid_until: None` skips the executor's expiration check entirely
-        // (`turn/src/executor/execute.rs:426`) — bound it with the module's shared
-        // wall-clock horizon instead of `current_height` (a block height, not a timestamp).
-        valid_until: default_valid_until(),
+        // The conditional's own deadline, in the same unit: the payment turn is admissible
+        // exactly while the conditional has not timed out.
+        valid_until: Some(i64::try_from(timeout_height).unwrap_or(i64::MAX)),
         previous_receipt_hash: None,
         depends_on: vec![],
         conservation_proof: None,
@@ -1078,7 +1056,9 @@ pub fn create_fulfillment_turn(
 ///
 /// * `intent` - The intent being fulfilled.
 /// * `fulfillment` - The fulfillment to verify and pay for.
-/// * `executor` - The turn executor for atomic execution.
+/// * `executor` - The turn executor for atomic execution. Its `block_height` is the clock
+///   the payment turn's deadline (`current_height` + the grace) is checked against, so it
+///   must run at `current_height` or later; at height 0 the turn is refused.
 /// * `ledger` - The ledger to apply the transfer to.
 /// * `payer_cell` - The intent creator's cell (source of payment).
 /// * `recipient_cell` - The fulfiller's cell (receives payment).
@@ -1524,7 +1504,8 @@ pub struct CommittedFulfillmentOutput {
 ///
 /// * `intent` - The intent being fulfilled.
 /// * `fulfillment` - The fulfillment to verify and pay for.
-/// * `executor` - The turn executor.
+/// * `executor` - The turn executor, running at `current_block`: the payment turn's
+///   deadline is `current_block` + the grace, a block height checked against its height.
 /// * `ledger` - The ledger to apply effects to.
 /// * `payer_cell` - The payer's cell ID.
 /// * `inputs` - Committed note inputs (notes the payer is spending).
@@ -1694,10 +1675,11 @@ pub fn execute_committed_fulfillment_flow(
             "committed fulfillment payment for intent {:02x}{:02x}...",
             intent.id[0], intent.id[1]
         )),
-        // `valid_until: None` skips the executor's expiration check entirely
-        // (`turn/src/executor/execute.rs:426`) — bound it with the module's shared
-        // wall-clock horizon instead of `current_height` (a block height, not a timestamp).
-        valid_until: default_valid_until(),
+        // A block-height deadline with the same grace as the conditional path.
+        valid_until: Some(dregg_turn::valid_until_at(
+            current_block,
+            FULFILLMENT_PAYMENT_GRACE_BLOCKS,
+        )),
         previous_receipt_hash: None,
         depends_on: vec![],
         conservation_proof: None,
@@ -3072,6 +3054,17 @@ mod tests {
         // Verify the structure.
         assert_eq!(conditional.submitted_at, 1000);
         assert_eq!(conditional.timeout_height, 1100); // 1000 + 100 grace
+        // The inner payment turn's deadline IS the conditional's timeout, in the same unit
+        // (block heights): admissible through height 1100, expired at 1101.
+        assert_eq!(conditional.turn.valid_until, Some(1100));
+        assert_eq!(
+            dregg_turn::check_deadline(1100, conditional.turn.valid_until),
+            Ok(())
+        );
+        assert!(matches!(
+            dregg_turn::check_deadline(1101, conditional.turn.valid_until),
+            Err(dregg_turn::TurnError::Expired { .. })
+        ));
         assert!(conditional.deposit_amount > 0);
         assert_eq!(conditional.turn.agent, payer);
         assert!(conditional.turn.memo.is_some());
@@ -3199,7 +3192,9 @@ mod tests {
         ledger.insert_cell(payer_c).unwrap();
         ledger.insert_cell(recipient_c).unwrap();
 
-        let executor = TurnExecutor::new(dregg_turn::ComputronCosts::default());
+        let mut executor = TurnExecutor::new(dregg_turn::ComputronCosts::default());
+        // The payment turn's deadline is a block height; run at the flow's `current_height`.
+        executor.set_block_height(1000);
 
         let result = execute_fulfillment_flow_with_key(
             &intent,
@@ -3620,7 +3615,9 @@ mod tests {
         let recipient_cell = CellId([0xBB; 32]);
 
         let mut ledger = Ledger::new();
-        let executor = TurnExecutor::new(dregg_turn::ComputronCosts::default());
+        let mut executor = TurnExecutor::new(dregg_turn::ComputronCosts::default());
+        // The payment turn's deadline is a block height; run at the flow's `current_height`.
+        executor.set_block_height(1000);
 
         let result = execute_fulfillment_flow_with_key(
             &intent,
@@ -3703,7 +3700,9 @@ mod tests {
         let recipient_cell = CellId([0xBB; 32]);
 
         let mut ledger = Ledger::new();
-        let executor = TurnExecutor::new(dregg_turn::ComputronCosts::default());
+        let mut executor = TurnExecutor::new(dregg_turn::ComputronCosts::default());
+        // The payment turn's deadline is a block height; run at the flow's `current_height`.
+        executor.set_block_height(1000);
 
         let result = execute_fulfillment_flow_with_key(
             &intent,
@@ -3725,61 +3724,5 @@ mod tests {
             }
             other => panic!("expected PredicateProofFailed, got {:?}", other),
         }
-    }
-
-    /// The sentinel must be `Some` — `None` here skips the executor's expiration check
-    /// entirely (`turn/src/executor/execute.rs:426`), so a turn built that way never
-    /// expires no matter how stale.
-    #[test]
-    fn default_valid_until_is_some() {
-        assert!(
-            default_valid_until().is_some(),
-            "a None here means the fulfillment-payment turn never expires — see module docs \
-             on default_valid_until"
-        );
-    }
-
-    /// The stamped deadline must be a future WALL-CLOCK second count, not a block height —
-    /// this module also has a `current_height` parameter nearby and it would be an easy
-    /// mistake to stamp that instead (it would already be far in the past as a timestamp).
-    #[test]
-    fn default_valid_until_is_a_future_wall_clock_horizon_not_a_block_height() {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-        let stamped =
-            default_valid_until().expect("must be Some, see default_valid_until_is_some");
-        assert!(
-            stamped > now,
-            "stamped valid_until ({stamped}) must be strictly after now ({now})"
-        );
-        assert!(
-            stamped <= now + FULFILLMENT_TURN_VALIDITY_HORIZON_SECS,
-            "stamped valid_until ({stamped}) must not exceed the declared horizon (now={now} + \
-             {FULFILLMENT_TURN_VALIDITY_HORIZON_SECS}s) — a block height here would be off by \
-             many orders of magnitude in the wrong direction"
-        );
-    }
-
-    /// Ratchet against the unbounded `valid_until` sentinel regrowing in a `Turn` literal
-    /// this file builds. `include_str!` reads this file at COMPILE time, so this cannot go
-    /// stale against what actually ships. This file is itself the one scanned, which is why
-    /// the needle is assembled at runtime rather than written as one literal — a literal
-    /// copy of it here would trivially match itself.
-    #[test]
-    fn no_fulfillment_turn_rebuilds_the_unbounded_valid_until_sentinel() {
-        let src = include_str!("fulfillment.rs");
-        let sentinel_field = "valid_until";
-        let sentinel_value = "None";
-        let needle = format!("{sentinel_field}: {sentinel_value},");
-        assert!(
-            !src.contains(&needle),
-            "fulfillment.rs builds a Turn with `{sentinel_field}` bound to a bare \
-             `{sentinel_value}` — this turn will NEVER expire (the executor's expiration \
-             check is skipped entirely when this field is `{sentinel_value}`, \
-             turn/src/executor/execute.rs:426). Use `default_valid_until()` instead, as \
-             every other Turn literal in this file now does."
-        );
     }
 }
