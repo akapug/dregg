@@ -41,13 +41,33 @@ use serde::{Deserialize, Serialize};
 /// A control message on the WS wire (sent as a JSON **text** frame). Raw PTY
 /// bytes are NOT a `WireMsg` — they ride as binary frames for transparency; only
 /// the out-of-band control channel is JSON.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum WireMsg {
     /// The grid was resized to `cols`×`rows`; the server resizes the PTY winsize.
     Resize { cols: u16, rows: u16 },
     /// The child process exited (server → client).
     Exit { code: Option<i32> },
+    /// The session token (client → server). A browser `WebSocket` cannot set
+    /// request headers, so a browser client authenticates with this as its FIRST
+    /// frame; the server spawns no PTY until it has checked it (see
+    /// `pty_server`). Never sent server → client.
+    Auth { token: String },
+}
+
+/// `Debug` by hand so an `Auth` frame never prints its token.
+impl std::fmt::Debug for WireMsg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WireMsg::Resize { cols, rows } => f
+                .debug_struct("Resize")
+                .field("cols", cols)
+                .field("rows", rows)
+                .finish(),
+            WireMsg::Exit { code } => f.debug_struct("Exit").field("code", code).finish(),
+            WireMsg::Auth { .. } => f.debug_struct("Auth").field("token", &"<redacted>").finish(),
+        }
+    }
 }
 
 impl WireMsg {
@@ -219,19 +239,41 @@ mod ws {
     #[derive(Clone)]
     pub struct WsTransport {
         inner: Rc<RefCell<Inner>>,
-        // Keep the message closure alive for the socket's lifetime.
+        // Keep the message + open closures alive for the socket's lifetime.
         _on_message: Rc<Closure<dyn FnMut(MessageEvent)>>,
+        _on_open: Rc<Closure<dyn FnMut(web_sys::Event)>>,
     }
 
     impl WsTransport {
-        /// Open a WebSocket to `url` (e.g. `ws://127.0.0.1:7717`) and start
-        /// feeding its byte stream into a `cols`×`rows` grid.
+        /// Open a WebSocket to `url` (e.g. `ws://127.0.0.1:7717`), present the
+        /// session `token` the server's launcher minted as the first frame
+        /// ([`WireMsg::Auth`]), and start feeding the byte stream into a
+        /// `cols`×`rows` grid. A browser cannot set WebSocket request headers, so
+        /// the token rides the first message; the server spawns nothing until it
+        /// has checked it.
         ///
         /// NOTE (net-cap): `url` is the endpoint a granted firmament net-cap will
         /// name — see the module docs. In this slice it is dialed directly.
-        pub fn connect(url: &str, cols: usize, rows: usize) -> Result<Self, wasm_bindgen::JsValue> {
+        pub fn connect(
+            url: &str,
+            token: &str,
+            cols: usize,
+            rows: usize,
+        ) -> Result<Self, wasm_bindgen::JsValue> {
             let socket = WebSocket::new(url)?;
             socket.set_binary_type(BinaryType::Arraybuffer);
+
+            let on_open = {
+                let socket = socket.clone();
+                let auth = WireMsg::Auth {
+                    token: token.to_string(),
+                }
+                .to_text();
+                Closure::wrap(Box::new(move |_ev: web_sys::Event| {
+                    let _ = socket.send_with_str(&auth);
+                }) as Box<dyn FnMut(web_sys::Event)>)
+            };
+            socket.set_onopen(Some(on_open.as_ref().unchecked_ref()));
 
             let inner = Rc::new(RefCell::new(Inner {
                 socket: socket.clone(),
@@ -266,6 +308,8 @@ mod ws {
                                 WireMsg::Resize { cols, rows } => {
                                     inner.grid = WasmGrid::new(cols as usize, rows as usize);
                                 }
+                                // Client → server only; a server never sends it.
+                                WireMsg::Auth { .. } => {}
                             }
                             inner.generation = inner.generation.wrapping_add(1);
                         }
@@ -277,6 +321,7 @@ mod ws {
             Ok(Self {
                 inner,
                 _on_message: Rc::new(on_message),
+                _on_open: Rc::new(on_open),
             })
         }
 

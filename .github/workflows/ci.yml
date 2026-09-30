@@ -723,9 +723,9 @@ jobs:
       # The residue is four targets, and each is already covered or already empty:
       #   * the two libs' DOCTESTS — measured zero doc examples in either crate;
       #   * `grain-verify-wasm`'s `gen-fixture` bin — zero #[test];
-      #   * `starbridge-web`'s `pty_ws_e2e` and `web_panes_wasm` — both already `never-run`
-      #     rows in .github/dark-targets.txt, and both `#![cfg(...)]`-empty under a plain
-      #     `cargo test` (they need `pty-ws-server` + a real PTY, and wasm32 respectively).
+      #   * `starbridge-web`'s `web_panes_wasm` — already a `never-run` row in
+      #     .github/dark-targets.txt, and `#![cfg(...)]`-empty under a plain `cargo test`
+      #     (it needs wasm32).
       # All four are still COMPILED by the `cargo check --workspace --all-targets` job above
       # (check does not link), and all four are still LINKED AND RUN by the whole macOS
       # `cargo test --workspace` above.

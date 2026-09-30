@@ -75,12 +75,14 @@ impl TerminalView {
         }
     }
 
-    /// Convenience: spawn `$SHELL` and wrap it in a view entity.
+    /// Convenience: spawn `$SHELL` and wrap it in a view entity. The shell gets
+    /// the minimal allowlisted environment ([`crate::shell_env`]), not this
+    /// process's.
     pub fn spawn_shell(cx: &mut Context<Self>) -> anyhow::Result<Self> {
         let terminal = Terminal::spawn(
             None,
             std::env::current_dir().ok(),
-            std::env::vars().collect(),
+            crate::shell_env::minimal_shell_env(),
             TermSize::new(80, 24),
         )?;
         Ok(Self::new(terminal, cx))
