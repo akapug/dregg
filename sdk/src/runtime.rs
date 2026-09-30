@@ -881,6 +881,12 @@ pub struct AgentRuntime {
 /// `valid_until_at(block_height, DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS)` at the height it
 /// executes against.
 pub const LOCAL_RUNTIME_START_HEIGHT: u64 = 1;
+// Height 0 refuses every deadline, so a local runtime that started there could
+// not commit a single stamped turn. The build refuses it, not a test.
+const _: () = assert!(
+    LOCAL_RUNTIME_START_HEIGHT > 0,
+    "height 0 refuses every deadline"
+);
 
 /// The deadline an in-process turn built at executor height `height` carries.
 fn local_valid_until(height: u64) -> Option<i64> {
@@ -2318,10 +2324,6 @@ mod local_deadline_tests {
     fn a_fresh_runtime_and_its_stamp_have_a_height() {
         let rt = runtime();
         assert_eq!(rt.block_height(), LOCAL_RUNTIME_START_HEIGHT);
-        assert!(
-            LOCAL_RUNTIME_START_HEIGHT > 0,
-            "height 0 refuses every deadline"
-        );
         assert_eq!(
             local_valid_until(rt.block_height()),
             Some(LOCAL_RUNTIME_START_HEIGHT as i64 + 1800)
