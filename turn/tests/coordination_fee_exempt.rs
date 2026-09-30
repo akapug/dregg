@@ -350,6 +350,14 @@ fn a_zero_fee_coordination_turn_over_the_ceiling_rejects() {
         "precondition: the turn costs more than the ceiling ({estimated})"
     );
 
+    // Validation first, on the untouched ledger: `execute` commits its Phase 1 (fee debit and
+    // nonce bump) before the forest walk refuses, so after it the nonce gate would answer.
+    let validated = executor.validate_without_apply(&turn, &ledger);
+    assert!(
+        matches!(validated, Err(TurnError::BudgetExceeded { .. })),
+        "validation refuses the same turn, got {validated:?}"
+    );
+
     match executor.execute(&turn, &mut ledger) {
         TurnResult::Rejected {
             reason: TurnError::BudgetExceeded { limit, used },
@@ -367,13 +375,6 @@ fn a_zero_fee_coordination_turn_over_the_ceiling_rejects() {
         executor.estimate_cost(&turn),
         estimated,
         "over the ceiling the estimate is the full cost, not 0"
-    );
-    assert!(
-        matches!(
-            executor.validate_without_apply(&turn, &ledger),
-            Err(TurnError::BudgetExceeded { .. })
-        ),
-        "validation refuses the same turn"
     );
 }
 
