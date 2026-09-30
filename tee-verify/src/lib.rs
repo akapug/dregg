@@ -160,18 +160,45 @@ impl TeeAttestationVerifier for NitroVerifier {
         if let Some(max_age) = self.max_age_secs {
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            let doc_ts = doc_ts_ms / 1000;
-            if now > doc_ts && now - doc_ts > max_age {
-                return Err(format!(
-                    "stale Nitro doc: {}s old (max {max_age})",
-                    now - doc_ts
-                ));
-            }
+                .map_err(|_| {
+                    "Nitro freshness: system clock is before the Unix epoch; refused".to_string()
+                })?
+                .as_secs();
+            check_nitro_freshness(now, doc_ts_ms, max_age)?;
         }
         Ok(claims)
     }
+}
+
+/// How far in the future (seconds) a Nitro doc's timestamp may sit relative to our clock
+/// before it is refused. Covers ordinary skew between the enclave host and this verifier.
+pub const MAX_FUTURE_SKEW_SECS: u64 = 60;
+
+/// Freshness of a Nitro doc at `now_secs` (wall-clock seconds since the epoch). F10: this
+/// fails CLOSED. A clock that reads before the doc by more than [`MAX_FUTURE_SKEW_SECS`]
+/// is either a bad clock or a future-dated doc, and neither lets us say the doc is recent,
+/// so both are refused; before this, `now` fell back to 0 on a clock error and a
+/// future-dated doc skipped the age check entirely.
+pub fn check_nitro_freshness(
+    now_secs: u64,
+    doc_ts_ms: u64,
+    max_age_secs: u64,
+) -> Result<(), String> {
+    let doc_ts = doc_ts_ms / 1000;
+    if doc_ts > now_secs {
+        let ahead = doc_ts - now_secs;
+        if ahead > MAX_FUTURE_SKEW_SECS {
+            return Err(format!(
+                "Nitro doc timestamp is {ahead}s ahead of this verifier's clock (max skew {MAX_FUTURE_SKEW_SECS}s): bad clock or future-dated doc; refused"
+            ));
+        }
+        return Ok(());
+    }
+    let age = now_secs - doc_ts;
+    if age > max_age_secs {
+        return Err(format!("stale Nitro doc: {age}s old (max {max_age_secs})"));
+    }
+    Ok(())
 }
 
 /// The time-independent crypto core: verifies chain + COSE signature and extracts the
@@ -309,4 +336,41 @@ fn extract_report_data(doc: &AttDoc) -> Result<[u8; 32], String> {
     let mut r = [0u8; 32];
     r.copy_from_slice(ud.as_ref());
     Ok(r)
+}
+
+#[cfg(test)]
+mod freshness_tests {
+    use super::*;
+
+    const DOC_MS: u64 = 1_700_000_000_000;
+    const DOC_S: u64 = DOC_MS / 1000;
+
+    #[test]
+    fn fresh_doc_passes() {
+        check_nitro_freshness(DOC_S, DOC_MS, 3600).unwrap();
+        check_nitro_freshness(DOC_S + 3600, DOC_MS, 3600).unwrap();
+        check_nitro_freshness(DOC_S - MAX_FUTURE_SKEW_SECS, DOC_MS, 3600).unwrap();
+    }
+
+    #[test]
+    fn stale_doc_is_refused() {
+        let e = check_nitro_freshness(DOC_S + 3601, DOC_MS, 3600).unwrap_err();
+        assert!(e.contains("stale"), "{e}");
+    }
+
+    /// F10: a clock that reads 0 (the old `unwrap_or(0)` fallback) used to make every doc
+    /// fresh. It is now refused.
+    #[test]
+    fn zeroed_clock_is_refused() {
+        let e = check_nitro_freshness(0, DOC_MS, 3600).unwrap_err();
+        assert!(e.contains("ahead"), "{e}");
+    }
+
+    /// F10: a future-dated doc used to skip the age check (`now > doc_ts && ...`).
+    #[test]
+    fn future_dated_doc_is_refused() {
+        let e = check_nitro_freshness(DOC_S, DOC_MS + (MAX_FUTURE_SKEW_SECS + 1) * 1000, 3600)
+            .unwrap_err();
+        assert!(e.contains("ahead"), "{e}");
+    }
 }
