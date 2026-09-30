@@ -258,7 +258,7 @@ HTTP/WebSocket) or to the in-browser executor.
 | App | gpui UI in-browser | Backend wire needed for web |
 | --- | --- | --- |
 | **Cockpit / inspectors** | ✅ today (this slice: home/inspector/affordances; the full surface set is element-tree work) | none — drives the in-browser `World` directly |
-| **Terminal** (`deos_terminal::TerminalView`) | gpui grid renders on web; alacritty's PTY does not exist in a browser | **WIRED** — PTY over a WebSocket. `starbridge_web::pty_ws` owns both ends: a native WS↔PTY server (`pty_ws::serve`, the `starbridge-web-pty-ws` bin) that gives each connection a real `$SHELL` on a `portable-pty` PTY and bridges bytes, and the wasm `WsTransport` (a `web_sys::WebSocket`) the browser grid drives. Proven end-to-end by `starbridge-v2/web/tests/pty_ws_e2e.rs` (real shell, real socket, `echo`/`pwd` bytes return). The net-cap gate (origin/shell/cwd) is the named next wire at the per-connection accept. |
+| **Terminal** (`deos_terminal::TerminalView`) | gpui grid renders on web; alacritty's PTY does not exist in a browser | **WIRED** — PTY over a WebSocket. `deos_terminal::pty_server` (the `deos-terminal-pty-ws` bin) gives each *authenticated* connection a real `$SHELL` on a `portable-pty` PTY — loopback bind, `Origin` allowlist, per-server session token checked before any PTY opens — and the wasm `deos_terminal::transport::WsTransport` presents that token and drives the browser grid. Proven by `deos-terminal/tests/pty_ws_e2e.rs`. (starbridge-web's ungated copy was deleted, D1.) |
 | **Editor** (`deos_zed::Editor`) | gpui editor renders on web | swap `RealFs::arc()` for a **firmament-backed `Arc<dyn Fs>`** over the in-browser executor (the editor already takes `Arc<dyn Fs>` — see `editor_surface.rs`), or an `Fs` over `node/`'s file API |
 | **Chat** (`deos_matrix::chat::ChatView`) | gpui chat renders on web | `matrix-rust-sdk` (`matrix-sdk 0.18`) **wasm-compiles** (it targets wasm32 with a `fetch`/IndexedDB stack); the headless `deos-matrix` core compiles to wasm and the gpui `ChatView` paints it — the cleanest fully-in-tab app after the cockpit |
 | **Web-shell** (servo / libservo) | ❌ native-only | servo is a native C++/mozjs engine; there is no in-browser servo. The browser tab already *is* a web engine, so a web-deos "web-shell" surface would be a sandboxed `<iframe>`/native browsing context behind the net-cap gate, not gpui-rendered servo. This is the one app with no gpui-on-web path. |
@@ -296,11 +296,10 @@ the native-resource backends:
    `emberian/zed` fork; see "The fix"). The cockpit now paints a real frame.
 4. **The native-resource backends** (terminal PTY, editor Fs, web-shell servo) —
    each needs its wire per the app map.
-   - **Terminal PTY** — ✅ **WIRED + PROVEN.** `starbridge_web::pty_ws` is the
-     WS↔PTY bridge (native server + wasm `WsTransport`), proven end-to-end by
-     `starbridge-v2/web/tests/pty_ws_e2e.rs` (`2 passed`: a real `$SHELL` on a real PTY echoes
-     `echo`'s marker and returns `pwd`'s cwd over a real WebSocket — the exact
-     byte path the browser `WsTransport` speaks). The remaining seam is purely the
+   - **Terminal PTY** — ✅ **WIRED + PROVEN.** `deos_terminal::pty_server` is the
+     gated WS↔PTY bridge (native server + wasm `WsTransport`), proven by
+     `deos-terminal/tests/pty_ws_e2e.rs` (a real shell over a real WebSocket, and
+     every unauthenticated / foreign-origin connection refused before a PTY opens). The remaining seam is purely the
      gpui-web *view* wiring: the cockpit's terminal pane is `dev-surfaces`
      (alacritty, native-only) today, so the gpui-web cockpit must mount a
      `WsTransport`-backed grid view instead of the alacritty one to surface this
@@ -344,18 +343,11 @@ surface.
 
 - `starbridge-v2/web/src/cockpit_web.rs` — the `boot_cockpit` wasm entrypoint
   that mounts the REAL `starbridge_v2::cockpit::Cockpit` on `gpui_web`.
-- `starbridge-v2/web/src/lib.rs` — declares `cockpit_web` (gated) + `pty_ws` (the
-  terminal backend) alongside the existing `WebImage` atlas skin.
-- `starbridge-v2/web/src/pty_ws.rs` — **the terminal backend wire.** Native:
-  `serve`/`bind_serve` (the WS↔PTY bridge over `portable-pty` + `tokio-tungstenite`).
-  Wasm: `WsTransport` (a `web_sys::WebSocket` feeding PTY bytes through `vte` into
-  a render grid). Shared: the `WireMsg` wire codec (binary frames = PTY data, JSON
-  text frames = resize/exit control). One wire, two ends, one crate.
-- `starbridge-v2/web/src/bin/pty-ws.rs` — the `starbridge-web-pty-ws` server bin
-  (`required-features = ["pty-ws-server"]`); `serve`s `$SHELL` on a PTY per WS conn.
-- `starbridge-v2/web/tests/pty_ws_e2e.rs` — the end-to-end proof: stand up the
-  in-process server on an ephemeral port, drive a real shell over a real WebSocket,
-  assert `echo <marker>` and `pwd` bytes return over the socket. `2 passed`.
+- `starbridge-v2/web/src/lib.rs` — declares `cockpit_web` (gated) alongside the
+  existing `WebImage` atlas skin.
+- `deos-terminal/src/pty_server.rs` + `deos-terminal/src/transport.rs` — **the
+  terminal backend wire** (gated native server; wasm `WsTransport`; the `WireMsg`
+  codec). `deos-terminal/tests/pty_ws_e2e.rs` is its proof.
 - `starbridge-v2/web/Cargo.toml` — the `gpui-web` feature (additive; pulls gpui +
   gpui_platform + gpui-component + web-sys + `starbridge-v2/gpui-web`).
 - `starbridge-v2/Cargo.toml` — the `gpui-web` feature on the main crate (gpui +

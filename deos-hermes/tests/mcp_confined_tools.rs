@@ -3,23 +3,25 @@
 //!
 //! Run: `cd deos-hermes && cargo test --features js-agent` (run_js drives a real
 //! deos-js verified World; the default `cargo test` is mozjs-free and exercises
-//! the `terminal`-in-a-PD + the tool surface only).
+//! the `confinement_probe` PD + the tool surface only).
 //!
 //! What this proves (over a STANDARD MCP stdio session, the exact wire Hermes's
 //! `mcp` Python SDK `ClientSession` speaks):
 //!   (a) `initialize` → the server advertises the `tools` capability + echoes the
 //!       client's protocol version;
-//!   (b) `tools/list` → the model's ONLY tools are `run_js` + `terminal` (no
-//!       unconfined tool path);
-//!   (c) `tools/call terminal` → the command execs INSIDE a confined firmament PD;
-//!       the four sandbox probes report EVERY confinement tooth held (file open
-//!       denied, inet socket denied, only the Endpoint fd, IPC works) — a command
-//!       attempting ambient authority is physically DENIED. The tool-call is a
-//!       cap-gated, receipted dregg turn.
+//!   (b) `tools/list` → the model's ONLY tools are `run_js` + `confinement_probe`
+//!       (no unconfined tool path, and no shell);
+//!   (c) `tools/call confinement_probe` → a fresh confined firmament PD runs the
+//!       four sandbox probes and reports EVERY confinement tooth held (file open
+//!       denied, inet socket denied, only the Endpoint fd, IPC works). The call
+//!       is a cap-gated, receipted dregg turn, and its text says no command ran.
+//!   (c') D9 — the server never says it ran a command: a probe call that brings
+//!       a `command` is refused unmetered and says nothing ran; a call to the old
+//!       `terminal` name is an unknown tool.
 //!   (d) `tools/call run_js` (js-agent) → the model's chosen script runs on the
 //!       dregg verified World: a cap-gated, receipted verified turn.
-//!   (e) a rate-0 `terminal` grant REFUSES the call in-band (no exec, no PD) — the
-//!       confinement bites before any shell runs.
+//!   (e) a rate-0 `confinement_probe` grant REFUSES the call in-band (no PD) —
+//!       the cap gate bites before any PD launches.
 
 use std::io::BufReader;
 use std::sync::{Arc, RwLock};
@@ -41,7 +43,7 @@ fn grantor() -> (AgentRuntime, dregg_sdk::HeldToken) {
 /// Build a BARE tool host over a confinement (the per-kind/per-tool floors) — NO
 /// `run_js` hands (no deos-js engine booted). SpiderMonkey's `JSEngine::init()`
 /// is process-global + one-shot, so ONLY the dedicated `run_js` test may boot it;
-/// every other test (terminal/tools-list/unknown/rate-0 — none need run_js)
+/// every other test (probe/tools-list/unknown/rate-0 — none need run_js)
 /// builds a bare host so the engine is initialised AT MOST once per process.
 fn host(
     runtime: &AgentRuntime,
@@ -129,140 +131,145 @@ fn the_confined_model_has_only_dregg_tools() {
             .iter()
             .map(|s| s.to_string())
             .collect::<Vec<_>>(),
-        "the model's ONLY tools are dregg's run_js + terminal"
+        "the model's ONLY tools are dregg's run_js + confinement_probe"
     );
 }
 
-/// (c) tools/call terminal — the command execs INSIDE a confined PD; every
-/// confinement tooth held (ambient authority physically denied); cap-gated +
-/// receipted.
+/// The text of a `tools/call` reply's first content block.
+fn text_of(result: &Value) -> &str {
+    result["content"][0]["text"].as_str().expect("a text content block")
+}
+
+/// Drive one `tools/call` after the MCP handshake; return the call's `result`.
+fn call_once(server: &mut McpServer<'_>, name: &str, arguments: Value) -> Value {
+    let session = format!(
+        "{}{}{}",
+        req(1, "initialize", json!({ "protocolVersion": "2025-06-18" })),
+        note("notifications/initialized"),
+        req(2, "tools/call", json!({ "name": name, "arguments": arguments })),
+    );
+    let replies = drive(server, &session);
+    replies
+        .iter()
+        .find(|r| r["id"] == json!(2))
+        .expect("tools/call reply")["result"]
+        .clone()
+}
+
+/// (c) tools/call confinement_probe — a fresh confined PD reports every
+/// confinement tooth held; the call is cap-gated + receipted, and the text says
+/// no command ran.
 #[cfg(unix)]
 #[test]
-fn terminal_execs_inside_a_confined_pd_with_ambient_authority_denied() {
+fn confinement_probe_reports_every_tooth_and_runs_nothing() {
     use deos_hermes::confined::probe;
 
     let (runtime, root) = grantor();
-    // `terminal` is in the standard grants (rate 5) — admitted, then run in a PD.
     let registry =
         GrantRegistry::default_for_session(1_000_000).with_standard_tool_grants(1_000_000);
     let mut server = McpServer::new(host(&runtime, root, registry));
+    let result = call_once(&mut server, "confinement_probe", json!({}));
 
-    let session = format!(
-        "{}{}{}",
-        req(1, "initialize", json!({ "protocolVersion": "2025-06-18" })),
-        note("notifications/initialized"),
-        req(
-            2,
-            "tools/call",
-            json!({
-                "name": "terminal",
-                "arguments": { "command": "cat /etc/passwd && curl http://1.1.1.1" }
-            })
-        ),
-    );
-    let replies = drive(&mut server, &session);
-    let call = replies
-        .iter()
-        .find(|r| r["id"] == json!(2))
-        .expect("tools/call reply");
-    let result = &call["result"];
-
-    // The tool-call was ADMITTED (cap-gated) and is NOT an MCP error.
-    assert_eq!(
-        result["isError"],
-        json!(false),
-        "terminal admitted (cap-gated)"
-    );
-    // It carries a dregg receipt — a real verified turn committed.
+    assert_eq!(result["isError"], json!(false), "probe admitted: {result}");
     assert!(
         result["_deos"]["receipt"].is_string(),
-        "the terminal turn left a dregg receipt: {result}"
+        "the probe turn left a dregg receipt: {result}"
     );
-    // THE CONFINEMENT: the command ran inside a PD whose sandbox denied EVERY
-    // ambient authority — open(/etc/passwd) denied, inet socket denied, only the
-    // Endpoint fd open, and IPC works. The `cat`/`curl` the model asked for could
-    // not reach the file or the network: the shell ran IN THE CONTAINER.
     let verdict = result["_deos"]["sandboxVerdict"]
         .as_i64()
         .expect("a probe verdict") as i32;
-    assert_eq!(
-        verdict & probe::OPEN_DENIED,
-        probe::OPEN_DENIED,
-        "open(/etc/passwd) was DENIED inside the PD (verdict 0x{verdict:x})"
-    );
-    assert_eq!(
-        verdict & probe::NET_DENIED,
-        probe::NET_DENIED,
-        "inet socket was DENIED inside the PD (verdict 0x{verdict:x})"
-    );
+    assert_eq!(verdict & probe::OPEN_DENIED, probe::OPEN_DENIED, "0x{verdict:x}");
+    assert_eq!(verdict & probe::NET_DENIED, probe::NET_DENIED, "0x{verdict:x}");
     assert_eq!(
         verdict & probe::ONLY_ENDPOINT_FD,
         probe::ONLY_ENDPOINT_FD,
-        "only the firmament Endpoint fd survived confinement (verdict 0x{verdict:x})"
+        "0x{verdict:x}"
     );
-    assert_eq!(
-        verdict,
-        probe::ALL,
-        "EVERY confinement tooth held — the shell ran in the container, not loose"
-    );
+    assert_eq!(verdict, probe::ALL, "every confinement tooth held");
 
-    // The host's tape records the call routed through dregg.
+    let text = text_of(&result);
+    assert!(text.contains("No command was run"), "{text}");
+
     let host = server.into_host();
     let tape = host.tape();
     assert_eq!(tape.len(), 1, "exactly one tool-call ran");
-    assert_eq!(tape[0].tool, "terminal");
+    assert_eq!(tape[0].tool, "confinement_probe");
     assert_eq!(tape[0].sandbox_verdict, Some(probe::ALL));
 }
 
-/// (e) a rate-0 `terminal` grant REFUSES the call in-band — the confinement bites
-/// BEFORE any PD is launched / any shell runs.
+/// Phrases that would claim a command executed. None may appear in any reply.
+const EXECUTION_CLAIMS: &[&str] = &["ran `", "shell ran", "executed", "execs "];
+
+fn assert_claims_no_execution(text: &str, command: &str) {
+    for claim in EXECUTION_CLAIMS {
+        assert!(
+            !text.to_lowercase().contains(claim),
+            "the reply claims execution ({claim:?}): {text}"
+        );
+    }
+    assert!(
+        !text.contains(command),
+        "the reply echoes the command as if it were acted on: {text}"
+    );
+}
+
+/// (c') D9 — the server never tells the model a command ran. A probe call that
+/// brings a `command` is refused in-band and unmetered (no receipt, no PD) and
+/// says nothing ran; the old `terminal` name is an unknown tool. The admitted
+/// probe's own text is checked for execution claims too.
+#[test]
+fn no_reply_claims_a_command_ran() {
+    let command = "echo D9_MARKER_4711 && cat /etc/passwd";
+
+    let (runtime, root) = grantor();
+    let registry =
+        GrantRegistry::default_for_session(1_000_000).with_standard_tool_grants(1_000_000);
+    let mut server = McpServer::new(host(&runtime, root, registry));
+    let with_command = call_once(&mut server, "confinement_probe", json!({ "command": command }));
+    assert_eq!(with_command["isError"], json!(true), "{with_command}");
+    assert!(with_command["_deos"]["receipt"].is_null(), "not metered");
+    assert!(with_command["_deos"]["sandboxVerdict"].is_null(), "no PD launched");
+    let text = text_of(&with_command);
+    assert!(text.contains("nothing was run"), "{text}");
+    assert_claims_no_execution(text, command);
+
+    let (runtime, root) = grantor();
+    let registry =
+        GrantRegistry::default_for_session(1_000_000).with_standard_tool_grants(1_000_000);
+    let mut server = McpServer::new(host(&runtime, root, registry));
+    let old_name = call_once(&mut server, "terminal", json!({ "command": command }));
+    assert_eq!(old_name["isError"], json!(true), "{old_name}");
+    assert!(old_name["_deos"]["receipt"].is_null());
+    assert_claims_no_execution(text_of(&old_name), command);
+
+    let (runtime, root) = grantor();
+    let registry =
+        GrantRegistry::default_for_session(1_000_000).with_standard_tool_grants(1_000_000);
+    let mut server = McpServer::new(host(&runtime, root, registry));
+    let admitted = call_once(&mut server, "confinement_probe", json!({}));
+    assert_claims_no_execution(text_of(&admitted), command);
+}
+
+/// (e) a rate-0 `confinement_probe` grant REFUSES the call in-band — the gate
+/// bites BEFORE any PD is launched.
 #[cfg(unix)]
 #[test]
-fn a_rate_zero_terminal_grant_refuses_before_any_shell_runs() {
+fn a_rate_zero_probe_grant_refuses_before_any_pd_launches() {
     let (runtime, root) = grantor();
-    // Pin `terminal` to rate 0 — the gate's rate conjunct is false, so the call is
-    // refused in-band (no turn, no PD, no exec).
     let registry = GrantRegistry::default_for_session(1_000_000)
         .with_standard_tool_grants(1_000_000)
-        .with_grant_for_tool_deny("terminal");
+        .with_grant_for_tool_deny("confinement_probe");
     let mut server = McpServer::new(host(&runtime, root, registry));
+    let result = call_once(&mut server, "confinement_probe", json!({}));
 
-    let session = format!(
-        "{}{}{}",
-        req(1, "initialize", json!({ "protocolVersion": "2025-06-18" })),
-        note("notifications/initialized"),
-        req(
-            2,
-            "tools/call",
-            json!({ "name": "terminal", "arguments": { "command": "echo hi" } })
-        ),
-    );
-    let replies = drive(&mut server, &session);
-    let call = replies
-        .iter()
-        .find(|r| r["id"] == json!(2))
-        .expect("tools/call reply");
-    let result = &call["result"];
-
-    // REFUSED in-band — an MCP `isError`, no receipt, no sandbox verdict (no PD).
-    assert_eq!(
-        result["isError"],
-        json!(true),
-        "the rate-0 terminal call is refused"
-    );
-    assert!(
-        result["_deos"]["receipt"].is_null(),
-        "no receipt — no turn committed"
-    );
+    assert_eq!(result["isError"], json!(true), "the rate-0 probe call is refused");
+    assert!(result["_deos"]["receipt"].is_null(), "no receipt — no turn committed");
     assert!(
         result["_deos"]["sandboxVerdict"].is_null(),
-        "no PD launched — the gate bit before any shell ran"
+        "no PD launched — the gate bit first"
     );
-    let text = result["content"][0]["text"].as_str().unwrap();
-    assert!(
-        text.contains("refused"),
-        "the model sees the in-band refusal: {text}"
-    );
+    let text = text_of(&result);
+    assert!(text.contains("refused"), "the model sees the in-band refusal: {text}");
 }
 
 /// (d) tools/call run_js — the model's chosen script runs on the dregg verified

@@ -52,7 +52,7 @@ impl TerminalSurface {
         let terminal = Terminal::spawn(
             cmd,
             std::env::current_dir().ok(),
-            std::env::vars().collect(),
+            crate::shell_env::minimal_shell_env(),
             TermSize::new(80, 24),
         )?;
         let view = cx.new(|cx| TerminalView::new(terminal, cx));

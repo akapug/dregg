@@ -14,11 +14,11 @@
 //! An ACP `session/new` accepts an `mcpServers` list (`acp_adapter/server.py
 //! ::_register_session_mcp_servers` → `tools.mcp_tool.register_mcp_servers` →
 //! the model's `tools` surface). When deos registers a dregg **stdio MCP server**
-//! as the model's tool source, the dregg-confined `run_js` + `terminal` enter the
-//! model's tool surface, and EVERY call the model makes to them routes to THIS
-//! server — a cap-gated, receipted dregg turn (and, for `terminal`, run inside an
-//! OS-sandboxed firmament PD). The model's dregg shell runs *in the container*,
-//! not Hermes's process.
+//! as the model's tool source, the dregg-confined `run_js` + `confinement_probe`
+//! enter the model's tool surface, and EVERY call the model makes to them routes
+//! to THIS server — a cap-gated, receipted dregg turn. This server offers NO
+//! shell: a confined PD has no exec authority, so there is nothing here that
+//! could run a command (see `confinement_probe` below).
 //!
 //! EXCLUSIVITY caveat (named, not laundered): the current `hermes-acp` always
 //! keeps its base `["hermes-acp"]` toolset enabled alongside the MCP servers
@@ -36,7 +36,7 @@
 //! so this server speaks STANDARD MCP:
 //!   * `initialize` → echo the client's `protocolVersion`, advertise `tools`;
 //!   * `notifications/initialized` → ack (no reply);
-//!   * `tools/list` → the dregg tool surface (`run_js`, `terminal`);
+//!   * `tools/list` → the dregg tool surface (`run_js`, `confinement_probe`);
 //!   * `tools/call` → route the named tool through dregg confinement, returning an
 //!     MCP `CallToolResult` ({ content:[{type:"text",…}], isError });
 //!   * `ping` → `{}`.
@@ -54,14 +54,18 @@
 //!   [`crate::world_bridge::SocketWorldSink`] onto the cockpit's served
 //!   `WorldSink` (`starbridge_v2::agent_attach::world_bridge`) — fail-closed
 //!   (socket absent/dead ⇒ the call refuses; never a silent embedded fallback).
-//! * **`terminal`** — the command execs INSIDE a confined firmament PD
-//!   ([`crate::confined::launch_confined`]): file/net/exec are DENIED by the host
-//!   OS sandbox (Seatbelt/seccomp+landlock), the PD's only channel is its
-//!   Endpoint, and the four sandbox probes RUN inside it and report their verdict.
-//!   An attempt at ambient authority (read a file outside the grant / open a
-//!   socket) is physically refused. The command becomes a cap-gated receipted
-//!   turn through the [`HermesGateway`]; the PD's confinement-verdict bitmask is
-//!   returned so the caller can PROVE the shell ran in the container, not loose.
+//! * **`confinement_probe`** — launches a fresh confined firmament PD
+//!   ([`crate::confined::launch_confined`]) and returns the verdict of the four
+//!   sandbox probes run inside it (file open denied, inet socket denied, only the
+//!   Endpoint fd, IPC works). It takes no arguments and RUNS NO COMMAND: the PD's
+//!   OS sandbox (Seatbelt `process-exec*` / seccomp `execve`) denies exec, which
+//!   is the point of the sandbox. The call is a cap-gated receipted turn through
+//!   the [`HermesGateway`]; the receipt attests a probe, not a command.
+//!
+//!   (D9: this tool used to be `terminal`, took a `command`, ignored it, and
+//!   answered "ran `<command>` inside a dregg PD … The shell ran in the
+//!   container". Nothing ran. It is named for what it does now, and a
+//!   `terminal` call is refused as an unknown tool.)
 //!
 //! The model has NO other tool path — `tools/list` returns exactly these.
 
@@ -79,11 +83,11 @@ pub const MCP_FALLBACK_PROTOCOL_VERSION: &str = "2025-06-18";
 /// The dregg tool surface advertised over MCP — the ONLY tools a confined Hermes
 /// may call. Each name maps to a dregg-confined execution path in
 /// [`McpToolHost::call_tool`].
-pub const DREGG_TOOL_NAMES: &[&str] = &["run_js", "terminal"];
+pub const DREGG_TOOL_NAMES: &[&str] = &["run_js", "confinement_probe"];
 
 /// The result of one dregg-confined `tools/call`: the model-visible text + the
 /// dregg receipt (proof a verified turn committed) + structured confinement
-/// evidence (for `terminal`, the sandbox-probe verdict). Surfaced both into the
+/// evidence (for `confinement_probe`, the sandbox-probe verdict). Surfaced both into the
 /// MCP `CallToolResult` AND kept on the host's tape for the caller to assert.
 #[derive(Clone, Debug, Default)]
 pub struct ConfinedToolResult {
@@ -95,7 +99,7 @@ pub struct ConfinedToolResult {
     /// in-band refusal the model sees (an MCP `isError` result).
     pub admitted: bool,
     /// Legacy receipt field: the first resource-fire receipt for `run_js`, or
-    /// the gateway's admission receipt for `terminal` (hex).
+    /// the gateway's admission receipt for `confinement_probe` (hex).
     pub receipt: Option<String>,
     /// Every resource-fire receipt from `run_js`, in commit order. The legacy
     /// `receipt` field retains its first-receipt meaning for this tool.
@@ -103,7 +107,10 @@ pub struct ConfinedToolResult {
     /// A script failure after admission. Earlier receipts remain committed;
     /// admission alone must not make this a successful MCP tool result.
     pub script_error: Option<String>,
-    /// For `terminal`: the confined-PD sandbox-probe verdict bitmask
+    /// A failure after admission that is not a script error (the probe PD did
+    /// not launch). Makes the MCP result an error.
+    pub tool_error: Option<String>,
+    /// For `confinement_probe`: the confined-PD sandbox-probe verdict bitmask
     /// ([`crate::confined::probe`]). `Some(probe::ALL)` = every confinement tooth
     /// held (file open denied, inet socket denied, only the Endpoint fd, IPC
     /// works). `None` for tools that do not spawn a PD.
@@ -171,7 +178,7 @@ impl WorldBridge {
 /// The agent's `run_js` hands inside the MCP server: the [`crate::RunJsTool`]
 /// (mounted under `held`) + the process-global deos-js [`JsRuntime`]. The
 /// accountability gateway is the HOST's [`McpToolHost::gateway`] — the SAME gate
-/// `terminal` meters on, so the whole session shares one receipted ledger.
+/// `confinement_probe` meters on, so the whole session shares one receipted ledger.
 #[cfg(feature = "js-agent")]
 struct JsHands {
     tool: crate::run_js::RunJsTool,
@@ -265,22 +272,19 @@ impl<'rt> McpToolHost<'rt> {
                     }
                 },
                 {
-                    "name": "terminal",
-                    "title": "Run a shell command inside the dregg container sandbox",
+                    "name": "confinement_probe",
+                    "title": "Probe the dregg confined-PD sandbox (runs no command)",
                     "description":
-                        "Run a shell command inside a dregg protection-domain: file, \
-                         network, and exec are denied by the OS sandbox; the command's \
-                         intent becomes a cap-gated receipted turn. Use this for any \
-                         shell work — there is no unconfined shell.",
+                        "Launch a fresh confined dregg protection-domain and report \
+                         which ambient authorities its OS sandbox refused (reading a \
+                         host file, opening an inet socket, holding any fd but its \
+                         Endpoint) and whether its Endpoint round-trips. Takes no \
+                         arguments and runs no command: a confined PD has no exec \
+                         authority. This server offers no shell.",
                     "inputSchema": {
                         "type": "object",
-                        "properties": {
-                            "command": {
-                                "type": "string",
-                                "description": "The shell command to run (inside the dregg sandbox)."
-                            }
-                        },
-                        "required": ["command"]
+                        "properties": {},
+                        "additionalProperties": false
                     }
                 }
             ]
@@ -297,7 +301,7 @@ impl<'rt> McpToolHost<'rt> {
         let now = self.clock;
         let result = match name {
             "run_js" => self.call_run_js(arguments, now),
-            "terminal" => self.call_terminal(arguments, now),
+            "confinement_probe" => self.call_confinement_probe(arguments, now),
             other => ConfinedToolResult {
                 tool: other.to_string(),
                 text: format!(
@@ -505,143 +509,128 @@ impl<'rt> McpToolHost<'rt> {
         }
     }
 
-    /// `terminal` — the command execs INSIDE a confined firmament PD. The
-    /// confinement is REAL: [`crate::confined::launch_confined`] forks an
-    /// OS-sandboxed child (Seatbelt/seccomp+landlock) whose ONLY channel is its
-    /// Endpoint; file/net/exec are denied. The body runs the FOUR sandbox probes
-    /// (open denied / inet denied / only-Endpoint-fd / IPC works) and reports the
-    /// verdict bitmask. The command itself becomes a cap-gated receipted turn
-    /// through the gateway. So a command attempting ambient authority is
-    /// physically DENIED — the shell ran in the container, not loose.
+    /// `confinement_probe` — launch a fresh confined firmament PD and report the
+    /// verdict of the sandbox probes run inside it. Nothing the model supplies
+    /// runs anywhere: the PD's sandbox denies exec, so the tool takes no
+    /// arguments and refuses a call that brings any (a `command` would otherwise
+    /// be silently dropped — the D9 shape). An admitted call is a cap-gated,
+    /// receipted turn whose payload is the probe, not a command.
     #[cfg(unix)]
-    fn call_terminal(&mut self, arguments: &Value, now: i64) -> ConfinedToolResult {
-        let command = arguments
-            .get("command")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+    fn call_confinement_probe(&mut self, arguments: &Value, now: i64) -> ConfinedToolResult {
+        if let Some(refusal) = refuse_probe_arguments(arguments) {
+            return refusal;
+        }
 
-        // (1) THE AUTHORITY FACE — the `terminal` tool-call is a cap-gated,
-        //     metered, receipted dregg turn (or an in-band refusal). This is the
-        //     SAME gate the rate-0 `live-refuse` demo bites on.
         let call = ToolCallRequest::new(
             "mcp",
-            "tc-terminal",
-            "terminal",
-            json!({ "command": command }),
+            "tc-confinement-probe",
+            "confinement_probe",
+            json!({}),
         );
         let outcome = self.gateway.admit_call(&call, now);
-        let admitted = outcome.allowed();
         let receipt = match &outcome {
             PermissionOutcome::Allow { receipt, .. } => Some(receipt.clone()),
             PermissionOutcome::Reject { .. } => None,
         };
-        if !admitted {
+        if !outcome.allowed() {
             return ConfinedToolResult {
-                tool: "terminal".into(),
+                tool: "confinement_probe".into(),
                 text: format!(
-                    "terminal refused (cap-gated, no exec): {}",
+                    "confinement_probe refused by the cap gate (no PD launched): {}",
                     refusal_text(&outcome)
                 ),
                 admitted: false,
-                receipt: None,
-                sandbox_verdict: None,
-                fires_committed: 0,
                 ..Default::default()
             };
         }
 
-        // (2) THE AMBIENT FACE — exec the command INSIDE a confined PD. The body
-        //     runs the sandbox probes (proving ambient authority is denied) and
-        //     reports the verdict bitmask via the PD exit code.
-        let verdict = run_command_in_confined_pd(&command);
-        let confined = matches!(&verdict, Ok(v) if *v == crate::confined::probe::ALL);
-        let sandbox_verdict = verdict.as_ref().ok().copied();
-        let text = match &verdict {
-            Ok(v) => format!(
-                "ran `{}` inside a dregg PD: confinement verdict 0x{v:x} ({}). \
-                 The shell ran in the container — file/net/exec denied; \
-                 ambient-authority attempts refused. Receipt {}.",
-                command,
-                if confined {
-                    "ALL teeth held"
-                } else {
-                    "PARTIAL — see probe bits"
-                },
-                receipt.as_deref().unwrap_or("(none)")
-            ),
-            Err(e) => format!(
-                "could not launch the dregg PD for `{}`: {e}. \
-                 (No unconfined fallback — fail-closed.)",
-                command
-            ),
-        };
-        ConfinedToolResult {
-            tool: "terminal".into(),
-            text,
-            admitted,
-            receipt,
-            sandbox_verdict,
-            fires_committed: 0,
-            ..Default::default()
+        match probe_confined_pd() {
+            Ok(v) => ConfinedToolResult {
+                tool: "confinement_probe".into(),
+                text: format!(
+                    "confinement probe: a fresh confined dregg PD reported sandbox verdict \
+                     0x{v:x} ({}). No command was run: the PD has no exec authority. \
+                     Receipt {}.",
+                    if v == crate::confined::probe::ALL {
+                        "every probe held: host-file open denied, inet socket denied, \
+                         only the Endpoint fd, Endpoint round-trip works"
+                    } else {
+                        "PARTIAL — see the probe bits"
+                    },
+                    receipt.as_deref().unwrap_or("(none)")
+                ),
+                admitted: true,
+                receipt,
+                sandbox_verdict: Some(v),
+                ..Default::default()
+            },
+            Err(e) => ConfinedToolResult {
+                tool: "confinement_probe".into(),
+                text: format!(
+                    "confinement_probe: the confined PD did not launch ({e}); nothing was \
+                     probed and no command was run."
+                ),
+                admitted: true,
+                receipt,
+                tool_error: Some(e.to_string()),
+                ..Default::default()
+            },
         }
     }
 
-    /// `terminal` on a non-Unix host — the confined-PD sandbox is Unix-only; the
-    /// gate still cap-checks the call, and the exec seam is named (no unconfined
-    /// fallback).
+    /// `confinement_probe` on a non-Unix host: the confined-PD sandbox is
+    /// Unix-only, so nothing can be probed. Refused without metering a turn.
     #[cfg(not(unix))]
-    fn call_terminal(&mut self, arguments: &Value, now: i64) -> ConfinedToolResult {
-        let command = arguments
-            .get("command")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let call = ToolCallRequest::new(
-            "mcp",
-            "tc-terminal",
-            "terminal",
-            json!({ "command": command }),
-        );
-        let outcome = self.gateway.admit_call(&call, now);
+    fn call_confinement_probe(&mut self, arguments: &Value, _now: i64) -> ConfinedToolResult {
+        if let Some(refusal) = refuse_probe_arguments(arguments) {
+            return refusal;
+        }
         ConfinedToolResult {
-            tool: "terminal".into(),
-            text: "terminal: the confined-PD sandbox is Unix-only on this host; \
-                   the cap gate still metered the call, but no exec environment is available."
+            tool: "confinement_probe".into(),
+            text: "confinement_probe: the confined-PD sandbox is Unix-only; nothing was \
+                   probed and no command was run."
                 .into(),
-            admitted: outcome.allowed(),
-            receipt: match &outcome {
-                PermissionOutcome::Allow { receipt, .. } => Some(receipt.clone()),
-                PermissionOutcome::Reject { .. } => None,
-            },
-            sandbox_verdict: None,
-            fires_committed: 0,
+            admitted: false,
             ..Default::default()
         }
     }
 }
 
-/// Exec a command inside a confined firmament PD, returning the sandbox-probe
-/// verdict bitmask the PD body reports ([`crate::confined::probe::ALL`] = every
-/// confinement tooth held). The body proves the shell ran in the container: it
-/// runs the four probes (file open denied, inet socket denied, only the Endpoint
-/// fd open) and folds the verdict into the PD exit code.
-///
-/// The `_command` is recorded as the intent; under Phase-0 Endpoint-only
-/// confinement the PD has NO exec authority (that IS the sandbox — `execve` is
-/// denied), so the body does not `execve` an OS shell. The confinement verdict
-/// proves the ambient authority a real shell would need is physically refused.
+/// `confinement_probe` takes no arguments. A call that brings any (a `command`,
+/// most likely) is refused in-band, unmetered, and the refusal says plainly that
+/// nothing ran.
+fn refuse_probe_arguments(arguments: &Value) -> Option<ConfinedToolResult> {
+    let empty = match arguments {
+        Value::Null => true,
+        Value::Object(m) => m.is_empty(),
+        _ => false,
+    };
+    if empty {
+        return None;
+    }
+    Some(ConfinedToolResult {
+        tool: "confinement_probe".into(),
+        text: "confinement_probe takes no arguments and runs no command; nothing was run. \
+               This server offers no shell: a confined dregg PD has no exec authority."
+            .into(),
+        admitted: false,
+        ..Default::default()
+    })
+}
+
+/// Launch a confined firmament PD and return the sandbox-probe verdict bitmask
+/// its body reports ([`crate::confined::probe::ALL`] = every tooth held). The
+/// body runs the four probes (host-file open denied, inet socket denied, only
+/// the Endpoint fd open) and one Endpoint round-trip, and folds the verdict into
+/// the PD exit code. It executes nothing else — under Endpoint-only confinement
+/// the PD cannot `execve`.
 #[cfg(unix)]
-fn run_command_in_confined_pd(_command: &str) -> std::io::Result<i32> {
+fn probe_confined_pd() -> std::io::Result<i32> {
     use dregg_firmament::process_kernel::ProcessKernel;
 
     let kernel = ProcessKernel::new();
-    // The confined body: run the sandbox probes (ambient authority denied) and
-    // a tiny Endpoint round-trip so IPC_WORKS is set, then fold the verdict.
     let agent = crate::confined::launch_confined(&kernel, move |sock| {
-        // Prove confinement: the four probes (open/inet denied, only Endpoint).
         let mut verdict = crate::confined::run_sandbox_probes();
-        // Prove the Endpoint round-trips (the only channel): write one ack line.
         use std::io::Write;
         if sock
             .write_all(b"{\"confined\":true}\n")
@@ -672,7 +661,7 @@ fn run_command_in_confined_pd(_command: &str) -> std::io::Result<i32> {
 fn call_tool_result_value(r: &ConfinedToolResult) -> Value {
     json!({
         "content": [ { "type": "text", "text": r.text } ],
-        "isError": !r.admitted || r.script_error.is_some(),
+        "isError": !r.admitted || r.script_error.is_some() || r.tool_error.is_some(),
         // deos extension: the receipt + confinement evidence (ignored by a plain
         // MCP client, surfaced by deos's own inspector / the live bake).
         "_deos": {
@@ -680,6 +669,7 @@ fn call_tool_result_value(r: &ConfinedToolResult) -> Value {
             "receipt": r.receipt,
             "receipts": r.receipts,
             "scriptError": r.script_error,
+            "toolError": r.tool_error,
             "sandboxVerdict": r.sandbox_verdict,
             "firesCommitted": r.fires_committed
         }

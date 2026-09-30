@@ -115,3 +115,63 @@ fn create_file_then_save_is_a_real_cell() {
     assert_eq!(block_on(Fs::load(&fzfs, path)).unwrap(), "created then saved");
     assert!(fzfs.receipt_count() >= 1, "create + save left at least one receipt");
 }
+
+/// D11: delete operations refuse instead of reporting a removal that did not
+/// happen — the cell (and its content) is still there afterwards, and the caller
+/// was told so.
+#[test]
+fn remove_and_trash_refuse_and_the_cell_remains() {
+    let fzfs = FirmamentZedFs::new();
+    let path = Path::new("/proj/secret.txt");
+    fzfs.seed_file(path, "hunter2").unwrap();
+    let opts = fs::RemoveOptions { recursive: false, ignore_if_not_exists: false };
+
+    let err = block_on(Fs::remove_file(&fzfs, path, opts)).unwrap_err();
+    assert!(format!("{err}").contains("cannot remove"), "{err}");
+    let err = block_on(Fs::remove_file(
+        &fzfs,
+        path,
+        fs::RemoveOptions { recursive: false, ignore_if_not_exists: true },
+    ))
+    .unwrap_err();
+    assert!(format!("{err}").contains("cannot remove"), "an existing cell is not 'absent': {err}");
+    let err = block_on(Fs::remove_dir(
+        &fzfs,
+        Path::new("/proj"),
+        fs::RemoveOptions { recursive: true, ignore_if_not_exists: false },
+    ))
+    .unwrap_err();
+    assert!(format!("{err}").contains("cannot remove directory"), "{err}");
+    assert!(block_on(Fs::trash(&fzfs, path, opts)).is_err());
+
+    assert_eq!(block_on(Fs::load(&fzfs, path)).unwrap(), "hunter2", "the cell remains");
+    assert!(block_on(Fs::is_file(&fzfs, path)));
+    assert!(block_on(Fs::is_dir(&fzfs, Path::new("/proj"))));
+
+    // Removing something that is not there, when the caller allows that, is a
+    // truthful Ok — nothing was there to remove.
+    let absent = fs::RemoveOptions { recursive: false, ignore_if_not_exists: true };
+    block_on(Fs::remove_file(&fzfs, Path::new("/proj/never.txt"), absent)).unwrap();
+    block_on(Fs::remove_dir(&fzfs, Path::new("/nowhere"), absent)).unwrap();
+}
+
+/// D11: a rename that would leave the source behind (every rename to a new path,
+/// with no removal primitive) refuses before writing anything — it is not
+/// silently a copy.
+#[test]
+fn a_moving_rename_refuses_and_writes_nothing() {
+    let fzfs = FirmamentZedFs::new();
+    let src = Path::new("/proj/old.rs");
+    let dst = Path::new("/proj/new.rs");
+    fzfs.seed_file(src, "fn old() {}").unwrap();
+    let receipts = fzfs.receipt_count();
+
+    let err = block_on(Fs::rename(&fzfs, src, dst, fs::RenameOptions::default())).unwrap_err();
+    assert!(format!("{err}").contains("cannot rename"), "{err}");
+    assert!(!block_on(Fs::is_file(&fzfs, dst)), "no target cell was written");
+    assert_eq!(fzfs.receipt_count(), receipts, "no turn ran");
+    assert_eq!(block_on(Fs::load(&fzfs, src)).unwrap(), "fn old() {}");
+
+    // A rename onto itself moves nothing and leaves nothing behind.
+    block_on(Fs::rename(&fzfs, src, src, fs::RenameOptions::default())).unwrap();
+}

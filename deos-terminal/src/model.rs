@@ -214,13 +214,32 @@ pub struct Terminal {
 
 impl Terminal {
     /// Spawn `$SHELL` (or `shell_override`) on a fresh PTY and start the event
-    /// loop. `working_directory` is the shell's cwd; `env` are extra vars.
+    /// loop. `working_directory` is the shell's cwd.
+    ///
+    /// `env` is the child's COMPLETE environment: nothing this process inherited
+    /// reaches the shell unless it is in `env`. Build it with
+    /// [`crate::shell_env::minimal_shell_env`] for an interactive shell.
+    ///
+    /// alacritty's `tty::new` builds a `std::process::Command`, which inherits the
+    /// parent environment, and its `Options::env` only ADDS variables. So the
+    /// strip happens at exec: the child is launched through `/usr/bin/env -u NAME
+    /// …` for every inherited name not in `env` (names only on argv; values ride
+    /// the environment). A host variable whose name is not UTF-8 cannot be named
+    /// that way, so the spawn refuses rather than let it through.
     pub fn spawn(
         shell_override: Option<(String, Vec<String>)>,
         working_directory: Option<std::path::PathBuf>,
         env: HashMap<String, String>,
         size: TermSize,
     ) -> anyhow::Result<Self> {
+        let (program, args) = match shell_override {
+            Some(shell) => shell,
+            None => (default_shell(&env), Vec::new()),
+        };
+        let inherited = inherited_env_names()?;
+        let wrapped = env_strip_argv(&inherited, &env, &program, &args)?;
+        let shell_override = Some(wrapped);
+
         let listener = DeosListener::new();
 
         let config = Config {
@@ -584,5 +603,122 @@ fn indexed_256(idx: u8) -> Rgba {
             let v = (idx - 232) * 10 + 8;
             Rgba::new(v, v, v)
         }
+    }
+}
+
+/// The program that performs the environment strip for [`Terminal::spawn`].
+#[cfg(unix)]
+const ENV_PROGRAM: &str = "/usr/bin/env";
+
+/// Variables alacritty's `tty::new` sets on the child itself (after inheriting
+/// the parent environment). They are stripped like any inherited name unless the
+/// caller's `env` names them.
+const ALACRITTY_SET_VARS: &[&str] = &["ALACRITTY_WINDOW_ID", "WINDOWID", "USER", "HOME"];
+
+/// The shell to run when the caller gave no override: the child environment's
+/// `SHELL`, else this process's, else `/bin/sh`.
+fn default_shell(env: &HashMap<String, String>) -> String {
+    env.get("SHELL")
+        .cloned()
+        .or_else(|| std::env::var("SHELL").ok())
+        .unwrap_or_else(|| "/bin/sh".to_string())
+}
+
+/// Every environment variable name this process holds.
+fn inherited_env_names() -> anyhow::Result<Vec<String>> {
+    std::env::vars_os()
+        .map(|(name, _)| {
+            name.into_string().map_err(|name| {
+                anyhow::anyhow!(
+                    "refusing to spawn a terminal: host environment variable name {name:?} \
+                     is not UTF-8, so it cannot be stripped from the child"
+                )
+            })
+        })
+        .collect()
+}
+
+/// The `(program, args)` alacritty should exec so the child environment is
+/// exactly `env` (plus nothing inherited): `/usr/bin/env -u N1 -u N2 … -- program
+/// args…` for every name in `inherited` ∪ [`ALACRITTY_SET_VARS`] that `env` does
+/// not define. Pure, so the strip is testable without a PTY.
+#[cfg(unix)]
+pub fn env_strip_argv(
+    inherited: &[String],
+    env: &HashMap<String, String>,
+    program: &str,
+    args: &[String],
+) -> anyhow::Result<(String, Vec<String>)> {
+    // `env` reads a leading `NAME=value` operand as an assignment, even after
+    // `--`; a program path containing `=` would be misparsed.
+    if program.contains('=') {
+        anyhow::bail!("refusing to spawn a terminal: shell path {program:?} contains '='");
+    }
+    let mut unset: std::collections::BTreeSet<&str> = inherited
+        .iter()
+        .map(String::as_str)
+        .chain(ALACRITTY_SET_VARS.iter().copied())
+        .filter(|name| !name.is_empty() && !env.contains_key(*name))
+        .collect();
+    // A name containing '=' cannot exist in a real environment; drop it rather
+    // than hand `env` an option it rejects.
+    unset.retain(|name| !name.contains('='));
+    let mut argv = Vec::with_capacity(unset.len() * 2 + args.len() + 2);
+    for name in unset {
+        argv.push("-u".to_string());
+        argv.push(name.to_string());
+    }
+    argv.push("--".to_string());
+    argv.push(program.to_string());
+    argv.extend(args.iter().cloned());
+    Ok((ENV_PROGRAM.to_string(), argv))
+}
+
+/// Non-Unix hosts have no `env` program to strip through, and alacritty's
+/// Windows backend inherits the parent environment the same way; refuse rather
+/// than hand the shell the whole host environment.
+#[cfg(not(unix))]
+pub fn env_strip_argv(
+    _inherited: &[String],
+    _env: &HashMap<String, String>,
+    _program: &str,
+    _args: &[String],
+) -> anyhow::Result<(String, Vec<String>)> {
+    anyhow::bail!("refusing to spawn a terminal: environment stripping is Unix-only")
+}
+
+#[cfg(all(test, unix))]
+mod env_strip_tests {
+    use super::*;
+
+    #[test]
+    fn every_inherited_name_outside_env_is_unset_and_no_value_is_on_argv() {
+        let inherited = vec![
+            "PATH".to_string(),
+            "ANTHROPIC_API_KEY".to_string(),
+            "HERMES_API_KEY".to_string(),
+        ];
+        let mut env = HashMap::new();
+        env.insert("PATH".to_string(), "/bin".to_string());
+        env.insert("PS1".to_string(), "$ ".to_string());
+        let (prog, argv) =
+            env_strip_argv(&inherited, &env, "/bin/sh", &["-i".to_string()]).unwrap();
+        assert_eq!(prog, "/usr/bin/env");
+        let unset: Vec<&str> = argv
+            .chunks(2)
+            .take_while(|c| c[0] == "-u")
+            .map(|c| c[1].as_str())
+            .collect();
+        assert_eq!(
+            unset,
+            ["ALACRITTY_WINDOW_ID", "ANTHROPIC_API_KEY", "HERMES_API_KEY", "HOME", "USER", "WINDOWID"]
+        );
+        assert_eq!(&argv[argv.len() - 3..], ["--", "/bin/sh", "-i"]);
+        assert!(!argv.iter().any(|a| a == "/bin" || a == "$ "), "no value on argv");
+    }
+
+    #[test]
+    fn a_shell_path_with_equals_is_refused() {
+        assert!(env_strip_argv(&[], &HashMap::new(), "/tmp/a=b", &[]).is_err());
     }
 }

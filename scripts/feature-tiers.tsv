@@ -47,10 +47,10 @@
 #   dropped. The `#!` counts below are rewritten to match, so a regen always shows in a diff.
 #
 # crate	feature	tier	why
-#!EXPECT_PAIRS=225
+#!EXPECT_PAIRS=224
 #!EXPECT_T1=136
 #!EXPECT_T2=3
-#!EXPECT_T3=77
+#!EXPECT_T3=76
 #!EXPECT_T4=9
 agent-platform	live-brain	T3	drive_live wires dregg-agent's real OpenAI-compatible HTTP transport as a rented grain's brain (BYO key from env). Compile-only here; the live call needs credentials
 attested-dm	tlsn-live	T3	optional dep on dregg-zkoracle-live: attests the narration over a GENUINE local MPC-TLS 2PC roundtrip instead of the modeled ed25519 carrier
@@ -272,6 +272,5 @@ starbridge-v2	servo	T1	starbridge-v2-installers.yml:200,386 cargo build --releas
 starbridge-v2	web-shell	T1	starbridge-v2-installers.yml:200,386 cargo build --release --features desktop -> web-shell: the real libservo WebView as the web-content render path
 starbridge-web	default	T1	default@.
 starbridge-web	gpui-web	T3	starbridge-v2's gpui-web plus the gpui crates directly, so cockpit_web can build an element tree. pages.yml:123 is its only builder and fires only by hand
-starbridge-web	pty-ws-server	T3	the native PTY-over-WS terminal backend (server bin + deps), cfg(not(wasm32))-gated
 starbridge-web-surface	default	T1	default@.
 starbridge-web-surface	stream	T1	default@.

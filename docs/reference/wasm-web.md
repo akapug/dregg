@@ -249,20 +249,15 @@ rendered into the ONE gpui_web canvas:
 The cockpit does NOT pull deos-zed/deos-matrix's own `gui`/`cockpit-surface`
 features (those link native windowing, which cannot reach wasm32, `:25-27`).
 
-### `pty_ws` — the terminal pane's PTY-over-WebSocket bridge
+### The terminal pane's PTY-over-WebSocket bridge lives in `deos-terminal`
 
-`pty_ws.rs` shares one wire codec, `WireMsg` (Resize / Exit, JSON in text frames;
-raw PTY bytes ride binary frames, `:40-65`), across two ends:
+starbridge-web used to carry its own `pty_ws` module (server + wasm client + a
+`starbridge-web-pty-ws` bin) — an ungated second copy of `deos-terminal`'s. It was
+deleted (D1, 2026-09-30). The one bridge is:
 
-- **native** (`cfg(not(wasm32))`, feature `pty-ws-server`): `serve`/`bind_serve`
-  (`:93`, `:113`) bind a TCP listener and give each connection a fresh `$SHELL` on
-  a PTY, splicing client binary frames → PTY stdin and PTY output → client binary
-  frames (`:67-273`). Run by the `starbridge-web-pty-ws` bin
-  (`starbridge-v2/web/Cargo.toml:14-17`).
-- **wasm** (`cfg(wasm32)`): `WsTransport` (`:385-`) — a `web_sys::WebSocket` to
-  that server, speaking the SAME wire, that the gpui-web terminal pane dials
-  (`:20-24`). The e2e test (`starbridge-v2/web/tests/pty_ws_e2e.rs`) is a native WS client against
-  the same server, proving the wire.
-
-The default `starbridge-web` build (`WebImage`, JSON/atlas skin) carries only the
-`WsTransport` client half; `gpui-web` is purely additive (`Cargo.toml:24-25`).
+- **native**: `deos_terminal::pty_server` (feature `pty-ws-server`), run by the
+  `deos-terminal-pty-ws` bin. Loopback bind by default, an `Origin` allowlist in
+  the handshake, and a per-server session token checked before any PTY opens.
+- **wasm**: `deos_terminal::transport::WsTransport::connect(url, token, cols, rows)`,
+  which presents the token as its first frame (`WireMsg::Auth`).
+- proof: `deos-terminal/tests/pty_ws_e2e.rs`.

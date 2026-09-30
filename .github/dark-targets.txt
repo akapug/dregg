@@ -398,8 +398,7 @@ never-run deos-hermes test node_backed_round_trip   # `node-brain`, ditto.
 # FEATURES, not on the runner's OS, so it can see the twin and not the empty one. Stated,
 # not hidden.
 
-# ── ENVIRONMENT / PLATFORM (4) ───────────────────────────────────────────────────────
-never-run starbridge-web test pty_ws_e2e   # `pty-ws-server`: a real PTY + websocket server end to end.
+# ── ENVIRONMENT / PLATFORM (3) ───────────────────────────────────────────────────────
 never-run starbridge-web test web_panes_wasm   # `gpui-web` + `target_arch = "wasm32"`: needs wasm-pack in a browser, not `cargo test`.
 never-run starbridge-v2 test migrate_shell_dispatch   # `process-pd`: unix fork/socketpair + seatbelt-or-LSM sandbox; also needs `embedded-executor`.
 # ⚑ THE ONE OF THE 2026-08-08 EIGHT THAT IS NOT WIRING (decided per target, not by class).

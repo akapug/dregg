@@ -36,10 +36,12 @@ required-features = ["pty-ws-server"]
 default = ["native-ui", "pty-ws-server"]
 
 # The gpui view + alacritty grid model + the native (PTY) transport. Native-only.
-native-ui = []
+# The heavy native deps are optional behind it, so a consumer that wants only the
+# pty-ws server (starbridge-web) does not pull gpui/alacritty.
+native-ui = ["dep:alacritty_terminal", "dep:gpui", "dep:gpui_platform", "dep:bitflags", "dep:parking_lot", "dep:libc"]
 
 # The PTY-over-WebSocket server bin + its native PTY/WS deps.
-pty-ws-server = ["dep:tokio", "dep:tokio-tungstenite", "dep:futures-util", "dep:portable-pty"]
+pty-ws-server = ["dep:tokio", "dep:tokio-tungstenite", "dep:futures-util", "dep:portable-pty", "dep:getrandom"]
 
 # Build the `cockpit_surface` adapter module (the dock-mountable `TerminalSurface`
 # handle). Off by default so the standalone demo doesn't pull it; starbridge-v2
@@ -60,16 +62,16 @@ serde_json = "1"
 # The terminal model: a real PTY + xterm/vt parser + grid, the exact fork+rev Zed
 # pins (and that our gpui fork's terminal crate compiled against), so the API
 # matches what we read out of Zed's `alacritty.rs`.
-alacritty_terminal = { git = "https://github.com/zed-industries/alacritty", rev = "fcf32feacb367b75ec84dd40f041e4fd411d3cc1" }
+alacritty_terminal = { git = "https://github.com/zed-industries/alacritty", rev = "fcf32feacb367b75ec84dd40f041e4fd411d3cc1", optional = true }
 
 # The gpui view layer — our dregg-owned fork (byte-identical gpui API to the Zed
 # rev gpui-component pins). default-features off matches starbridge-v2's usage.
-gpui = { git = "https://github.com/emberian/zed", rev = "adb9026524", default-features = false }
-gpui_platform = { git = "https://github.com/emberian/zed", rev = "adb9026524", features = ["font-kit", "runtime_shaders"] }
+gpui = { git = "https://github.com/emberian/zed", rev = "adb9026524", default-features = false, optional = true }
+gpui_platform = { git = "https://github.com/emberian/zed", rev = "adb9026524", features = ["font-kit", "runtime_shaders"], optional = true }
 
-bitflags = "2"
-parking_lot = "0.12"
-libc = "0.2"
+bitflags = { version = "2", optional = true }
+parking_lot = { version = "0.12", optional = true }
+libc = { version = "0.2", optional = true }
 
 # The PTY-over-WS dev backend (a small tokio + tokio-tungstenite server + a real
 # PTY via portable-pty). Optional, pulled by the `pty-ws-server` feature.
@@ -77,6 +79,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-uti
 tokio-tungstenite = { version = "0.24", optional = true }
 futures-util = { version = "0.3", optional = true }
 portable-pty = { version = "0.8", optional = true }
+# The pty-ws session token (32 bytes from the OS RNG).
+getrandom = { version = "0.3", optional = true }
 
 # ── wasm deps (the WebSocket transport the browser terminal speaks) ──────────
 # On wasm32 the transport is a `web_sys::WebSocket` to the pty-ws server: it sends
@@ -97,7 +101,7 @@ web-sys = { version = "0.3", features = [
 # Native dev-deps for the end-to-end PTY-over-WS test: a real tungstenite WS
 # client that dials the `deos-terminal-pty-ws` server bin and proves the wire.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "process"] }
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
 

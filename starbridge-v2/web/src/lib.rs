@@ -28,12 +28,9 @@ use starbridge_v2::world::{self, World};
 #[cfg(all(target_arch = "wasm32", feature = "gpui-web"))]
 pub mod cockpit_web;
 
-// THE WEB COCKPIT'S TERMINAL BACKEND — a PTY over a WebSocket. The native side is
-// the WS↔PTY server (`pty_ws::serve`, behind `pty-ws-server`, run by the
-// `starbridge-web-pty-ws` bin); the wasm side is the `WsTransport` client the
-// in-browser terminal pane dials. One wire codec (`WireMsg`) shared by both ends.
-// See docs/deos/WEB-DEOS.md (the per-app backend map: Terminal).
-pub mod pty_ws;
+// The web cockpit's terminal backend is `deos_terminal::pty_server` (native, gated:
+// loopback bind + Origin allowlist + session token) and
+// `deos_terminal::transport::WsTransport` (wasm). See docs/deos/WEB-DEOS.md.
 
 #[wasm_bindgen]
 pub struct WebImage {

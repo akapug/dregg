@@ -92,3 +92,47 @@ fn pty_resizes_without_panicking() {
     assert_eq!(content.columns, 120);
     assert_eq!(content.screen_lines, 40);
 }
+
+/// D10: the child environment is exactly the map handed to `Terminal::spawn` —
+/// a variable this process holds does not reach the shell unless named. The
+/// positive half (a named variable does arrive) keeps the probe honest: if the
+/// shell never expanded anything, both halves could not pass together.
+#[test]
+fn host_environment_does_not_reach_the_shell() {
+    // A secret-shaped variable in THIS process's environment.
+    std::env::set_var("DEOS_D10_HOST_SECRET", "leaked-host-secret");
+
+    let shell = ("/bin/sh".to_string(), vec!["-i".to_string()]);
+    let mut env = HashMap::new();
+    env.insert("PS1".to_string(), "$ ".to_string());
+    env.insert("ENV".to_string(), String::new());
+    env.insert("DEOS_D10_NAMED".to_string(), "named-ok".to_string());
+
+    let term = Terminal::spawn(
+        Some(shell),
+        std::env::current_dir().ok(),
+        env,
+        TermSize::new(120, 24),
+    )
+    .expect("spawn shell");
+    assert!(
+        wait_for(&term, Duration::from_secs(5), |t| t.generation() > 0),
+        "the shell never produced any output"
+    );
+
+    // `[S:<secret-or-absent>]` and `[N:<named>]` land as the command's output.
+    term.write_str("echo \"[S:${DEOS_D10_HOST_SECRET:-absent}]\" \"[N:${DEOS_D10_NAMED:-absent}]\"\n");
+    let done = wait_for(&term, Duration::from_secs(8), |t| {
+        screen_text(t).contains("[N:named-ok]")
+    });
+    let screen = screen_text(&term);
+    assert!(done, "the probe command never ran. Screen:\n{screen}");
+    assert!(
+        screen.contains("[S:absent]"),
+        "the host variable reached the shell. Screen:\n{screen}"
+    );
+    assert!(
+        !screen.contains("[S:leaked-host-secret]"),
+        "the host secret reached the shell. Screen:\n{screen}"
+    );
+}
