@@ -47,12 +47,20 @@ use crate::ws::handle_ws;
 
 #[derive(Serialize)]
 pub struct StatusResponse {
-    /// True when EXACTLY these three hold: the store is readable, a blocklace
-    /// consensus handle is attached, and the local DAG holds at least one block
-    /// (`block_count > 0`). It reflects real liveness, NOT the attested-root
-    /// height — a devnet producing heartbeat blocks reports `healthy: true` well
-    /// before the first turn advances `latest_height`. See `dag_height` vs
-    /// `latest_height` below.
+    /// The conjunction of the facts `status_healthy` names — eight of them in
+    /// four generations; that function's docblock is the list. The first
+    /// generation, below, was: the store is readable, a blocklace consensus
+    /// handle is attached, and the local DAG holds at least one block
+    /// (`block_count > 0`).
+    ///
+    /// ⚑ 2026-09-30 — TWO MORE, because a single-validator node satisfied every
+    /// earlier conjunct with no turn ever finalized (`latest_height: 0`,
+    /// `dag_height: 2561`, 2026-08-05) and a verified committee root split sat
+    /// beside `healthy: true` for 27 h: `!turn_finality_lagging` and
+    /// `verified_root_splits == 0`. The threshold-1 exemption on
+    /// `finality_stalled` is gone too. A fresh node that has not yet finalized a
+    /// turn is healthy for its first `MAX_TURN_FINALITY_LAG_BLOCKS` of DAG, then
+    /// not.
     ///
     /// The one-block floor is why a node reports `false` for the first moments
     /// after boot: until 2026-07-25 the idle-heartbeat timer started at boot, so
@@ -77,8 +85,8 @@ pub struct StatusResponse {
     /// A joiner that carries no committee descriptor of its own runs on a
     /// SINGLE-KEY constitution, so its threshold is 1: `quorum_reachable` is
     /// trivially true (it counts toward its own quorum) and `finality_stalled`
-    /// is deliberately inert below threshold 2. Both partition legs are
-    /// structurally blind to it. Re-measured on a live 4-node federation
+    /// was then inert below threshold 2 (no longer — 2026-09-30). Both partition
+    /// legs were structurally blind to it. Re-measured on a live 4-node federation
     /// 2026-08-09 (port 8565, 300 s, 21 requests sent, no proposal ever opened):
     /// `quorum_threshold: 1, quorum_reachable: true, finality_stalled: false,
     /// consensus_live: true, block_count: 3` — every pre-existing conjunct TRUE,
@@ -133,12 +141,27 @@ pub struct StatusResponse {
     /// during a stall while `dag_height` keeps rising on local heartbeats.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seconds_since_quorum: Option<u64>,
-    /// `seconds_since_quorum` past `blocklace_sync::FINALITY_STALL_THRESHOLD`
-    /// (90 s) on a federation whose threshold is greater than 1 — "I have
-    /// proposed and heard nothing". Never set on a threshold-1 deployment,
-    /// which has no cross-node quorum to lose.
+    /// The stall window this node runs with:
+    /// `blocklace_sync::finality_stall_window` of its block cadence and idle
+    /// heartbeat (90 s floor, three heartbeats when longer).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finality_stall_window_secs: Option<u64>,
+    /// `seconds_since_quorum` past `finality_stall_window_secs` — "no block has
+    /// crossed quorum here in that long". At EVERY threshold: until 2026-09-30
+    /// it was never set at threshold 1, which is the topology the live devnet
+    /// was collapsed to on 2026-08-05.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finality_stalled: Option<bool>,
+    /// How many `dag_height` units the DAG has advanced since TURN finality
+    /// (`latest_height`) last moved. On a node that never finalized a turn this
+    /// is its whole DAG.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_finality_lag_blocks: Option<u64>,
+    /// `turn_finality_lag_blocks` past `MAX_TURN_FINALITY_LAG_BLOCKS` (256)
+    /// while finality owes a turn (`latest_height == 0` or `turns_in_flight >
+    /// 0`). One of the conjuncts of `healthy`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_finality_lagging: Option<bool>,
     // ─── The JOINER's own admission state (`blocklace_sync::JoinProgress`) ───
     //
     // Present ONLY on a node that has actually run the join path — it asked to
@@ -182,6 +205,7 @@ pub struct StatusResponse {
     /// 27 h in while this endpoint said `healthy: true`. Detection, NOT
     /// attribution: both sides are signature-backed and neither is thereby
     /// Byzantine; unverified disagreement CLAIMS never reach this number.
+    /// Since 2026-09-30 `> 0` makes `healthy` false.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verified_root_splits: Option<usize>,
     /// Turns this node has accepted for consensus and not yet resolved to a
@@ -191,8 +215,9 @@ pub struct StatusResponse {
     /// Attested-root / turn height: the height of the latest finalized
     /// AttestedRoot. This advances only on turn-bearing finality, NOT on idle
     /// heartbeat blocks, so it can legitimately be 0 on a fresh node whose DAG
-    /// is already tall. Kept for backward compatibility; use `dag_height` for
-    /// "how tall is the chain".
+    /// is already tall. Read it WITH `dag_height`: the gap between them is how
+    /// far blocks have run ahead of turns (`turn_finality_lag_blocks`), and a
+    /// wide gap with `latest_height: 0` is the 2026-08-05 outage.
     pub latest_height: u64,
     /// Real blocklace DAG tip height: the max block `seq` in the local lace.
     /// This advances on EVERY block (turns and heartbeats), so it is the
@@ -2122,6 +2147,32 @@ const POA_SIGNAL_SUBMITS_PER_MINUTE: u32 = 10;
 /// hybrid-signature work while waiting for that lock.
 const POA_SIGNAL_MAX_IN_FLIGHT: usize = 4;
 
+/// Per-real-IP budget for the anonymous `/pir/query` (F2): the same 30/minute
+/// `/api/discharge` carries, and for the same reason — a public route whose body
+/// used to hold the global state lock.
+const PIR_QUERIES_PER_MINUTE: u32 = 30;
+
+/// Process-wide ceiling on `/pir/query` scans running at once. The per-IP budget
+/// does not bound a many-address flood; this does. Each admitted query runs a
+/// scan over every index row on the blocking pool.
+const PIR_QUERY_MAX_IN_FLIGHT: usize = 4;
+
+/// Admission budget for `/pir/query`: a per-IP limiter plus an in-flight cap.
+#[derive(Clone)]
+struct PirQueryLimits {
+    per_ip: RateLimiter,
+    in_flight: Arc<Semaphore>,
+}
+
+impl PirQueryLimits {
+    fn new() -> Self {
+        Self {
+            per_ip: RateLimiter::new(PIR_QUERIES_PER_MINUTE, 60),
+            in_flight: Arc::new(Semaphore::new(PIR_QUERY_MAX_IN_FLIGHT)),
+        }
+    }
+}
+
 // =============================================================================
 // Router
 // =============================================================================
@@ -2165,6 +2216,8 @@ pub fn router_with_cors(
     // exact game carrier, a ten-per-minute real-IP budget, and four requests in
     // flight across the process.
     let poa_signal_ingress_limits = PoaSignalIngressLimits::new();
+    // F2: `/pir/query` is anonymous and scans the whole intent index per call.
+    let pir_query_limits = PirQueryLimits::new();
     // Shared by both faithful-mirror aliases so changing the path cannot double
     // an attacker's ML-DSA signing budget.
     let faithful_mirror_limiter = RateLimiter::new(120, 60);
@@ -2355,7 +2408,12 @@ pub fn router_with_cors(
         })
         .route("/api/block/{height}", get(get_block_by_height))
         .route("/pir/info", get(get_pir_info))
-        .route("/pir/query", post(post_pir_query))
+        .route("/pir/query", {
+            let limits = pir_query_limits.clone();
+            post(move |connect_info, headers, state, body| {
+                post_pir_query(connect_info, headers, state, body, limits.clone())
+            })
+        })
         // Short-lived, RPC-attested `$DREGG` arcade admission. The transport
         // accepts no balance or slot assertion from the browser; the isolated
         // gate reloads the server-issued challenge and validates server-fetched
@@ -2894,30 +2952,54 @@ pub(crate) struct HealthFacts {
     pub ever_asked_to_join: bool,
     /// This node's key is a constitutional participant.
     pub join_member: bool,
+    /// Height of the latest finalized AttestedRoot — advances only when a turn
+    /// commits.
+    pub latest_height: u64,
+    /// The local blocklace tip seq — advances on every block, heartbeats too.
+    pub dag_height: u64,
+    /// `dag_height` growth since turn finality last advanced
+    /// (`blocklace_sync::TurnFinalityProgress`). `None` without a consensus
+    /// handle.
+    pub turn_finality_lag_blocks: Option<u64>,
+    /// Turns this node accepted and has not resolved to a durable verdict.
+    pub turns_in_flight: Option<usize>,
+    /// `VoteCollector::verified_root_split_count`: blocks on which
+    /// hybrid-verified committee votes attest different finalized states.
+    pub verified_root_splits: Option<usize>,
 }
 
-/// The `/status` health verdict.
+/// How far `dag_height` may run ahead of turn finality before `/status` stops
+/// calling the node healthy — when there is turn work that finality owes.
 ///
-/// Six conjuncts, three generations of them, and each generation exists because
-/// the previous set could not go false for a failure that had already happened
-/// in production:
+/// In `dag_height` units, so it scales with cadence by construction: 256 blocks
+/// is ~8.5 min at the devnet's 2 s idle heartbeat and ~8.5 h at the 120 s
+/// default. Measured turn-finality latency is 30–60 s, i.e. tens of blocks at
+/// the fastest cadence; 256 is several multiples of that. The 2026-08-05 solo
+/// node sat at 2561 — ten times over.
+pub(crate) const MAX_TURN_FINALITY_LAG_BLOCKS: u64 = 256;
+
+/// The turn-finality leg of the verdict: is the DAG running ahead of turn
+/// finality while finality owes something?
 ///
-///   1. `store_ok && consensus_live && block_count > 0` — this process is up.
-///      All three are about THIS process alone, which is why they all held for
-///      210 s of a quorum-losing 2-of-4 partition.
-///   2. `quorum_reachable && !finality_stalled` — the committee is still there.
-///      Both are read against the vote collector's live threshold, so on a
-///      non-member's own single-key constitution (threshold 1) they are
-///      trivially satisfied: it counts toward its own quorum and the stall leg
-///      is deliberately inert below threshold 2.
-///   3. `join_member || !ever_asked_to_join` — THIS node got in. The only
-///      conjunct that can go false for the wedged joiner measured on port 8465:
-///      345 s of refused join requests, member of nothing, `healthy: true`.
+/// "Owes" is `latest_height == 0` (this node has never finalized a single turn
+/// — the 2026-08-05 shape) or `turns_in_flight > 0` (it accepted turns and has
+/// resolved none of them within the lag). A node that HAS finalized turns and
+/// carries none unresolved is idle, not stalled: its DAG grows on heartbeats and
+/// nothing is waiting. Without that condition an idle devnet reads red as its
+/// steady state, and a red that is always on hides the one that matters.
 ///
-/// A node with no consensus handle fails at conjunct 2 of generation 1
-/// (`consensus_live`), so the absent liveness/join facts are not permitted to
-/// make the verdict TRUE on their own — they default to the non-accusing value
-/// and `consensus_live` carries the refusal.
+/// With `latest_height == 0` the lag is `dag_height` itself, independent of the
+/// tracker: the whole DAG has run ahead of a finality that never happened.
+pub(crate) fn turn_finality_lagging(facts: &HealthFacts) -> bool {
+    let lag = if facts.latest_height == 0 {
+        facts.consensus_live.then_some(facts.dag_height)
+    } else {
+        facts.turn_finality_lag_blocks
+    };
+    let owed = facts.latest_height == 0 || facts.turns_in_flight.unwrap_or(0) > 0;
+    owed && lag.is_some_and(|lag| lag > MAX_TURN_FINALITY_LAG_BLOCKS)
+}
+
 /// Whether this node's [`JoinProgress`](crate::blocklace_sync::JoinProgress) is
 /// something `/status` should publish at all.
 ///
@@ -2933,12 +3015,42 @@ pub(crate) fn reportable_join_progress(
     (progress.member || progress.requests_sent > 0).then(|| progress.clone())
 }
 
+/// The `/status` health verdict.
+///
+/// Eight conjuncts, four generations of them, and each generation exists because
+/// the previous set could not go false for a failure that had already happened
+/// in production:
+///
+///   1. `store_ok && consensus_live && block_count > 0` — this process is up.
+///      All three are about THIS process alone, which is why they all held for
+///      210 s of a quorum-losing 2-of-4 partition.
+///   2. `quorum_reachable && !finality_stalled` — the committee is still there
+///      and blocks still cross quorum. Read against the vote collector's live
+///      threshold; the stall leg now fires at EVERY threshold (it was inert at
+///      threshold 1 — see `FederationLiveness::snapshot_at`).
+///   3. `join_member || !ever_asked_to_join` — THIS node got in. The only
+///      conjunct that can go false for the wedged joiner measured on port 8465:
+///      345 s of refused join requests, member of nothing, `healthy: true`.
+///   4. (2026-09-30, F1) `!turn_finality_lagging` and `verified_root_splits == 0`
+///      — TURNS finalize, and the committee agrees on what they finalized. The
+///      solo node collapsed to on 2026-08-05 read `latest_height: 0`,
+///      `dag_height: 2561`, `healthy: true`: blocks crossed quorum on the node's
+///      own signature, so every earlier leg held while no turn ever committed.
+///      And the 3-vs-1 root fork ran 27 h under `healthy: true` with the split
+///      count published beside it.
+///
+/// A node with no consensus handle fails at `consensus_live`, so the absent
+/// liveness/join/split facts are not permitted to make the verdict TRUE on their
+/// own — they default to the non-accusing value and `consensus_live` carries
+/// the refusal.
 pub(crate) fn status_healthy(facts: HealthFacts) -> bool {
     let up = facts.store_ok && facts.consensus_live && facts.block_count > 0;
     let can_finalize =
         facts.quorum_reachable.unwrap_or(true) && !facts.finality_stalled.unwrap_or(false);
     let admitted = facts.join_member || !facts.ever_asked_to_join;
-    up && can_finalize && admitted
+    let turns_finalize = !turn_finality_lagging(&facts);
+    let committee_agrees = facts.verified_root_splits.unwrap_or(0) == 0;
+    up && can_finalize && admitted && turns_finalize && committee_agrees
 }
 
 async fn get_status(State(state): State<NodeState>) -> Json<StatusResponse> {
@@ -2966,6 +3078,9 @@ async fn get_status(State(state): State<NodeState>) -> Json<StatusResponse> {
     let turns_in_flight = blocklace
         .as_ref()
         .map(|handle| handle.in_flight_turns.len());
+    let turn_finality = blocklace
+        .as_ref()
+        .map(|handle| handle.turn_finality.clone());
     // DID THIS NODE EVER GET IN? The partition legs above are read against the
     // vote collector's LIVE threshold, and a non-member's threshold is 1 (its
     // own single-key constitution), so neither of them can go false for a
@@ -3022,7 +3137,14 @@ async fn get_status(State(state): State<NodeState>) -> Json<StatusResponse> {
     // — since 2026-08-09 — it must actually be IN the committee it is claiming
     // health on behalf of. The verdict is a pure function of these facts so
     // both poles are exhibitable without a federation; see `status_healthy`.
-    let healthy = status_healthy(HealthFacts {
+    //
+    // ⚑ AND — since 2026-09-30 (F1) — TURNS must finalize and the committee must
+    // agree on them: `dag_height` may not run `MAX_TURN_FINALITY_LAG_BLOCKS`
+    // ahead of `latest_height` while finality owes a turn, and no verified root
+    // split may exist.
+    let turn_finality_lag_blocks =
+        turn_finality.map(|progress| progress.observe(latest_height, dag_height));
+    let facts = HealthFacts {
         store_ok,
         consensus_live,
         block_count,
@@ -3030,7 +3152,14 @@ async fn get_status(State(state): State<NodeState>) -> Json<StatusResponse> {
         finality_stalled: liveness.map(|l| l.finality_stalled),
         ever_asked_to_join: join.is_some(),
         join_member: join.as_ref().is_some_and(|p| p.member),
-    });
+        latest_height,
+        dag_height,
+        turn_finality_lag_blocks,
+        turns_in_flight,
+        verified_root_splits,
+    };
+    let turn_finality_lagging = consensus_live.then(|| turn_finality_lagging(&facts));
+    let healthy = status_healthy(facts);
 
     let lean_producer = s.lean_producer_enabled;
     let full_turn_proving = s.full_turn_proving_enabled;
@@ -3053,7 +3182,10 @@ async fn get_status(State(state): State<NodeState>) -> Json<StatusResponse> {
         quorum_reachable: liveness.map(|l| l.quorum_reachable),
         ever_reached_quorum: liveness.map(|l| l.ever_reached_quorum),
         seconds_since_quorum: liveness.map(|l| l.seconds_since_quorum),
+        finality_stall_window_secs: liveness.map(|l| l.finality_stall_window_secs),
         finality_stalled: liveness.map(|l| l.finality_stalled),
+        turn_finality_lag_blocks,
+        turn_finality_lagging,
         join_member: join.as_ref().map(|p| p.member),
         join_requests_sent: join.as_ref().map(|p| p.requests_sent),
         join_last_request_peers: join.as_ref().map(|p| p.last_request_peers),
@@ -8725,14 +8857,7 @@ fn verify_ed25519_signature(public_key_bytes: &[u8; 32], sig_bytes: &[u8], messa
 ///
 /// Uses a cached IntentIndex to avoid O(n) rebuilds on every request (CPU DoS fix).
 async fn get_pir_info(State(state): State<NodeState>) -> Json<PirInfoResponse> {
-    let mut s = state.write().await;
-
-    // Use cached index or build and cache it.
-    if s.pir_index_cache.is_none() {
-        let intents: Vec<dregg_intent::Intent> = s.intent_pool.values().cloned().collect();
-        s.pir_index_cache = Some(dregg_intent::pir::IntentIndex::build_from_intents(&intents));
-    }
-    let index = s.pir_index_cache.as_ref().unwrap();
+    let index = pir_index_snapshot(&state).await;
 
     Json(PirInfoResponse {
         num_rows: index.num_rows(),
@@ -8741,25 +8866,55 @@ async fn get_pir_info(State(state): State<NodeState>) -> Json<PirInfoResponse> {
     })
 }
 
+/// The cached PIR intent index, as a shared snapshot.
+///
+/// A hit costs a READ lock and an `Arc` clone. A miss — the cache is dropped on
+/// every intent-pool mutation — builds under the write lock, re-checking after
+/// acquiring it so concurrent misses build once. Holding the write lock across
+/// the build is what keeps the installed index consistent with the pool: a
+/// mutation cannot land between the snapshot of the pool and the install.
+async fn pir_index_snapshot(state: &NodeState) -> Arc<dregg_intent::pir::IntentIndex> {
+    if let Some(index) = state.read().await.pir_index_cache.as_ref() {
+        return Arc::clone(index);
+    }
+    let mut s = state.write().await;
+    if let Some(index) = s.pir_index_cache.as_ref() {
+        return Arc::clone(index);
+    }
+    let intents: Vec<dregg_intent::Intent> = s.intent_pool.values().cloned().collect();
+    let index = Arc::new(dregg_intent::pir::IntentIndex::build_from_intents(&intents));
+    s.pir_index_cache = Some(Arc::clone(&index));
+    index
+}
+
 /// POST /pir/query — accepts a PIR query vector and returns the server's response.
 ///
 /// The node computes the matrix-vector product of the intent index against the
 /// query vector, returning a response that reveals nothing about which row was
 /// queried (when combined with a complementary query to a second node).
 ///
-/// Uses a cached IntentIndex to avoid O(n) rebuilds on every request (CPU DoS fix).
+/// ⚑ F2. This route is anonymous and used to open with `state.write()` and run
+/// the whole scan under it, with no limiter — so a loop of valid-length queries
+/// queued every other state-lock user (turn submission, `/status`) behind one
+/// linear scan per request. Now: a per-IP budget and a process-wide in-flight
+/// cap BEFORE any lock, the index taken as an `Arc` snapshot under the READ lock
+/// (the write lock only on a cache miss, i.e. once per intent-pool mutation),
+/// and the scan on the blocking pool with no lock held.
 async fn post_pir_query(
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
     State(state): State<NodeState>,
     Json(req): Json<PirQueryRequest>,
+    limits: PirQueryLimits,
 ) -> Result<Json<PirQueryResponse>, StatusCode> {
-    let mut s = state.write().await;
-
-    // Use cached index or build and cache it.
-    if s.pir_index_cache.is_none() {
-        let intents: Vec<dregg_intent::Intent> = s.intent_pool.values().cloned().collect();
-        s.pir_index_cache = Some(dregg_intent::pir::IntentIndex::build_from_intents(&intents));
+    if !limits.per_ip.check_request(addr.ip(), &headers).await {
+        return Err(StatusCode::TOO_MANY_REQUESTS);
     }
-    let index = s.pir_index_cache.as_ref().unwrap();
+    let _permit = Arc::clone(&limits.in_flight)
+        .try_acquire_owned()
+        .map_err(|_| StatusCode::TOO_MANY_REQUESTS)?;
+
+    let index = pir_index_snapshot(&state).await;
 
     // Validate query vector length matches the database.
     if req.query_vector.len() != index.num_rows() {
@@ -8775,8 +8930,12 @@ async fn post_pir_query(
             .collect(),
     };
 
-    // Compute the PIR response.
-    let response = dregg_intent::pir::compute_pir_response(&query, &index.entries);
+    // Compute the PIR response — off the async runtime, holding no state lock.
+    let response = tokio::task::spawn_blocking(move || {
+        dregg_intent::pir::compute_pir_response(&query, &index.entries)
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Convert back to u32 for serialization.
     Ok(Json(PirQueryResponse {
@@ -10759,7 +10918,7 @@ mod tests {
     /// going to: they are read against the vote collector's LIVE threshold, and
     /// a non-member runs on its own single-key constitution, so
     /// `quorum_reachable` is trivially true (it counts toward its own quorum of
-    /// 1) and `finality_stalled` is deliberately inert below threshold 2. This
+    /// 1) and `finality_stalled` was then inert below threshold 2. This
     /// test pins BOTH poles — the honest "healthy" and the honest refusal — and
     /// asserts the pre-fix verdict on the same facts, so it cannot quietly
     /// become a test of nothing.
@@ -10776,6 +10935,11 @@ mod tests {
             finality_stalled: Some(false),
             ever_asked_to_join: true,
             join_member: false,
+            latest_height: 0,
+            dag_height: 3,
+            turn_finality_lag_blocks: Some(3),
+            turns_in_flight: Some(0),
+            verified_root_splits: Some(0),
         };
 
         // THE MUTATION IS PRESENT: the five-conjunct verdict this replaces says
@@ -10848,6 +11012,220 @@ mod tests {
             block_count: 1,
             ..HealthFacts::default()
         }));
+    }
+
+    /// ⚑ F1 — THE 2026-08-05 SHAPE. The devnet was collapsed to one validator;
+    /// that node read `latest_height: 0`, `dag_height: 2561`, `healthy: true`.
+    /// Every pre-fix conjunct is evaluated on the same facts first, so this
+    /// cannot pass by exhibiting some other failure.
+    #[test]
+    fn a_solo_node_whose_dag_ran_2561_blocks_past_zero_finalized_turns_is_not_healthy() {
+        let outage = HealthFacts {
+            store_ok: true,
+            consensus_live: true,
+            block_count: 2562,
+            // Threshold 1: reachable on its own signature, and blocks DID cross
+            // quorum on its self-vote, so the stall leg is honestly false.
+            quorum_reachable: Some(true),
+            finality_stalled: Some(false),
+            ever_asked_to_join: false,
+            join_member: false,
+            latest_height: 0,
+            dag_height: 2561,
+            // The tracker's first read is deliberately NOT the lag here: at
+            // `latest_height == 0` the verdict uses `dag_height` itself, so a
+            // freshly restarted process cannot launder the stall.
+            turn_finality_lag_blocks: Some(0),
+            turns_in_flight: Some(0),
+            verified_root_splits: Some(0),
+        };
+        let pre_fix = outage.store_ok
+            && outage.consensus_live
+            && outage.block_count > 0
+            && outage.quorum_reachable.unwrap_or(true)
+            && !outage.finality_stalled.unwrap_or(false)
+            && (outage.join_member || !outage.ever_asked_to_join);
+        assert!(pre_fix, "the outage must satisfy every pre-F1 conjunct");
+        assert!(turn_finality_lagging(&outage));
+        assert!(
+            !status_healthy(outage),
+            "latest_height 0 against dag_height 2561 must not report healthy"
+        );
+
+        // Just inside the lag: a fresh node that has not had a turn YET is fine.
+        assert!(status_healthy(HealthFacts {
+            dag_height: MAX_TURN_FINALITY_LAG_BLOCKS,
+            ..outage
+        }));
+        assert!(!status_healthy(HealthFacts {
+            dag_height: MAX_TURN_FINALITY_LAG_BLOCKS + 1,
+            ..outage
+        }));
+    }
+
+    /// F1 — the healthy pole at threshold 1: a solo node finalizing turns
+    /// normally is healthy, including when it goes idle after finalizing.
+    #[test]
+    fn a_solo_node_finalizing_turns_normally_is_healthy() {
+        let solo = HealthFacts {
+            store_ok: true,
+            consensus_live: true,
+            block_count: 4000,
+            quorum_reachable: Some(true),
+            finality_stalled: Some(false),
+            ever_asked_to_join: false,
+            join_member: false,
+            latest_height: 812,
+            dag_height: 4000,
+            turn_finality_lag_blocks: Some(12),
+            turns_in_flight: Some(3),
+            verified_root_splits: Some(0),
+        };
+        assert!(status_healthy(solo));
+        // Idle after finalizing: the DAG runs on heartbeats, nothing is owed.
+        assert!(status_healthy(HealthFacts {
+            turn_finality_lag_blocks: Some(10_000),
+            turns_in_flight: Some(0),
+            ..solo
+        }));
+        // Owed turns and the DAG 257 blocks past the last finalized one: red.
+        assert!(!status_healthy(HealthFacts {
+            turn_finality_lag_blocks: Some(MAX_TURN_FINALITY_LAG_BLOCKS + 1),
+            ..solo
+        }));
+        // A stalled finality loop at threshold 1 is red (the exemption is gone
+        // in `FederationLiveness`; here the verdict honours the fact).
+        assert!(!status_healthy(HealthFacts {
+            finality_stalled: Some(true),
+            ..solo
+        }));
+    }
+
+    /// F1 — a verified committee root split is not healthy, whatever else holds.
+    /// The 3-vs-1 fork ran 27 h under `healthy: true` with this count published.
+    #[test]
+    fn a_verified_committee_root_split_is_not_healthy() {
+        let member = HealthFacts {
+            store_ok: true,
+            consensus_live: true,
+            block_count: 100,
+            quorum_reachable: Some(true),
+            finality_stalled: Some(false),
+            ever_asked_to_join: false,
+            join_member: false,
+            latest_height: 40,
+            dag_height: 100,
+            turn_finality_lag_blocks: Some(2),
+            turns_in_flight: Some(0),
+            verified_root_splits: Some(0),
+        };
+        assert!(status_healthy(member));
+        assert!(!status_healthy(HealthFacts {
+            verified_root_splits: Some(1),
+            ..member
+        }));
+    }
+
+    fn pir_request_from(
+        state: &NodeState,
+        ip: [u8; 4],
+        limits: &PirQueryLimits,
+    ) -> impl std::future::Future<Output = Result<Json<PirQueryResponse>, StatusCode>> {
+        post_pir_query(
+            ConnectInfo(std::net::SocketAddr::from((ip, 40_000))),
+            axum::http::HeaderMap::new(),
+            State(state.clone()),
+            Json(PirQueryRequest {
+                query_vector: Vec::new(),
+            }),
+            limits.clone(),
+        )
+    }
+
+    /// ⚑ F2 — `/pir/query` answers while another task holds the state lock for
+    /// READING, which is only possible because it no longer takes the WRITE
+    /// lock. The pre-fix handler opened with `state.write()`; the same held
+    /// reader is first shown to block a writer, so the timeout below is the
+    /// pre-fix behaviour, not a slow machine.
+    #[tokio::test]
+    async fn pir_query_scans_without_the_state_write_lock() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = NodeState::new(tmp.path(), vec![]).expect("node state");
+        let limits = PirQueryLimits::new();
+        // Prime the cache (the one legitimate write: install after a miss).
+        let primed = pir_index_snapshot(&state).await;
+        assert_eq!(primed.num_rows(), 0);
+
+        let reader = state.read().await;
+        // THE MUTATION IS PRESENT: with a reader held, a writer cannot get in.
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(200), state.write())
+                .await
+                .is_err(),
+            "a held read guard must block `state.write()`, or this test proves nothing"
+        );
+        let answered = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            pir_request_from(&state, [203, 0, 113, 7], &limits),
+        )
+        .await
+        .expect("/pir/query must not wait for the write lock while a reader holds the state");
+        assert!(answered.is_ok());
+        drop(reader);
+    }
+
+    /// F2 — the same per-IP budget as `/api/discharge`, and a process-wide
+    /// in-flight cap that a many-address flood cannot walk around.
+    #[tokio::test]
+    async fn pir_query_is_rate_limited_per_ip_and_capped_in_flight() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = NodeState::new(tmp.path(), vec![]).expect("node state");
+        let limits = PirQueryLimits::new();
+
+        for _ in 0..PIR_QUERIES_PER_MINUTE {
+            assert!(
+                pir_request_from(&state, [203, 0, 113, 7], &limits)
+                    .await
+                    .is_ok()
+            );
+        }
+        assert_eq!(
+            pir_request_from(&state, [203, 0, 113, 7], &limits)
+                .await
+                .err(),
+            Some(StatusCode::TOO_MANY_REQUESTS),
+            "the per-IP budget must refuse the {}th query in a minute",
+            PIR_QUERIES_PER_MINUTE + 1
+        );
+        // A different address has its own budget ...
+        assert!(
+            pir_request_from(&state, [198, 51, 100, 9], &limits)
+                .await
+                .is_ok()
+        );
+
+        // ... but not its own scan slots: with every in-flight permit held, a
+        // fresh address is refused too.
+        let held: Vec<_> = (0..PIR_QUERY_MAX_IN_FLIGHT)
+            .map(|_| {
+                Arc::clone(&limits.in_flight)
+                    .try_acquire_owned()
+                    .expect("permit")
+            })
+            .collect();
+        assert_eq!(limits.in_flight.available_permits(), 0);
+        assert_eq!(
+            pir_request_from(&state, [192, 0, 2, 44], &limits)
+                .await
+                .err(),
+            Some(StatusCode::TOO_MANY_REQUESTS)
+        );
+        drop(held);
+        assert!(
+            pir_request_from(&state, [192, 0, 2, 45], &limits)
+                .await
+                .is_ok()
+        );
     }
 
     /// A genesis member publishes NO join fields — `JoinProgress::default()` on

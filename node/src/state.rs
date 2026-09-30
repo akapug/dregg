@@ -544,7 +544,7 @@ pub struct NodeStateInner {
     pub mcp_cap_enforce: bool,
     /// Cached PIR intent index. Invalidated on intent pool mutations.
     /// Avoids O(n) rebuild on every PIR request (prevents CPU DoS).
-    pub pir_index_cache: Option<dregg_intent::pir::IntentIndex>,
+    pub pir_index_cache: Option<std::sync::Arc<dregg_intent::pir::IntentIndex>>,
 
     /// Persistent discharge gateway instance for replay prevention.
     /// SECURITY: This MUST persist across requests so the `issued` set actually
@@ -953,6 +953,15 @@ pub(crate) fn anchor_committee_for_root<'a>(
 ///
 /// A non-Integrity store error is a different animal — a broken database rather
 /// than a comparison that cannot be made — and stays FATAL.
+///
+/// ⚑ So is [`dregg_persist::StoreError::IntermediateRootMismatch`] (F3): the walk
+/// found a record inside the committed prefix whose recorded root the
+/// reconstruction misses while a later one converges. That comparison WAS
+/// meaningful — the walk only makes it over a complete base (a checkpoint; every
+/// `run_node` data dir pins one at height 0 on first boot) — and it is not a torn
+/// tail, so there is nothing to defer and nothing to truncate. Boot refuses.
+/// Before 2026-09-30 the walk reported such an image as clean (`Ok(0)`) whenever
+/// the head converged, and `verify_recovery_convergence` checks only the head.
 fn run_boot_torn_tail_recovery(store: &PersistentStore) -> Result<(), String> {
     let error = match store.recover_to_last_consistent() {
         Ok(0) => return Ok(()),
@@ -4286,6 +4295,86 @@ mod crash_recovery_overlay_tests {
             .insert_cell(cell(seed, overlay_balance))
             .expect("post-overlay cell");
         crate::blocklace_sync::canonical_ledger_root(&ledger)
+    }
+
+    /// ⚑ F3 — THE MIDDLE OF THE LOG. The boot-shape image (the genesis baseline
+    /// pinned as the height-0 checkpoint, turns at heights 1..=4) with ONE
+    /// record in the middle whose recorded `ledger_root` is corrupt. The head
+    /// converges, so the pre-fix walk returned `Ok(0)` and
+    /// `verify_recovery_convergence` — which compares only the head — passed:
+    /// the 2026-07-31 corrupted-leaf mutation that survived the reopen gate.
+    /// The mutation is asserted present, and the head asserted convergent,
+    /// BEFORE the verdict is read.
+    #[test]
+    fn boot_refuses_an_image_with_a_corrupt_intermediate_commit_root() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = PersistentStore::open(&tmp.path().join("dregg.redb")).expect("open store");
+
+        let mut ledger = Ledger::new();
+        for seed in [0xf0u8, 0xf1, 0xf2] {
+            ledger
+                .insert_cell(cell(seed, 1_000_000))
+                .expect("genesis baseline cell");
+        }
+        store
+            .checkpoint_ledger(&ledger, 0)
+            .expect("pin the boot baseline at height 0");
+
+        const CORRUPT: u64 = 1;
+        let mut true_roots = Vec::new();
+        for k in 0u64..4 {
+            let touched = cell(k as u8, 100 + k as i64);
+            let _ = ledger.remove(&touched.id());
+            ledger.insert_cell(touched.clone()).expect("touched cell");
+            let true_root = crate::blocklace_sync::canonical_ledger_root(&ledger);
+            true_roots.push(true_root);
+            let mut recorded = true_root;
+            if k == CORRUPT {
+                recorded[0] ^= 0x01;
+            }
+            let rec = dregg_persist::CommitRecord {
+                ordinal: k,
+                height: k + 1,
+                block_id: [0u8; 32],
+                block_executed_up_to: 0,
+                turn_hash: [0xa0 | k as u8; 32],
+                creator: [0u8; 32],
+                receipt_hash: [0xb0 | k as u8; 32],
+                ledger_root: recorded,
+                touched_cells: vec![touched],
+                removed: Vec::new(),
+            };
+            store.commit_finalized_turn(k, &rec).expect("commit turn");
+        }
+
+        // THE MUTATION IS PRESENT, and it is in the middle: record 1 records a
+        // root its reconstruction does not reach, and the HEAD is clean.
+        let middle = store
+            .commit_record_at(CORRUPT)
+            .expect("read record")
+            .expect("record 1 exists");
+        assert_ne!(middle.ledger_root, true_roots[CORRUPT as usize]);
+        assert_eq!(
+            store.recovered_ledger_root().expect("head root"),
+            Some(true_roots[3]),
+            "the head must converge, or this is a torn-tail test, not F3"
+        );
+
+        let err = run_boot_torn_tail_recovery(&store)
+            .expect_err("boot must refuse an image corrupt inside its committed prefix");
+        assert!(
+            err.contains("intermediate root mismatch") && err.contains("ordinal 1"),
+            "the refusal must name the corrupt ordinal: {err}"
+        );
+        // Refused, not truncated.
+        assert_eq!(store.commit_cursor().expect("cursor"), 4);
+        drop(store);
+
+        // And the constructor, which runs the same walk, refuses the data dir.
+        assert!(
+            NodeState::new_with_key_file(tmp.path(), vec![], "node.key").is_err(),
+            "a node must not open an image with a corrupt intermediate commit root"
+        );
     }
 
     /// THE HARD-CRASH BRICK (measured 2026-07-26 on a real devnet node).
