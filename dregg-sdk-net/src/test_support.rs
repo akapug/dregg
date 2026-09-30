@@ -159,10 +159,11 @@ impl TestNode {
         self
     }
 
-    /// Answer `/turns/submit` (or the receipt query) wrongly, as `fault` says.
-    pub fn with_submit_fault(mut self, fault: SubmitFault) -> Self {
+    /// Answer `/turns/submit` (or the receipt query) wrongly, as `fault` says,
+    /// from now on. On a running node, call it through [`SpawnedNode::shared`]
+    /// after the honest setup turns have committed.
+    pub fn set_submit_fault(&mut self, fault: SubmitFault) {
         self.submit_fault = Some(fault);
-        self
     }
 
     /// Answer `/api/faucet` awkwardly, as `fault` says.
@@ -212,14 +213,12 @@ impl TestNode {
         &self.receipts
     }
 
-    /// The chain-head receipt hash a fresh turn must thread (`None` when empty).
-    pub fn chain_head(&self) -> Option<[u8; 32]> {
-        self.receipts.last().map(|r| r.receipt_hash())
-    }
-
     /// `agent`'s own receipt head: the hash of the last receipt whose agent is
-    /// `agent` (`None` when it has committed nothing). Served on
-    /// `/api/cell/{id}` as `last_receipt_hash`, as the node serves it.
+    /// `agent` (`None` when it has committed nothing). A submitted turn must
+    /// thread exactly this as `previous_receipt_hash`, as the node's
+    /// `stage_signed_turn_admission` requires; it is served on `/api/cell/{id}`
+    /// as `last_receipt_hash`. The node-wide tip (`/api/receipts`' `chain_head`)
+    /// is some other agent's receipt whenever another agent committed since.
     pub fn agent_receipt_head(&self, agent: &CellId) -> Option<[u8; 32]> {
         self.receipts
             .iter()
@@ -366,7 +365,7 @@ fn handle_submit(node: &mut TestNode, body: &[u8]) -> (u16, serde_json::Value) {
             "error": "turn agent does not match signer default cell",
         }));
     }
-    if signed.turn.previous_receipt_hash != node.chain_head() {
+    if signed.turn.previous_receipt_hash != node.agent_receipt_head(&signed.turn.agent) {
         return (200, serde_json::json!({
             "accepted": false,
             "turn_hash": dregg_types::hex_encode(&turn_hash),

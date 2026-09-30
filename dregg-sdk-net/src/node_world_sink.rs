@@ -107,10 +107,10 @@ impl NodeHttpClient {
     /// Returns the REAL receipt hash the node recorded for the committed turn.
     ///
     /// The flow mirrors [`crate::deos_server::fire_affordance`] exactly:
-    ///   1. read `agent`'s current nonce (`GET /api/cell/{agent}`) + the node's
-    ///      receipt-chain head (`GET /api/receipts`);
+    ///   1. read `agent`'s current nonce and its OWN receipt head
+    ///      (`GET /api/cell/{agent}`, `last_receipt_hash`);
     ///   2. build a single-action turn (`signer.make_action` over `effects`,
-    ///      signed against `federation_id`), thread the chain head as
+    ///      signed against `federation_id`), thread the agent's head as
     ///      `previous_receipt_hash`, and stamp `fee` = the estimated computron
     ///      cost (a pure function of the effects);
     ///   3. POST the postcard `SignedTurn` and read the verdict. On accept,
@@ -126,9 +126,11 @@ impl NodeHttpClient {
         effects: Vec<Effect>,
         federation_id: &[u8; 32],
     ) -> Result<[u8; 32], SdkError> {
-        // (1) the agent's fresh nonce + the node's chain head.
+        // (1) the agent's fresh nonce + its OWN receipt head. The node admits a
+        // signed turn only when `previous_receipt_hash` is `agent`'s head; the
+        // node-wide tip is another agent's receipt whenever one committed since.
         let nonce = self.fetch_cell_nonce(&agent).await?;
-        let chain_head = self.fetch_chain_head().await?;
+        let agent_head = self.fetch_agent_receipt_head(&agent).await?;
 
         // (2) build + sign the single-action fire turn (the deos_server shape).
         let action = signer.make_action(agent, method, effects, federation_id);
@@ -137,7 +139,7 @@ impl NodeHttpClient {
         turn.nonce = nonce;
         turn.memo = Some(format!("node_world_sink_{method}"));
         turn.valid_until = Some(i64::MAX / 2);
-        turn.previous_receipt_hash = chain_head;
+        turn.previous_receipt_hash = agent_head;
         turn.fee = TurnExecutor::new(ComputronCosts::default()).estimate_cost(&turn);
 
         let signed = signer.sign_turn(&turn);
@@ -255,8 +257,11 @@ impl NodeHttpClient {
     }
 
     /// `GET /api/receipts` → the `receipt_hash` of the entry flagged
-    /// `chain_head` (`None` when the chain is empty). The executor requires a
-    /// turn to thread this head.
+    /// `chain_head` (`None` when the chain is empty): the NODE-WIDE tip, the
+    /// newest receipt of any agent. It is NOT what a turn threads (#87): the
+    /// node admits a turn only on its agent's own head, which is
+    /// [`Self::fetch_agent_receipt_head`]. Kept as the read the node test
+    /// `client_threads_the_agent_scoped_receipt_head` refuses against.
     pub async fn fetch_chain_head(&self) -> Result<Option<[u8; 32]>, SdkError> {
         let url = format!("{}/api/receipts", self.base_url);
         let body: serde_json::Value = self.get_json(&url).await?;

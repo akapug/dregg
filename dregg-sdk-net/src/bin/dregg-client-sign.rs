@@ -2407,11 +2407,43 @@ mod tests {
             let (mut node, _) = TestNode::genesis([0x11; 32], [0x22; 32], 0);
             node.seed_open_cell(clerk.public_key().0, 1_000_000);
             let to = node.seed_open_cell([0x55; 32], 0);
-            let node = match fault {
-                Some(fault) => node.with_submit_fault(fault),
-                None => node,
-            };
+            let stranger = AgentCipherclerk::from_seed([0x5B; 64]);
+            let stranger_cell = node.seed_open_cell(stranger.public_key().0, 1_000_000);
             let spawned = node.spawn().await;
+
+            // A STRANGER COMMITS FIRST, so the node-wide tip is another agent's
+            // receipt while this profile's own head is still `None`. TestNode
+            // admits a turn only on its agent's own head, as the node does, so
+            // a client that threads the tip (#87) is refused "receipt chain
+            // mismatch" and the honest arm goes red.
+            NodeHttpClient::new(spawned.base_url())
+                .submit_turn(
+                    &stranger,
+                    stranger_cell,
+                    "status",
+                    vec![Effect::EmitEvent {
+                        cell: stranger_cell,
+                        event: Event {
+                            topic: symbol("status"),
+                            data: vec![],
+                        },
+                    }],
+                    &spawned.fed_id(),
+                )
+                .await
+                .expect("the stranger's own turn commits");
+            {
+                let node = spawned.lock().await;
+                assert_eq!(node.receipts().len(), 1, "the tip is the stranger's receipt");
+                assert_eq!(
+                    node.agent_receipt_head(&clerk.cell_id("default")),
+                    None,
+                    "the profile has committed nothing"
+                );
+            }
+            if let Some(fault) = fault {
+                spawned.shared().lock().await.set_submit_fault(fault);
+            }
             let flags = transfer_flags(spawned.base_url(), &hex::encode(to.0), &token_file);
             let out = cmd_transfer(flags).await;
             spawned.shutdown();

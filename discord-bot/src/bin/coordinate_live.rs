@@ -362,8 +362,10 @@ async fn settle_live(
     // fee is debited from the payer and redistributed (proposer/treasury), so
     // whole-ledger Σδ=0 still holds; the producer receives exactly the price.
     turn.fee = (SETTLE_FEE_PER_MOVE * move_count as u64).max(SETTLE_FEE_PER_MOVE);
-    // The node chains each turn off the current receipt-chain head; declare it.
-    turn.previous_receipt_hash = fetch_chain_head(http, node).await;
+    // The node admits a signed turn only on its agent's OWN receipt head (the
+    // payer's), not the node-wide tip, which is another agent's receipt
+    // whenever one committed since (#87).
+    turn.previous_receipt_hash = fetch_agent_head(http, node, &payer.cell_hex).await?;
     let signed = payer.app.sign_turn(&turn);
 
     let body = postcard::to_stdvec(&signed).map_err(|e| format!("encode signed turn: {e}"))?;
@@ -478,20 +480,33 @@ async fn fetch_nonce(http: &reqwest::Client, node: &str, cell: &str) -> Option<u
     v.get("nonce").and_then(|b| b.as_u64())
 }
 
-/// The current receipt-chain head hash (the receipt flagged `chain_head`). The
-/// node chains every new turn off this; `None` on a chain with no receipts.
-async fn fetch_chain_head(http: &reqwest::Client, node: &str) -> Option<[u8; 32]> {
-    let resp = http.get(format!("{node}/api/receipts")).send().await.ok()?;
-    let v: serde_json::Value = resp.json().await.ok()?;
-    let arr = v.as_array()?;
-    let head = arr.iter().find(|r| {
-        r.get("chain_head")
-            .and_then(|b| b.as_bool())
-            .unwrap_or(false)
-    })?;
-    let hex_str = head.get("receipt_hash").and_then(|h| h.as_str())?;
-    let bytes = hex::decode(hex_str).ok()?;
-    bytes.try_into().ok()
+/// `cell`'s own receipt head as an agent: `last_receipt_hash` on
+/// `GET /api/cell/{cell}`, `None` before its first commit. A failed read or a
+/// missing or malformed field is an error: `None` means "this agent has never
+/// committed", so guessing it would sign a turn the node refuses.
+async fn fetch_agent_head(
+    http: &reqwest::Client,
+    node: &str,
+    cell: &str,
+) -> Result<Option<[u8; 32]>, String> {
+    let resp = http
+        .get(format!("{node}/api/cell/{cell}"))
+        .send()
+        .await
+        .map_err(|e| format!("GET /api/cell/{cell}: {e}"))?;
+    let v: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("parse /api/cell/{cell}: {e}"))?;
+    match v.get("last_receipt_hash") {
+        Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(hex_str)) => hex::decode(hex_str)
+            .ok()
+            .and_then(|b| <[u8; 32]>::try_from(b).ok())
+            .map(Some)
+            .ok_or_else(|| format!("{cell}'s last_receipt_hash is not 32 hex bytes")),
+        _ => Err(format!("/api/cell/{cell} carries no last_receipt_hash")),
+    }
 }
 
 fn hex32(b: &[u8; 32]) -> String {
