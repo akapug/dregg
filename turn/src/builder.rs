@@ -330,15 +330,16 @@ impl TurnBuilder {
         self
     }
 
-    /// Set the expiration timestamp.
-    pub fn valid_until(mut self, ts: i64) -> Self {
-        self.valid_until = Some(ts);
+    /// Set the deadline: the last executor block height at which the turn is admissible
+    /// (see [`crate::turn::valid_until_at`]). Not a Unix timestamp.
+    pub fn valid_until(mut self, height: i64) -> Self {
+        self.valid_until = Some(height);
         self
     }
 
-    /// Set the expiration timestamp (chainable from &mut self).
-    pub fn set_valid_until(&mut self, ts: i64) -> &mut Self {
-        self.valid_until = Some(ts);
+    /// Set the deadline, a block height (chainable from &mut self).
+    pub fn set_valid_until(&mut self, height: i64) -> &mut Self {
+        self.valid_until = Some(height);
         self
     }
 

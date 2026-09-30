@@ -218,9 +218,10 @@ impl TurnComposer {
         self
     }
 
-    /// Set an optional expiration for the composed turn.
-    pub fn set_valid_until(&mut self, ts: i64) -> &mut Self {
-        self.valid_until = Some(ts);
+    /// Set the composed turn's deadline, a block height (see
+    /// [`crate::turn::valid_until_at`]).
+    pub fn set_valid_until(&mut self, height: i64) -> &mut Self {
+        self.valid_until = Some(height);
         self
     }
 
