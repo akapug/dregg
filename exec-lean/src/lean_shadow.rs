@@ -2110,6 +2110,7 @@ fn turn_to_wire_turn(
     let sig_ctx = SigCtx {
         federation_id: host.federation_id,
         turn_nonce: turn.nonce,
+        block_height,
     };
     let mut roots = turn.call_forest.roots.iter().enumerate();
     let (_, first) = roots
@@ -2312,6 +2313,10 @@ fn action_caveats(
 pub(crate) struct SigCtx {
     pub(crate) federation_id: [u8; 32],
     pub(crate) turn_nonce: u64,
+    /// The executor's block height: the `now` of the call-bound `AuthRequest` the TOKEN WHO leg's
+    /// verdict is evaluated against (`TurnExecutor::verify_token_credential`), so height-bound
+    /// token caveats decide here exactly as they do in the executor.
+    pub(crate) block_height: u64,
 }
 
 /// Marshal an `Authorization` to the wire WHO-leg WITH the per-node context the `Signature` arm needs
@@ -2358,8 +2363,97 @@ fn auth_to_wire_ctx(
                 .collect(),
             proof_index: *proof_index as u64,
         },
+        // TOKEN: realized against the executor's OWN token verdict (biscuit signature chain, the
+        // target cell's trust anchor, caveat/Datalog cover of THIS call at THIS height), folded
+        // into a self-echoing pair exactly as a `Signature` is. See `token_echo_wire`.
+        Authorization::Token { key_ref, encoded } => {
+            token_echo_wire(action, target_cell, encoded, key_ref, sig_ctx)
+        }
         // Every other arm is context-free (its WHO data is self-contained in the credential).
         other => auth_to_wire(other),
+    }
+}
+
+/// Realize an `Authorization::Token` WHO leg as a self-echoing wire pair under the
+/// `Crypto.Reference` portal oracle (`verify key sig = (key == sig)`), driven by the EXECUTOR'S OWN
+/// token check, [`dregg_turn::executor::TurnExecutor::verify_token_credential`] — the function the
+/// executor's `verify_token_authorization` itself calls, so there is one verifier and no twin.
+///
+/// Why this exists: the token arm used to cross as `(issuer_pubkey, low64(blake3(encoded)))`. The
+/// kernel compares the two FULL `Nat`s, and a 256-bit issuer key can never equal a 64-bit fold, so
+/// the verified WHO leg REFUSED EVERY TOKEN-AUTHORIZED TURN, genuine or forged. That was invisible
+/// while no token turn reached the producer (SDK worker turns carried `valid_until: None` and fell
+/// back to Rust); once they carried a deadline, every `SubAgent` turn the Rust executor committed was
+/// vetoed (`LeanShadowVeto`, issue #46). The Lean side was right all along
+/// (`credential_teeth_same_wire`: `.token k k` admits, `.token k k'` with `k ≠ k'` refuses); the
+/// marshal never produced the admitting shape. The `Signature` arm had this exact stuck-veto bug
+/// and was closed the same way (`sig_echo_wire`).
+///
+///   * `statement` (the wire issuer-key digest, or the `Custom` statement for a cell-scoped
+///     macaroon) = a commitment to everything the verdict depends on — the key_ref anchor, the
+///     action's target and method, the federation id, the height and the length-prefixed credential
+///     — narrowed to its low 64 bits in a digest whose high 24 bytes are zero, so it parses to the
+///     SAME `Nat` width the `u64` proof carries;
+///   * `proof` = that same low-64 value IFF the executor's verdict is `Ok`, else its bit-complement
+///     (never equal to the statement).
+///
+/// So a token the executor admits ⇒ the gate's WHO leg admits; an untrusted issuer, a bad
+/// signature chain, a caveat that does not cover this method/cell, an expired-by-height token, a
+/// refused cell-scoped macaroon, or an absent target cell ⇒ non-echo ⇒ the gate fail-closes. The
+/// WHO leg is still only as strong as the executor's token check; what this removes is a veto that
+/// did not depend on the credential at all.
+fn token_echo_wire(
+    action: &dregg_turn::action::Action,
+    target_cell: Option<&Cell>,
+    encoded: &[u8],
+    key_ref: &dregg_turn::action::TokenKeyRef,
+    sig_ctx: &SigCtx,
+) -> dregg_lean_ffi::marshal::WireAuth {
+    use dregg_lean_ffi::marshal::{Digest, WireAuth};
+    use dregg_turn::action::TokenKeyRef;
+
+    let verdict = match target_cell {
+        Some(cell) => dregg_turn::executor::TurnExecutor::verify_token_credential(
+            action,
+            cell,
+            encoded,
+            key_ref,
+            &sig_ctx.federation_id,
+            sig_ctx.block_height,
+        )
+        .is_ok(),
+        None => false, // no trust anchor to check against ⇒ fail-closed (non-echoing pair below).
+    };
+
+    let (tag, anchor): (u8, [u8; 32]) = match key_ref {
+        TokenKeyRef::BiscuitIssuer { issuer_pubkey } => (0, *issuer_pubkey),
+        TokenKeyRef::CellScopedMacaroon { cell } => (1, cell.0),
+    };
+    let mut hasher = blake3::Hasher::new_derive_key("dregg-lean-shadow-token-bind-v1");
+    hasher.update(&[tag]);
+    hasher.update(&anchor);
+    hasher.update(action.target.as_bytes());
+    hasher.update(&action.method);
+    hasher.update(&sig_ctx.federation_id);
+    hasher.update(&sig_ctx.block_height.to_le_bytes());
+    hasher.update(&(encoded.len() as u64).to_le_bytes());
+    hasher.update(encoded);
+    let commit = *hasher.finalize().as_bytes();
+    let low = bytes32_to_nat(&commit);
+
+    let mut stmt_digest = [0u8; 32];
+    stmt_digest[24..32].copy_from_slice(&low.to_be_bytes());
+    let proof = if verdict { low } else { !low };
+
+    match key_ref {
+        TokenKeyRef::BiscuitIssuer { .. } => WireAuth::Token {
+            issuer_key: Digest::from_bytes(stmt_digest),
+            sig: proof,
+        },
+        TokenKeyRef::CellScopedMacaroon { .. } => WireAuth::Custom {
+            kind_stmt: Digest::from_bytes(stmt_digest),
+            proof,
+        },
     }
 }
 
@@ -2582,28 +2676,21 @@ fn auth_to_wire(auth: &Authorization) -> dregg_lean_ffi::marshal::WireAuth {
         // the wire Nat → the verified WHO leg (`portalVerify .token key sig = verify key sig` /
         // `.custom stmt pf`).
         //
-        // The fold used to also cover an `Authorization::Token::discharges` blob. That field is
-        // DELETED (`turn/src/action.rs`): no accept path read it — `verify_token_authorization`
-        // took it as `_discharges` because the only key_ref that carried discharges is refused
-        // unconditionally — so folding it made the gate sensitive to bytes the Rust verifier never
-        // checked. It bought the appearance of reproducing a discharge rejection that never
-        // happened. Sensitivity to `encoded`, which the verifier DOES decode and verify, is the
-        // part that was ever real, and it is what remains.
-        Authorization::Token { key_ref, encoded } => {
-            let chain_nat = bytes32_to_nat(&token_credential_hash(encoded));
-            match key_ref {
-                dregg_turn::action::TokenKeyRef::BiscuitIssuer { issuer_pubkey } => {
-                    WireAuth::Token {
-                        issuer_key: Digest::from_bytes(*issuer_pubkey),
-                        sig: chain_nat,
-                    }
-                }
-                dregg_turn::action::TokenKeyRef::CellScopedMacaroon { cell } => WireAuth::Custom {
-                    kind_stmt: Digest::from_bytes(cell.0),
-                    proof: chain_nat,
-                },
-            }
-        }
+        // Context-free FAIL-CLOSED fallback, exactly as for `Signature`: a token's verdict needs the
+        // target cell (its trust anchor), the action's method/target, the federation id and the
+        // height, none of which this arm has. Every verdict-path Token is routed through
+        // `auth_to_wire_ctx` → `token_echo_wire`; this arm is reached only by contextless callers.
+        // A non-echoing pair (`1` vs `0`) ⇒ `portalVerify` refuses.
+        Authorization::Token { key_ref, .. } => match key_ref {
+            dregg_turn::action::TokenKeyRef::BiscuitIssuer { .. } => WireAuth::Token {
+                issuer_key: Digest::from_u64(1),
+                sig: 0,
+            },
+            dregg_turn::action::TokenKeyRef::CellScopedMacaroon { .. } => WireAuth::Custom {
+                kind_stmt: Digest::from_u64(1),
+                proof: 0,
+            },
+        },
     }
 }
 
@@ -2624,23 +2711,6 @@ fn predicate_proof_nat(p: &dregg_cell::predicate::WitnessedPredicate) -> u64 {
 
 fn blake3_of(bytes: &[u8]) -> [u8; 32] {
     *blake3::hash(bytes).as_bytes()
-}
-
-/// Hash a Token credential's `encoded` blob into a 32-byte commitment (the WHO-leg's
-/// credential-sensitive `sig`/`proof` Nat preimage). Length-prefixed, so the fold is injective in
-/// the credential bytes: a substituted or truncated token yields a different commitment, and the
-/// verified gate's WHO leg is sensitive to WHICH credential was presented — not just to the issuer
-/// key. An EMPTY credential hashes the empty preimage (a stable non-secret).
-///
-/// This is exactly the credential the Rust verifier decodes and cryptographically checks
-/// (`verify_token_authorization`), which is why folding it is meaningful. It used to also fold an
-/// `Authorization::Token::discharges` blob; that field is deleted because no accept path read it,
-/// so its contribution here was sensitivity to unchecked bytes.
-fn token_credential_hash(encoded: &[u8]) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new_derive_key("dregg-lean-shadow-token-credential-v2");
-    hasher.update(&(encoded.len() as u64).to_le_bytes());
-    hasher.update(encoded);
-    *hasher.finalize().as_bytes()
 }
 
 fn field_index_to_name(index: usize) -> String {
@@ -2840,70 +2910,139 @@ mod auth_shape_marshal_tests {
         );
     }
 
-    /// (2) TOKEN CREDENTIAL: `token_credential_hash` is sensitive to the presented `encoded`
-    /// credential — a substituted or truncated token changes the commitment, so the verified WHO
-    /// leg cannot be blind to WHICH token was presented (the `sig:0` drop the ledger named).
-    ///
-    /// This replaces a discharge-sensitivity assertion. The fold used to cover an
-    /// `Authorization::Token::discharges` blob, and that field is DELETED: no accept path read it
-    /// (`verify_token_authorization` took it as `_discharges`), so sensitivity to it was
-    /// sensitivity to bytes the Rust verifier never checked. `encoded` is the ingredient the
-    /// verifier actually decodes and cryptographically checks, so it is the one worth binding.
-    #[test]
-    fn token_credential_hash_is_credential_sensitive() {
-        let encoded = b"eb2_some_biscuit".to_vec();
-        let h = token_credential_hash(&encoded);
-        assert_ne!(
-            h,
-            token_credential_hash(b"em2_other"),
-            "a substituted credential changes the commitment"
-        );
-        assert_ne!(
-            h,
-            token_credential_hash(b"eb2_some_biscui"),
-            "a truncated credential changes the commitment"
-        );
-        assert_ne!(
-            h,
-            token_credential_hash(b""),
-            "an absent credential changes the commitment"
-        );
-        assert_eq!(
-            h,
-            token_credential_hash(&encoded),
-            "the fold is deterministic in the credential bytes"
-        );
+    /// A genuine SDK-shaped worker credential: a biscuit minted by `kp`, granting
+    /// `service(hex(cell), hex(method))`, the shape `sdk::runtime::mint_subagent_cap_token` mints.
+    fn token_fixture(
+        kp: &dregg_token::biscuit_auth::KeyPair,
+        cell: CellId,
+        method: dregg_turn::action::Symbol,
+    ) -> Vec<u8> {
+        use dregg_token::AuthToken;
+        let services = vec![(hex::encode(cell.as_bytes()), hex::encode(method))];
+        dregg_token::BiscuitToken::mint_dregg(kp, &[], &services, &[], &[], &[], None)
+            .expect("mint")
+            .to_encoded()
+            .expect("encode")
+            .into_bytes()
     }
 
-    /// (2) TOKEN arm: the producer maps a biscuit Token to the wire `token` arm with a
-    /// credential-folded `sig` (NOT `sig:0`), so a turn presenting a DIFFERENT token marshals to a
-    /// DIFFERENT wire credential (the verified WHO leg sees the change) — while the issuer anchor
-    /// still crosses byte-exact.
-    #[test]
-    fn biscuit_token_wire_is_credential_sensitive() {
+    fn issuer_bytes(kp: &dregg_token::biscuit_auth::KeyPair) -> [u8; 32] {
+        kp.public()
+            .to_bytes()
+            .try_into()
+            .expect("ed25519 pk is 32 bytes")
+    }
+
+    /// A cell whose verification key names `issuer` (the trust anchor the executor checks).
+    fn anchored_cell(issuer: [u8; 32]) -> dregg_cell::Cell {
+        let mut cell = dregg_cell::Cell::with_balance([5u8; 32], [0u8; 32], 100_000);
+        cell.verification_key = Some(dregg_cell::VerificationKey {
+            hash: *blake3::hash(&issuer).as_bytes(),
+            data: issuer.to_vec(),
+        });
+        cell
+    }
+
+    /// Whether a marshalled WHO leg is a self-echoing pair (the reference portal's admit case:
+    /// the statement digest and the proof parse to the SAME `Nat`).
+    fn echoes(w: &dregg_lean_ffi::marshal::WireAuth) -> bool {
         use dregg_lean_ffi::marshal::WireAuth;
-        let key = [3u8; 32];
-        let mk = |encoded: &[u8]| {
-            auth_to_wire(&Authorization::Token {
-                encoded: encoded.to_vec(),
-                key_ref: TokenKeyRef::BiscuitIssuer { issuer_pubkey: key },
-            })
+        let (stmt, proof) = match w {
+            WireAuth::Token { issuer_key, sig } => (issuer_key.0, *sig),
+            WireAuth::Custom { kind_stmt, proof } => (kind_stmt.0, *proof),
+            _ => panic!("a Token must marshal to the token (or cell-scoped custom) arm"),
         };
-        let a = mk(b"eb2_cred_good");
-        let b = mk(b"eb2_cred_other");
-        match (&a, &b) {
-            (WireAuth::Token { sig: sa, .. }, WireAuth::Token { sig: sb, .. }) => {
-                assert_ne!(
-                    sa, sb,
-                    "a different credential ⇒ a different wire token sig"
-                )
-            }
-            _ => panic!("biscuit Token must map to the wire token arm"),
-        }
-        // the issuer key still crosses in full (the WHO anchor is preserved):
-        if let WireAuth::Token { issuer_key, .. } = &a {
-            assert_eq!(issuer_key.0, key, "issuer pubkey crosses byte-exact");
-        }
+        stmt[..24].iter().all(|b| *b == 0)
+            && u64::from_be_bytes(stmt[24..].try_into().unwrap()) == proof
+    }
+
+    /// (2) TOKEN WHO LEG, BOTH POLES, over the executor's own verdict
+    /// (`TurnExecutor::verify_token_credential`). A credential the executor admits marshals to a
+    /// self-echoing pair (the Lean portal admits it: `credential_teeth_same_wire`'s `.token k k`);
+    /// every refusal the executor reaches marshals to a non-echo (`.token k k'`, `k ≠ k'`).
+    ///
+    /// Before `token_echo_wire`, the genuine case did NOT echo — the wire carried the 256-bit issuer
+    /// key against a 64-bit credential fold — so the verified gate refused every token turn,
+    /// including this one. That is the `LeanShadowVeto` of `sdk/tests/subagent_token_enforcement.rs`.
+    #[test]
+    fn token_who_leg_echoes_exactly_the_executor_verdict() {
+        let kp = dregg_token::biscuit_auth::KeyPair::new();
+        let issuer = issuer_bytes(&kp);
+        let cell = anchored_cell(issuer);
+        let method: dregg_turn::action::Symbol = [0x11u8; 32].into();
+        let other_method: dregg_turn::action::Symbol = [0x22u8; 32].into();
+        let encoded = token_fixture(&kp, cell.id(), method);
+        let ctx = SigCtx {
+            federation_id: [9u8; 32],
+            turn_nonce: 0,
+            block_height: 10,
+        };
+        let key_ref = TokenKeyRef::BiscuitIssuer {
+            issuer_pubkey: issuer,
+        };
+        let act = |m: dregg_turn::action::Symbol, enc: &[u8], kr: &TokenKeyRef| {
+            let mut a = bare_action(
+                cell.id(),
+                Authorization::Token {
+                    encoded: enc.to_vec(),
+                    key_ref: kr.clone(),
+                },
+                Preconditions::default(),
+            );
+            a.method = m;
+            a
+        };
+        let wire = |m, enc: &[u8], kr: &TokenKeyRef, c: Option<&dregg_cell::Cell>| {
+            let a = act(m, enc, kr);
+            auth_to_wire_ctx(&a.authorization, &a, c, &ctx, 0)
+        };
+        let verdict = |m, enc: &[u8], kr: &TokenKeyRef| {
+            dregg_turn::executor::TurnExecutor::verify_token_credential(
+                &act(m, enc, kr),
+                &cell,
+                enc,
+                kr,
+                &ctx.federation_id,
+                ctx.block_height,
+            )
+        };
+
+        // ADMIT pole: the executor admits ⇒ the wire echoes.
+        assert!(verdict(method, &encoded, &key_ref).is_ok());
+        assert!(echoes(&wire(method, &encoded, &key_ref, Some(&cell))));
+
+        // REFUSE poles, each one a refusal the executor itself reaches:
+        // (a) a method outside the grant (the capability-cover denial);
+        assert!(verdict(other_method, &encoded, &key_ref).is_err());
+        assert!(!echoes(&wire(
+            other_method,
+            &encoded,
+            &key_ref,
+            Some(&cell)
+        )));
+        // (b) a credential minted by an issuer the cell does not trust, presented under its own key;
+        let rogue = dregg_token::biscuit_auth::KeyPair::new();
+        let rogue_ref = TokenKeyRef::BiscuitIssuer {
+            issuer_pubkey: issuer_bytes(&rogue),
+        };
+        let rogue_tok = token_fixture(&rogue, cell.id(), method);
+        assert!(verdict(method, &rogue_tok, &rogue_ref).is_err());
+        assert!(!echoes(&wire(method, &rogue_tok, &rogue_ref, Some(&cell))));
+        // (c) that rogue credential presented under the TRUSTED issuer's key (signature chain fails);
+        assert!(verdict(method, &rogue_tok, &key_ref).is_err());
+        assert!(!echoes(&wire(method, &rogue_tok, &key_ref, Some(&cell))));
+        // (d) no target cell to anchor against ⇒ fail closed;
+        assert!(!echoes(&wire(method, &encoded, &key_ref, None)));
+        // (e) the cell-scoped macaroon arm, which the executor refuses unconditionally.
+        let mac_ref = TokenKeyRef::CellScopedMacaroon { cell: cell.id() };
+        assert!(verdict(method, &encoded, &mac_ref).is_err());
+        assert!(!echoes(&wire(method, &encoded, &mac_ref, Some(&cell))));
+
+        // The context-free arm has no anchor or call to verify, so it never echoes.
+        assert!(!echoes(&auth_to_wire(&Authorization::Token {
+            encoded: encoded.clone(),
+            key_ref: key_ref.clone(),
+        })));
     }
 
     /// (3) BEARER: the producer now hashes the FULL delegation sig into `deleg_sig` (not the
