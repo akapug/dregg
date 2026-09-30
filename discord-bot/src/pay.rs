@@ -42,10 +42,11 @@ use dregg_narrator::{
 use dregg_pay::{
     AccountFetcher, Asset, ChainId, ContributionOutcome, CreditLedger, CreditOutcome, CreditStore,
     DepositAddress, DepositAddressBook, DepositAddressProvider, FetchedAccount, HdDeposit,
-    InferenceFuel, MockChain, MockWatcher, MultichainHoldings, Network, ObservedTransfer,
-    PayConfig, PayRole, PaymentReceived, PaymentRef, PoolEntry, PoolError, PoolLedger,
-    PoolSnapshot, PoolStore, ProvenForeignHolding, SignatureWatcher, SwapPool, TransferFetcher,
-    Treasury, TreasurySlot, TreasuryStore, TreasuryView, UserId, WatchError, Watcher,
+    HoldingProofError, InferenceFuel, MockChain, MockWatcher, MultichainHoldings, Network,
+    ObservedTransfer, PayConfig, PayRole, PaymentReceived, PaymentRef, PoolEntry, PoolError,
+    PoolLedger, PoolSnapshot, PoolStore, ProvenForeignHolding, SignatureWatcher, SwapPool,
+    TransferFetcher, Treasury, TreasurySlot, TreasuryStore, TreasuryView, UserId, WatchError,
+    Watcher,
 };
 
 use crate::db::{Database, PoolRecordOutcome, PoolRetireOutcome};
@@ -902,7 +903,7 @@ pub struct PayState {
     ///
     /// RESTART: **REBUILD (answer 2)**, and there is nothing here to rebuild — which is
     /// the point. The real watcher holds no in-RAM idempotency cursor at all; every
-    /// payment carries the chain's own key (`soltx:{signature}`) and the durable
+    /// payment carries the chain's own key (`soltx:{signature}:{address}:{mint}`) and the durable
     /// `pay_processed` table recognises the repeat. A fresh process therefore re-polls
     /// the same history and credits nothing twice. See
     /// `docs/reference/RESTART-SEMANTICS.md`.
@@ -1644,6 +1645,10 @@ pub enum WatcherSelectError {
         /// The endpoint that was rejected (empty or the devnet default).
         endpoint: String,
     },
+    /// The watched asset's (mint, token program) pairing was refused — e.g. the live
+    /// `$DREGG` mint under legacy SPL Token, which would read every real payment as
+    /// "nothing added" while reporting healthy.
+    AssetPolicy(dregg_pay::ConfigError),
 }
 
 impl std::fmt::Display for WatcherSelectError {
@@ -1660,6 +1665,11 @@ impl std::fmt::Display for WatcherSelectError {
                  is not usable (got {endpoint:?}); set DREGG_PAY_RPC to your cluster's \
                  JSON-RPC URL"
             ),
+            WatcherSelectError::AssetPolicy(e) => write!(
+                f,
+                "{e}; set DREGG_PAY_TOKEN_PROGRAM to the program that owns the mint \
+                 (Token-2022 for the live $DREGG mint)"
+            ),
         }
     }
 }
@@ -1670,7 +1680,8 @@ impl std::error::Error for WatcherSelectError {}
 /// [`SelectedWatcher::kind`] cannot drift into two different words for the same fact.
 ///
 /// It names the **key**, not just the transport, because that is the fact an operator needs at
-/// boot: credits are deduplicated by transaction signature, so this process is safe to restart.
+/// boot: credits are deduplicated by (transaction signature, credited account), so this process
+/// is safe to restart.
 /// The previous label described a watcher whose idempotency lived in RAM.
 pub const REAL_WATCHER_KIND: &str = "solana-rpc tx-signature (real, watch-only)";
 /// The honest label of the mock watcher — the one an operator must be able to SEE, because a
@@ -1759,10 +1770,10 @@ pub fn select_watcher(
                 endpoint: config.rpc_endpoint.clone(),
             });
         }
-        return Ok(SelectedWatcher::RealSolana(SignatureWatcher::new(
-            config,
-            RpcTransferFetcher::new(rpc, handle),
-        )));
+        return Ok(SelectedWatcher::RealSolana(
+            SignatureWatcher::new(config, RpcTransferFetcher::new(rpc, handle))
+                .map_err(WatcherSelectError::AssetPolicy)?,
+        ));
     }
     // Non-mainnet: the mock is allowed, but only EXPLICITLY — the bot's own no-env
     // devnet fallback, or the named DREGG_PAY_MOCK flag.
@@ -1775,10 +1786,10 @@ pub fn select_watcher(
             endpoint: config.rpc_endpoint.clone(),
         });
     }
-    Ok(SelectedWatcher::RealSolana(SignatureWatcher::new(
-        config,
-        RpcTransferFetcher::new(rpc, handle),
-    )))
+    Ok(SelectedWatcher::RealSolana(
+        SignatureWatcher::new(config, RpcTransferFetcher::new(rpc, handle))
+            .map_err(WatcherSelectError::AssetPolicy)?,
+    ))
 }
 
 /// The production [`AccountFetcher`]: Solana JSON-RPC `getTokenAccountsByOwner`
@@ -1990,11 +2001,19 @@ fn signatures_of(resp: &serde_json::Value) -> Result<Vec<(String, u64)>, WatchEr
 ///   for money the treasury never receives;
 /// * its `mint` is the watched `mint` — an unwatched token is never credited as this asset;
 /// * its `owner` is the deposit `wallet` — RPC selection is not proof of attribution;
-/// * its `programId` is `token_program` — the SPL Token program, not an attacker's own program.
+/// * its `programId` is `token_program` — the ASSET's token program (Token-2022 for the live
+///   `$DREGG` mint, legacy SPL Token for USDC), not an attacker's own program.
 ///
 /// `Ok(None)` = this transaction touched the account but added nothing to it (a sweep, a fee, an
 /// unrelated instruction). That is normal and is not an error. An `accountIndex` that does not
 /// resolve at all IS an error: an unreadable response must not read as "no payment".
+///
+/// A POST entry for **exactly the watched account** whose mint, owner or program disagrees with
+/// the watch is also an error, never `Ok(None)`. The account was selected by
+/// `getTokenAccountsByOwner(wallet, mint)`, its mint and program cannot change, so a disagreement
+/// is a lying transport or a misconfigured watch — and reading it as "added nothing" is exactly
+/// how a Token-2022 mint watched under the legacy program credited zero for every real payment
+/// while reporting healthy.
 ///
 /// The returned amount is the delta of the account's own balance, so a transaction that both
 /// debits and credits nets out correctly.
@@ -2029,14 +2048,27 @@ fn credited_amount(
         return Ok(None);
     };
     // Attribution is checked on the POST entry — the one whose amount we are about to
-    // believe. Fail closed on each.
-    if &post.mint != mint || &post.owner != wallet || &post.program_id != token_program {
-        return Ok(None);
+    // believe. Fail closed on each, LOUDLY (see the doc: a skip here is a silent zero).
+    if &post.program_id != token_program {
+        return Err(WatchError::Holding(HoldingProofError::NotSplTokenProgram {
+            owner_program: post.program_id,
+        }));
+    }
+    if &post.mint != mint {
+        return Err(WatchError::Holding(HoldingProofError::WrongMint));
+    }
+    if &post.owner != wallet {
+        return Err(WatchError::WrongTokenOwner {
+            expected: *wallet,
+            actual: post.owner,
+        });
     }
     let pre_amount = match pre {
         // A matching PRE entry for a DIFFERENT mint/owner/program would mean the RPC
         // contradicted itself about the same account; refuse rather than net against it.
-        Some(p) if p.mint != post.mint || p.owner != post.owner => {
+        Some(p)
+            if p.mint != post.mint || p.owner != post.owner || p.program_id != post.program_id =>
+        {
             return Err(WatchError::Rpc(format!(
                 "token balance entries disagree about account {}",
                 bs58::encode(token_account).into_string()
@@ -2217,9 +2249,10 @@ fn parse_pubkey(raw: &str, what: &str) -> Result<[u8; 32], WatchError> {
 /// never been paid costs 1 (`getTokenAccountsByOwner` returns an empty value array), which is the
 /// overwhelmingly common case in a sweep.
 ///
-/// Every trust-bearing claim it returns (mint, token owner, token program) is re-checked
-/// fail-closed by [`SignatureWatcher::poll`] against operator config — the RPC's word is
-/// transport, not proof.
+/// It holds no token program of its own: the watcher passes its asset's program on every call,
+/// so there is no second copy to disagree. Every trust-bearing claim it returns (mint, token
+/// owner, token program) is re-checked fail-closed by [`SignatureWatcher::poll`] against
+/// operator config — the RPC's word is transport, not proof.
 pub struct RpcTransferFetcher {
     client: reqwest::Client,
     endpoint: String,
@@ -2270,6 +2303,7 @@ impl TransferFetcher for RpcTransferFetcher {
         &self,
         owner: &DepositAddress,
         mint: &[u8; 32],
+        token_program: &[u8; 32],
         limit: usize,
     ) -> Result<Vec<ObservedTransfer>, WatchError> {
         let accounts = self.call(serde_json::json!({
@@ -2309,13 +2343,8 @@ impl TransferFetcher for RpcTransferFetcher {
                     },
                 ],
             }))?;
-            let Some(amount) = credited_amount(
-                &tx,
-                mint,
-                &owner.to_bytes(),
-                &token_account,
-                &dregg_pay::SPL_TOKEN_PROGRAM_ID,
-            )?
+            let Some(amount) =
+                credited_amount(&tx, mint, &owner.to_bytes(), &token_account, token_program)?
             else {
                 continue; // this transaction added nothing to the account.
             };
@@ -2325,7 +2354,8 @@ impl TransferFetcher for RpcTransferFetcher {
                 amount,
                 mint: *mint,
                 token_owner: owner.to_bytes(),
-                token_program: dregg_pay::SPL_TOKEN_PROGRAM_ID,
+                // `credited_amount` refused any POST entry under another program.
+                token_program: *token_program,
             });
         }
         Ok(transfers)
@@ -5409,6 +5439,7 @@ mod tests {
         data[0..32].copy_from_slice(&mint);
         data[32..64].copy_from_slice(&owner);
         data[64..72].copy_from_slice(&750u64.to_le_bytes());
+        data[108] = 1; // AccountState::Initialized
         use base64::Engine as _;
         let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
         serde_json::json!({
@@ -5594,7 +5625,10 @@ mod tests {
             assert_eq!(got[0].amount, 750);
             assert_eq!(got[0].asset, Asset::Dregg);
             assert_eq!(got[0].user, user);
-            assert_eq!(got[0].reference, PaymentRef(format!("soltx:{SIG_PAID}")));
+            assert_eq!(
+                got[0].reference,
+                dregg_pay::signature_payment_ref(SIG_PAID, &deposit, &cfg.mint)
+            );
             assert!(
                 !got[0].reference.0.contains("424241")
                     && !got[0].reference.0.contains("424242")
@@ -5629,7 +5663,7 @@ mod tests {
         );
         println!(
             "[real-transport] getTokenAccountsByOwner → getSignaturesForAddress → \
-             getTransaction → one 750-unit payment keyed soltx:{SIG_PAID}; failed + \
+             getTransaction → one 750-unit payment keyed soltx:{SIG_PAID}:<addr>:<mint>; failed + \
              zero-delta skipped; restart-stable; outage fails closed"
         );
     }
@@ -5649,7 +5683,8 @@ mod tests {
         let reader = SolanaWatcher::new(
             &cfg,
             RpcAccountFetcher::new(&endpoint, tokio::runtime::Handle::current()),
-        );
+        )
+        .expect("a mock mint under legacy SPL Token is an accepted pairing");
         assert_eq!(
             reader.read_balance(&DepositAddress(RPC_WALLET)).unwrap(),
             Some(750)
@@ -5837,49 +5872,57 @@ mod tests {
         );
     }
 
-    /// **AUTHORITY, on the pure decode.** Each forged attribution field is refused:
-    /// a foreign mint, a foreign token owner, a non-SPL-Token owning program, and a
-    /// balance entry belonging to a DIFFERENT token account. None of them credit.
+    /// **AUTHORITY, on the pure decode.** Each forged attribution field on the WATCHED
+    /// account's entry is an ERROR — a foreign mint, a foreign token owner, a non-asset
+    /// owning program — never `Ok(None)`: the watch selected that account by (wallet, mint),
+    /// so a disagreement is a lying transport or a misconfigured watch, and a skip there is
+    /// a silent zero. A balance entry for a DIFFERENT token account is simply not ours
+    /// (`Ok(None)`). None of them credit.
     #[test]
     fn credited_amount_refuses_every_forged_attribution() {
         let spl = dregg_pay::config::SPL_TOKEN_PROGRAM_ID;
-        assert_eq!(
-            credited(&tx_json(
-                [0xEEu8; 32],
-                DECODE_WALLET,
-                spl,
-                DECODE_TOKEN_ACCOUNT,
-                None,
-                u64::MAX
-            ))
-            .unwrap(),
-            None,
+        assert!(
+            matches!(
+                credited(&tx_json(
+                    [0xEEu8; 32],
+                    DECODE_WALLET,
+                    spl,
+                    DECODE_TOKEN_ACCOUNT,
+                    None,
+                    u64::MAX
+                )),
+                Err(WatchError::Holding(HoldingProofError::WrongMint))
+            ),
             "a foreign MINT is never credited as this asset"
         );
-        assert_eq!(
-            credited(&tx_json(
-                DECODE_MINT,
-                [0x22u8; 32],
-                spl,
-                DECODE_TOKEN_ACCOUNT,
-                None,
-                u64::MAX
-            ))
-            .unwrap(),
-            None,
+        assert!(
+            matches!(
+                credited(&tx_json(
+                    DECODE_MINT,
+                    [0x22u8; 32],
+                    spl,
+                    DECODE_TOKEN_ACCOUNT,
+                    None,
+                    u64::MAX
+                )),
+                Err(WatchError::WrongTokenOwner { .. })
+            ),
             "a token account owned by ANOTHER wallet is never credited to this user"
         );
-        assert_eq!(
-            credited(&tx_json(
-                DECODE_MINT,
-                DECODE_WALLET,
-                [0xAAu8; 32],
-                DECODE_TOKEN_ACCOUNT,
-                None,
-                u64::MAX
-            ))
-            .unwrap(),
-            None,
+        assert!(
+            matches!(
+                credited(&tx_json(
+                    DECODE_MINT,
+                    DECODE_WALLET,
+                    [0xAAu8; 32],
+                    DECODE_TOKEN_ACCOUNT,
+                    None,
+                    u64::MAX
+                )),
+                Err(WatchError::Holding(
+                    HoldingProofError::NotSplTokenProgram { .. }
+                ))
+            ),
             "an account owned by an attacker's own program is not an authoritative balance"
         );
         assert_eq!(
@@ -5895,6 +5938,79 @@ mod tests {
             None,
             "a balance entry for a DIFFERENT token account is not this account's money"
         );
+    }
+
+    /// **THE TOKEN-2022 VECTOR.** The live `$DREGG` mint is Token-2022, so a real payment's
+    /// PRE/POST `programId` is `TokenzQd…`. Watched under Token-2022 it credits the delta;
+    /// the same bytes watched under legacy SPL Token — the pairing the rail used to hardcode —
+    /// are REFUSED, not read as "added nothing".
+    #[test]
+    fn credited_amount_credits_a_token_2022_dregg_payment() {
+        use dregg_pay::{AcceptedTokenProgram, DREGG_MAINNET_MINT};
+        let t2022 = AcceptedTokenProgram::Token2022.program_id();
+        let resp = tx_json(
+            DREGG_MAINNET_MINT,
+            DECODE_WALLET,
+            t2022,
+            DECODE_TOKEN_ACCOUNT,
+            Some(250),
+            1_250,
+        );
+        assert_eq!(
+            resp["result"]["meta"]["preTokenBalances"][0]["programId"],
+            bs58::encode(t2022).into_string(),
+            "the vector carries Token-2022 in PRE as well as POST"
+        );
+        assert_eq!(
+            credited_amount(
+                &resp,
+                &DREGG_MAINNET_MINT,
+                &DECODE_WALLET,
+                &DECODE_TOKEN_ACCOUNT,
+                &t2022
+            )
+            .unwrap(),
+            Some(1_000),
+            "a Token-2022 $DREGG payment credits its own post − pre"
+        );
+        assert!(
+            matches!(
+                credited_amount(
+                    &resp,
+                    &DREGG_MAINNET_MINT,
+                    &DECODE_WALLET,
+                    &DECODE_TOKEN_ACCOUNT,
+                    &dregg_pay::config::SPL_TOKEN_PROGRAM_ID,
+                ),
+                Err(WatchError::Holding(HoldingProofError::NotSplTokenProgram { owner_program }))
+                    if owner_program == t2022
+            ),
+            "a Token-2022 account watched under legacy SPL Token is refused, never a silent zero"
+        );
+    }
+
+    /// The live `$DREGG` mint configured under legacy SPL Token is refused when the
+    /// mainnet watcher is SELECTED — before any poll, so the bot never boots a watcher
+    /// that would credit nothing and report healthy.
+    #[tokio::test]
+    async fn select_watcher_refuses_the_live_dregg_mint_under_legacy_spl_token() {
+        use dregg_pay::{AcceptedTokenProgram, DREGG_MAINNET_MINT};
+        let mut cfg = selection_cfg(Network::Mainnet, "https://rpc.mainnet.example.invalid");
+        cfg.mint = DREGG_MAINNET_MINT; // devnet_mock left the program legacy
+        let err = select_watcher(&cfg, true, false, tokio::runtime::Handle::current())
+            .expect_err("the silent-zero pairing must not select a watcher");
+        assert!(matches!(
+            err,
+            WatcherSelectError::AssetPolicy(dregg_pay::ConfigError::AssetPolicy {
+                asset: Asset::Dregg,
+                error: HoldingProofError::DreggProgramMismatch,
+            })
+        ));
+        cfg.set_token_program(Asset::Dregg, AcceptedTokenProgram::Token2022)
+            .unwrap();
+        let selected = select_watcher(&cfg, true, false, tokio::runtime::Handle::current())
+            .expect("the live mint under Token-2022 selects the real watcher");
+        assert!(matches!(selected, SelectedWatcher::RealSolana(_)));
     }
 
     /// An RPC too old (or too lossy) to report `owner` / `programId` cannot attribute a

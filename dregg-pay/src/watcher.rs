@@ -23,8 +23,8 @@
 //!
 //! * [`SignatureWatcher`] — **the production credit path.** One
 //!   [`PaymentReceived`] per finalized inbound transfer, keyed on the transaction
-//!   signature (`soltx:{signature}`). Restart-stable, sweep-stable, unique per
-//!   transfer. The signature-history transport is the injected [`TransferFetcher`]
+//!   signature AND the credited account (`soltx:{signature}:{address}:{mint}`, see
+//!   [`signature_payment_ref`]). Restart-stable, sweep-stable, unique per transfer. The signature-history transport is the injected [`TransferFetcher`]
 //!   seam, so the fail-closed attribution logic is exercised with no network.
 //! * [`MockWatcher`] over a [`MockChain`] — a simulated devnet ledger, fully driven
 //!   in tests (no network, no funds). Balance-total based, and therefore NOT
@@ -32,8 +32,8 @@
 //!   answer 3 rather than an oversight.
 //! * [`SolanaWatcher`] — **no longer a [`Watcher`]**. It keeps the two things that
 //!   were always sound: the bridge crate's
-//!   [`decode_spl_token_account`](dregg_bridge::solana_holdings::decode_spl_token_account)
-//!   balance read ([`SolanaWatcher::read_balance`]) and, for a trustless read, the
+//!   [`decode_token_account`](dregg_bridge::solana_holdings::decode_token_account)
+//!   balance read (under the asset's own token program) ([`SolanaWatcher::read_balance`]) and, for a trustless read, the
 //!   bridge's **anchored** verifier
 //!   [`prove_holding_consensus_anchored`](dregg_bridge::solana_holdings::prove_holding_consensus_anchored)
 //!   (authorized-voter-bound ≥ 2/3 supermajority over a stake table DERIVED from
@@ -52,20 +52,20 @@ use std::sync::{Arc, Mutex};
 
 use dregg_bridge::solana_consensus::PohAnchorPolicy;
 use dregg_bridge::solana_holdings::{
-    HoldingProof, HoldingProofError, ProvenHolding, decode_spl_token_account,
+    HoldingAssetPolicy, HoldingProof, HoldingProofError, ProvenHolding, decode_token_account,
     prove_holding_consensus_anchored,
 };
 use dregg_bridge::solana_provenance::WeakSubjectivityAnchor;
 
-use crate::config::{Asset, DepositAddress, PayConfig, UserId};
+use crate::config::{Asset, ConfigError, DepositAddress, PayConfig, UserId};
 
 /// A unique reference for an observed payment — the idempotency key the
 /// [`CreditLedger`](crate::ledger::CreditLedger) dedups on.
 ///
 /// **The key must be a property of the CHAIN, not of this process.** The production
-/// [`SignatureWatcher`] mints `soltx:{signature}` from the transaction signature: the
-/// same transfer yields the same reference from any process, at any slot, before or
-/// after a sweep, forever. A reference built from the RPC's current slot, or from a
+/// [`SignatureWatcher`] mints `soltx:{signature}:{address}:{mint}`
+/// ([`signature_payment_ref`]): the same transfer yields the same reference from any
+/// process, at any slot, before or after a sweep, forever. A reference built from the RPC's current slot, or from a
 /// process-local counter, is fresh on every poll and makes the durable dedupe table
 /// dedupe nothing — that was the wound this type's doc used to describe.
 ///
@@ -371,9 +371,9 @@ pub trait AccountFetcher {
 /// * [`SolanaWatcher::verify_consensus`] — the anchored, consensus-verified holding.
 pub struct SolanaWatcher<F: AccountFetcher> {
     fetcher: F,
-    mint: [u8; 32],
+    /// The checked (mint, token program) pair of the watched asset.
+    policy: HoldingAssetPolicy,
     asset: Asset,
-    spl_token_program: [u8; 32],
     /// The operator's governance-pinned weak-subjectivity anchor — the ONLY trust
     /// root [`SolanaWatcher::verify_consensus`] accepts. `None` (not configured)
     /// fails closed: no consensus-verified holding can be produced, and there is
@@ -387,22 +387,20 @@ pub struct SolanaWatcher<F: AccountFetcher> {
 impl<F: AccountFetcher> SolanaWatcher<F> {
     /// Build from a [`PayConfig`] + an RPC fetcher, watching the `$DREGG` mint (the
     /// default). Use [`SolanaWatcher::for_asset`] to watch USDC (its mint + tag).
-    pub fn new(config: &PayConfig, fetcher: F) -> Self {
+    pub fn new(config: &PayConfig, fetcher: F) -> Result<Self, ConfigError> {
         Self::for_asset(config, fetcher, Asset::Dregg)
     }
 
-    /// Build a watcher for a specific `asset` — it watches that asset's mint
-    /// ([`PayConfig::mint_for`]) and tags observed payments with it. Run one per
-    /// accepted asset for the dual-asset stream.
-    pub fn for_asset(config: &PayConfig, fetcher: F, asset: Asset) -> Self {
-        SolanaWatcher {
+    /// Build a reader for a specific `asset` — that asset's mint AND token program
+    /// ([`PayConfig::asset_policy`]). Refused when the pairing is refused.
+    pub fn for_asset(config: &PayConfig, fetcher: F, asset: Asset) -> Result<Self, ConfigError> {
+        Ok(SolanaWatcher {
             fetcher,
-            mint: config.mint_for(asset),
+            policy: config.asset_policy(asset)?,
             asset,
-            spl_token_program: config.spl_token_program,
             pinned_anchor: None,
             poh_policy: None,
-        }
+        })
     }
 
     /// The asset whose mint this reader watches.
@@ -412,7 +410,7 @@ impl<F: AccountFetcher> SolanaWatcher<F> {
 
     /// The mint this reader watches.
     pub fn mint(&self) -> [u8; 32] {
-        self.mint
+        *self.policy.mint()
     }
 
     /// Pin the operator's governance-chosen [`WeakSubjectivityAnchor`] (+ the
@@ -455,8 +453,8 @@ impl<F: AccountFetcher> SolanaWatcher<F> {
             .ok_or(HoldingProofError::AnchorNotPinned)?;
         prove_holding_consensus_anchored(
             proof,
-            &self.mint,
-            &self.spl_token_program,
+            self.policy.mint(),
+            &self.policy.program_id(),
             anchor,
             require_poh,
             self.poh_policy.as_ref(),
@@ -487,22 +485,27 @@ impl<F: AccountFetcher> SolanaWatcher<F> {
     /// never be turned into one (see the type doc). Credit flows through
     /// [`SignatureWatcher`].
     pub fn read_balance(&self, address: &DepositAddress) -> Result<Option<u64>, WatchError> {
-        let fetched = match self.fetcher.fetch_token_account(address, &self.mint)? {
+        let fetched = match self
+            .fetcher
+            .fetch_token_account(address, self.policy.mint())?
+        {
             Some(a) => a,
             None => return Ok(None),
         };
         // Fail closed: the account must be owned by the SPL Token program, or its
         // bytes are not an authoritative balance (the proof-of-holdings forgery
         // defense — an attacker's own program can write `mint ‖ wallet ‖ u64::MAX`).
-        if fetched.owner_program != self.spl_token_program {
+        if fetched.owner_program != self.policy.program_id() {
             return Err(WatchError::Holding(HoldingProofError::NotSplTokenProgram {
                 owner_program: fetched.owner_program,
             }));
         }
-        // Reuse the bridge's exact SPL layout decode.
-        let (mint, owner, amount) = decode_spl_token_account(&fetched.data)
-            .ok_or(WatchError::Holding(HoldingProofError::NotTokenAccount))?;
-        if mint != self.mint {
+        // Reuse the bridge's exact decode, under THIS asset's program layout (a
+        // Token-2022 account may carry validated extensions past the 165-byte base).
+        let decoded = decode_token_account(&fetched.data, self.policy.token_program())
+            .map_err(WatchError::Holding)?;
+        let (mint, owner, amount) = (decoded.mint, decoded.owner, decoded.amount);
+        if mint != *self.policy.mint() {
             return Err(WatchError::Holding(HoldingProofError::WrongMint));
         }
         if owner != address.to_bytes() {
@@ -568,16 +571,47 @@ pub trait TransferFetcher {
     /// Finalized transfers INTO `owner`'s token account for `mint`, most recent first,
     /// bounded by `limit`. An owner with no token account for `mint` has no transfers:
     /// that is `Ok(vec![])`, NOT an error.
+    ///
+    /// `token_program` is the program that owns the asset's token accounts — the
+    /// watcher's per-asset value, passed on every call so a transport cannot hold a
+    /// second, disagreeing copy of it. A transport that sees the watched account under
+    /// a DIFFERENT program must refuse (`Err`), not report "nothing added".
     fn fetch_transfers(
         &self,
         owner: &DepositAddress,
         mint: &[u8; 32],
+        token_program: &[u8; 32],
         limit: usize,
     ) -> Result<Vec<ObservedTransfer>, WatchError>;
 }
 
+/// The idempotency key of one credited transfer: `soltx:{signature}:{address}:{mint}`,
+/// address and mint in base58.
+///
+/// **The signature alone is not a payment's key.** One Solana transaction can move tokens
+/// into MANY token accounts — two users' deposit addresses, or one address's `$DREGG` and
+/// USDC accounts. Keyed on the signature alone, the first credit marks `soltx:{sig}`
+/// processed and every other credit of the same transaction is refused as a duplicate and
+/// LOST; anyone can build that transaction (1 unit to a victim's deposit address + 1 to
+/// their own, ordered to be observed first) to erase a victim's payment. The credited
+/// token account is determined by (deposit address, mint) — the watcher credits exactly
+/// the account `getTokenAccountsByOwner(address, mint)` selects — so the triple names
+/// exactly one credit, and every part of it is still a property of the chain.
+pub fn signature_payment_ref(
+    signature: &str,
+    address: &DepositAddress,
+    mint: &[u8; 32],
+) -> PaymentRef {
+    PaymentRef(format!(
+        "soltx:{signature}:{}:{}",
+        address.to_base58(),
+        bs58::encode(mint).into_string()
+    ))
+}
+
 /// **The production payment watcher.** One [`PaymentReceived`] per finalized inbound
-/// transaction, with `reference = soltx:{signature}`.
+/// transaction INTO the polled deposit account, with
+/// `reference = soltx:{signature}:{address}:{mint}` ([`signature_payment_ref`]).
 ///
 /// # RESTART: nothing to declare, because nothing is held
 ///
@@ -587,8 +621,9 @@ pub trait TransferFetcher {
 /// fresh process is indistinguishable from a long-running one. Deduplication is
 /// answer **2 (REBUILD)** performed by the durable
 /// [`CreditLedger`](crate::ledger::CreditLedger): `pay_processed` has
-/// `reference TEXT PRIMARY KEY`, the reference is now the chain's own transaction
-/// signature, and so the durable table finally recognises a repeat. No new store was
+/// `reference TEXT PRIMARY KEY`, the reference is now the chain's own (transaction
+/// signature, credited account), and so the durable table finally recognises a repeat
+/// — and only a repeat. No new store was
 /// needed; only a key that the process does not invent.
 ///
 /// # Fail-closed attribution
@@ -601,30 +636,31 @@ pub trait TransferFetcher {
 /// half-wrong look healthy.
 pub struct SignatureWatcher<F: TransferFetcher> {
     fetcher: F,
-    mint: [u8; 32],
+    /// The checked (mint, token program) pair of the watched asset.
+    policy: HoldingAssetPolicy,
     asset: Asset,
-    spl_token_program: [u8; 32],
     history_limit: usize,
 }
 
 impl<F: TransferFetcher> SignatureWatcher<F> {
     /// Build from a [`PayConfig`] + a signature-history fetcher, watching the `$DREGG`
     /// mint (the default). Use [`SignatureWatcher::for_asset`] to watch USDC.
-    pub fn new(config: &PayConfig, fetcher: F) -> Self {
+    pub fn new(config: &PayConfig, fetcher: F) -> Result<Self, ConfigError> {
         Self::for_asset(config, fetcher, Asset::Dregg)
     }
 
-    /// Build a watcher for a specific `asset` — it watches that asset's mint
-    /// ([`PayConfig::mint_for`]) and tags observed payments with it. Run one per
-    /// accepted asset for the dual-asset stream.
-    pub fn for_asset(config: &PayConfig, fetcher: F, asset: Asset) -> Self {
-        SignatureWatcher {
+    /// Build a watcher for a specific `asset` — it watches that asset's mint under that
+    /// asset's token program ([`PayConfig::asset_policy`]) and tags observed payments
+    /// with it. Run one per accepted asset for the dual-asset stream. Refused when the
+    /// pairing is refused: the live `$DREGG` mint under legacy SPL Token would observe
+    /// every real payment as nothing.
+    pub fn for_asset(config: &PayConfig, fetcher: F, asset: Asset) -> Result<Self, ConfigError> {
+        Ok(SignatureWatcher {
             fetcher,
-            mint: config.mint_for(asset),
+            policy: config.asset_policy(asset)?,
             asset,
-            spl_token_program: config.spl_token_program,
             history_limit: DEFAULT_TRANSFER_HISTORY_LIMIT,
-        }
+        })
     }
 
     /// Override how far back each poll looks. See
@@ -645,7 +681,12 @@ impl<F: TransferFetcher> SignatureWatcher<F> {
 
     /// The mint this watcher watches.
     pub fn mint(&self) -> [u8; 32] {
-        self.mint
+        *self.policy.mint()
+    }
+
+    /// The token program that owns the watched asset's token accounts.
+    pub fn token_program(&self) -> [u8; 32] {
+        self.policy.program_id()
     }
 
     /// How far back each poll looks.
@@ -660,19 +701,21 @@ impl<F: TransferFetcher> Watcher for SignatureWatcher<F> {
         user: &UserId,
         address: &DepositAddress,
     ) -> Result<Vec<PaymentReceived>, WatchError> {
-        let transfers = self
-            .fetcher
-            .fetch_transfers(address, &self.mint, self.history_limit)?;
+        let mint = *self.policy.mint();
+        let token_program = self.policy.program_id();
+        let transfers =
+            self.fetcher
+                .fetch_transfers(address, &mint, &token_program, self.history_limit)?;
         let mut payments = Vec::with_capacity(transfers.len());
         for t in transfers {
             // Fail closed, in the same order and with the same errors the balance read
             // uses — the transport's claims are re-checked against operator config.
-            if t.token_program != self.spl_token_program {
+            if t.token_program != token_program {
                 return Err(WatchError::Holding(HoldingProofError::NotSplTokenProgram {
                     owner_program: t.token_program,
                 }));
             }
-            if t.mint != self.mint {
+            if t.mint != mint {
                 return Err(WatchError::Holding(HoldingProofError::WrongMint));
             }
             if t.token_owner != address.to_bytes() {
@@ -691,8 +734,9 @@ impl<F: TransferFetcher> Watcher for SignatureWatcher<F> {
                 deposit_address: *address,
                 asset: self.asset,
                 // The CHAIN's key: the same transfer yields this same string from any
-                // process, at any slot, before or after a sweep.
-                reference: PaymentRef(format!("soltx:{}", t.signature)),
+                // process, at any slot, before or after a sweep — and a transaction
+                // that pays several accounts yields one DISTINCT key per account.
+                reference: signature_payment_ref(&t.signature, address, &mint),
                 amount: t.amount,
             });
         }
@@ -749,12 +793,14 @@ mod tests {
     }
 
     /// Build a real 165-byte SPL token account layout: `mint(32) ‖ owner(32) ‖
-    /// amount_le(8) ‖ zero-pad`.
+    /// amount_le(8) ‖ zero-pad`, with `state` (byte 108) = `Initialized` — the bridge's
+    /// decode refuses an uninitialized account, which an all-zero pad would be.
     fn spl_account_bytes(mint: &[u8; 32], owner: &[u8; 32], amount: u64) -> Vec<u8> {
         let mut data = vec![0u8; 165];
         data[0..32].copy_from_slice(mint);
         data[32..64].copy_from_slice(owner);
         data[64..72].copy_from_slice(&amount.to_le_bytes());
+        data[108] = 1; // AccountState::Initialized
         data
     }
 
@@ -788,7 +834,7 @@ mod tests {
                 slot: 42,
             }),
         };
-        let watcher = SolanaWatcher::new(&cfg, fetcher);
+        let watcher = SolanaWatcher::new(&cfg, fetcher).unwrap();
         let got = watcher.read_balance(&DepositAddress(owner)).unwrap();
         assert_eq!(got, Some(750));
     }
@@ -809,7 +855,7 @@ mod tests {
                 slot: 1,
             }),
         };
-        let watcher = SolanaWatcher::new(&cfg, fetcher);
+        let watcher = SolanaWatcher::new(&cfg, fetcher).unwrap();
         let err = watcher
             .read_balance(&DepositAddress([1u8; 32]))
             .unwrap_err();
@@ -834,7 +880,7 @@ mod tests {
                 slot: 1,
             }),
         };
-        let watcher = SolanaWatcher::new(&cfg, fetcher);
+        let watcher = SolanaWatcher::new(&cfg, fetcher).unwrap();
         let err = watcher
             .read_balance(&DepositAddress([1u8; 32]))
             .unwrap_err();
@@ -862,6 +908,7 @@ mod tests {
             100,
         );
         SolanaWatcher::new(&cfg, MockFetcher { acct: None })
+            .unwrap()
             .with_pinned_anchor(anchor, Some(policy))
     }
 
@@ -948,7 +995,7 @@ mod tests {
             DepositAddress([2u8; 32]),
             100,
         );
-        let watcher = SolanaWatcher::new(&cfg, MockFetcher { acct: None });
+        let watcher = SolanaWatcher::new(&cfg, MockFetcher { acct: None }).unwrap();
         assert_eq!(
             watcher.verify_consensus(&proof, true).unwrap_err(),
             HoldingProofError::AnchorNotPinned
@@ -975,7 +1022,8 @@ mod tests {
                     slot: 9,
                 }),
             },
-        );
+        )
+        .unwrap();
         assert!(matches!(
             watcher.read_balance(&DepositAddress(victim)),
             Err(WatchError::WrongTokenOwner { expected, actual })
@@ -1022,6 +1070,7 @@ mod tests {
             &self,
             _owner: &DepositAddress,
             _mint: &[u8; 32],
+            _token_program: &[u8; 32],
             limit: usize,
         ) -> Result<Vec<ObservedTransfer>, WatchError> {
             *self.seen_limit.lock().unwrap() = Some(limit);
@@ -1073,7 +1122,8 @@ mod tests {
         let watcher = SignatureWatcher::new(
             &cfg,
             FixtureTransfers::new(vec![transfer("SiGoNe", 750, wallet, mint)]),
-        );
+        )
+        .unwrap();
         let alice = UserId::from("alice");
         let addr = DepositAddress(wallet);
 
@@ -1081,7 +1131,10 @@ mod tests {
         assert_eq!(first.len(), 1);
         assert_eq!(first[0].amount, 750);
         assert_eq!(first[0].user, alice);
-        assert_eq!(first[0].reference, PaymentRef("soltx:SiGoNe".to_string()));
+        assert_eq!(
+            first[0].reference,
+            signature_payment_ref("SiGoNe", &addr, &mint)
+        );
 
         // Re-poll: the transport reports a NEW slot, and the reference does not move.
         let second = watcher.poll(&alice, &addr).unwrap();
@@ -1109,14 +1162,22 @@ mod tests {
             transfer("SigZero", 0, wallet, mint),
             transfer("SigB", 250, wallet, mint),
         ]);
-        let watcher = SignatureWatcher::new(&cfg, fixture).with_history_limit(7);
+        let watcher = SignatureWatcher::new(&cfg, fixture)
+            .unwrap()
+            .with_history_limit(7);
         let got = watcher
             .poll(&UserId::from("alice"), &DepositAddress(wallet))
             .unwrap();
         assert_eq!(got.len(), 2, "the zero-delta entry is not a payment");
-        assert_eq!(got[0].reference, PaymentRef("soltx:SigA".to_string()));
+        assert_eq!(
+            got[0].reference,
+            signature_payment_ref("SigA", &DepositAddress(wallet), &mint)
+        );
         assert_eq!(got[0].amount, 500);
-        assert_eq!(got[1].reference, PaymentRef("soltx:SigB".to_string()));
+        assert_eq!(
+            got[1].reference,
+            signature_payment_ref("SigB", &DepositAddress(wallet), &mint)
+        );
         assert_eq!(got[1].amount, 250);
         assert_eq!(watcher.history_limit(), 7);
     }
@@ -1143,6 +1204,7 @@ mod tests {
                     Arc::clone(&clock),
                 ),
             )
+            .unwrap()
         };
         let before = {
             let watcher = boot();
@@ -1181,7 +1243,7 @@ mod tests {
         let cfg = sig_cfg(mint);
         let mut evil = transfer("SigForged", u64::MAX, wallet, mint);
         evil.token_program = [0xAAu8; 32]; // attacker's own program, not SPL Token
-        let watcher = SignatureWatcher::new(&cfg, FixtureTransfers::new(vec![evil]));
+        let watcher = SignatureWatcher::new(&cfg, FixtureTransfers::new(vec![evil])).unwrap();
         let err = watcher
             .poll(&UserId::from("mallory"), &DepositAddress(wallet))
             .unwrap_err();
@@ -1204,7 +1266,8 @@ mod tests {
         let watcher = SignatureWatcher::new(
             &cfg,
             FixtureTransfers::new(vec![transfer("SigWrongMint", 100, wallet, [0xEEu8; 32])]),
-        );
+        )
+        .unwrap();
         let err = watcher
             .poll(&UserId::from("alice"), &DepositAddress(wallet))
             .unwrap_err();
@@ -1226,7 +1289,8 @@ mod tests {
         let watcher = SignatureWatcher::new(
             &cfg,
             FixtureTransfers::new(vec![transfer("SigOther", 50_000_000, attacker, mint)]),
-        );
+        )
+        .unwrap();
         assert!(
             matches!(
                 watcher.poll(&UserId::from("victim"), &DepositAddress(victim)),
@@ -1235,5 +1299,106 @@ mod tests {
             ),
             "a transfer to another wallet must not credit the polled user"
         );
+    }
+
+    // ── Token-2022: the live `$DREGG` mint's own program ────────────────────────
+
+    use dregg_bridge::solana_holdings::{AcceptedTokenProgram, DREGG_MAINNET_MINT};
+
+    /// A config watching the LIVE `$DREGG` mint under its real program, Token-2022.
+    fn live_dregg_cfg() -> PayConfig {
+        let mut cfg = sig_cfg(DREGG_MAINNET_MINT);
+        cfg.set_token_program(Asset::Dregg, AcceptedTokenProgram::Token2022)
+            .expect("the live mint under Token-2022 is the accepted pairing");
+        cfg
+    }
+
+    /// A Token-2022 transfer of the live mint is credited, and the transport is asked
+    /// for it under Token-2022 — the program travels from the asset's config.
+    #[test]
+    fn signature_watcher_credits_a_token_2022_dregg_transfer() {
+        let wallet = [1u8; 32];
+        let t2022 = AcceptedTokenProgram::Token2022.program_id();
+        let mut t = transfer("SigT22", 750, wallet, DREGG_MAINNET_MINT);
+        t.token_program = t2022;
+        let watcher = SignatureWatcher::new(&live_dregg_cfg(), FixtureTransfers::new(vec![t]))
+            .expect("accepted pairing");
+        assert_eq!(watcher.token_program(), t2022);
+        let got = watcher
+            .poll(&UserId::from("alice"), &DepositAddress(wallet))
+            .unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].amount, 750);
+        assert_eq!(
+            got[0].reference,
+            signature_payment_ref("SigT22", &DepositAddress(wallet), &DREGG_MAINNET_MINT)
+        );
+    }
+
+    /// The silent-zero pairing cannot be built: the live mint with legacy SPL Token is
+    /// refused at watcher construction, for both the credit watcher and the balance
+    /// reader.
+    #[test]
+    fn watchers_refuse_the_live_dregg_mint_under_legacy_spl_token() {
+        let cfg = sig_cfg(DREGG_MAINNET_MINT); // devnet_mock: legacy program
+        let refused = ConfigError::AssetPolicy {
+            asset: Asset::Dregg,
+            error: HoldingProofError::DreggProgramMismatch,
+        };
+        assert_eq!(
+            SignatureWatcher::new(&cfg, FixtureTransfers::new(vec![])).err(),
+            Some(refused.clone())
+        );
+        assert_eq!(
+            SolanaWatcher::new(&cfg, MockFetcher { acct: None }).err(),
+            Some(refused)
+        );
+    }
+
+    /// Under Token-2022, a transport reporting the live mint under LEGACY SPL Token is
+    /// refused (the whole poll fails), never read as zero.
+    #[test]
+    fn signature_watcher_refuses_a_legacy_program_transfer_of_the_live_mint() {
+        let wallet = [1u8; 32];
+        let legacy = transfer("SigLegacy", 750, wallet, DREGG_MAINNET_MINT);
+        let watcher =
+            SignatureWatcher::new(&live_dregg_cfg(), FixtureTransfers::new(vec![legacy])).unwrap();
+        assert!(matches!(
+            watcher.poll(&UserId::from("alice"), &DepositAddress(wallet)),
+            Err(WatchError::Holding(HoldingProofError::NotSplTokenProgram { owner_program }))
+                if owner_program == SPL_TOKEN_PROGRAM_ID
+        ));
+    }
+
+    /// The balance read decodes a Token-2022-owned account under the Token-2022 layout
+    /// policy, and refuses the same bytes claimed under legacy SPL Token.
+    #[test]
+    fn solana_watcher_reads_a_token_2022_balance() {
+        let owner = [1u8; 32];
+        let data = spl_account_bytes(&DREGG_MAINNET_MINT, &owner, 750);
+        let read = |owner_program: [u8; 32]| {
+            SolanaWatcher::new(
+                &live_dregg_cfg(),
+                MockFetcher {
+                    acct: Some(FetchedAccount {
+                        data: data.clone(),
+                        owner_program,
+                        slot: 7,
+                    }),
+                },
+            )
+            .unwrap()
+            .read_balance(&DepositAddress(owner))
+        };
+        assert_eq!(
+            read(AcceptedTokenProgram::Token2022.program_id()).unwrap(),
+            Some(750)
+        );
+        assert!(matches!(
+            read(SPL_TOKEN_PROGRAM_ID),
+            Err(WatchError::Holding(
+                HoldingProofError::NotSplTokenProgram { .. }
+            ))
+        ));
     }
 }

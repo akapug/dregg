@@ -98,6 +98,11 @@ pub use config::{
     DEFAULT_OTC_DISCOUNT_BPS, DEFAULT_PRICE_USD_PER_RUN, DEFAULT_USDC_DECIMALS, DepositAddress,
     Network, PayConfig, PayRole, SPL_TOKEN_PROGRAM_ID, Seed, UserId, parse_pubkey_base58,
 };
+/// The closed set of token programs a payment asset may live under, and the live
+/// `$DREGG` mint — re-exported so configuration sites name them from one place.
+pub use dregg_bridge::solana_holdings::{
+    AcceptedTokenProgram, DREGG_MAINNET_MINT, HoldingProofError,
+};
 pub use governance::{
     APPROVE_OPTION, GovernanceError, LiquidityGovernance, LiquidityProposal, MARKET_MIN_OUT,
     MarketSwapProposal, REJECT_OPTION,
@@ -160,5 +165,5 @@ pub use treasury::{InMemoryTreasuryStore, InferenceFuel, Treasury, TreasuryError
 pub use watcher::{
     AccountFetcher, DEFAULT_TRANSFER_HISTORY_LIMIT, FetchedAccount, MockChain, MockWatcher,
     ObservedTransfer, PaymentReceived, PaymentRef, SignatureWatcher, SolanaWatcher,
-    TransferFetcher, WatchError, Watcher,
+    TransferFetcher, WatchError, Watcher, signature_payment_ref,
 };

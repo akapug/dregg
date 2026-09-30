@@ -19,14 +19,19 @@
 //! on every poll because the slot advances every ~400ms, so the durable `pay_processed`
 //! table could never recognise a repeat, and the in-RAM `last_seen` map that was the
 //! only real guard is empty at boot. **Every restart re-credited every standing
-//! balance.** The repair was the KEY, not the store: `soltx:{signature}`.
+//! balance.** The repair was the KEY, not the store: a key the chain owns.
+//!
+//! The key is `soltx:{signature}:{address}:{mint}`, not `soltx:{signature}`: one
+//! transaction can pay several deposit accounts, and keyed on the signature alone the
+//! second account's credit was refused as already processed and lost
+//! (`one_transaction_paying_two_deposit_addresses_credits_both`).
 
 use std::sync::{Arc, Mutex};
 
 use dregg_pay::{
     CreditLedger, CreditOutcome, DepositAddress, InMemoryStore, ObservedTransfer, PayConfig,
     PaymentRef, SPL_TOKEN_PROGRAM_ID, SignatureWatcher, TransferFetcher, UserId, WatchError,
-    Watcher,
+    Watcher, signature_payment_ref,
 };
 
 /// Atomic units per run credit — 500 units is exactly 5 runs.
@@ -81,6 +86,7 @@ impl TransferFetcher for ChainTransfers {
         &self,
         _owner: &DepositAddress,
         _mint: &[u8; 32],
+        _token_program: &[u8; 32],
         limit: usize,
     ) -> Result<Vec<ObservedTransfer>, WatchError> {
         // A real RPC reports its CURRENT slot, which advances ~every 400ms.
@@ -116,6 +122,7 @@ fn boot(cfg: &PayConfig, chain: &Arc<Chain>) -> SignatureWatcher<ChainTransfers>
             chain: Arc::clone(chain),
         },
     )
+    .unwrap()
 }
 
 /// **THE RESTART TEST.** One 500-unit payment sits on the chain. A watcher observes it
@@ -252,10 +259,11 @@ fn a_post_sweep_redeposit_at_the_same_total_still_credits() {
     );
 }
 
-/// The reference the ledger stores is the CHAIN's key, verbatim — no slot, no counter,
-/// no address-plus-total. Pinned as a literal because this string is the durable
-/// primary key in `pay_processed`: changing its shape silently re-opens every already
-/// credited payment for a second credit.
+/// The reference the ledger stores is the CHAIN's key, verbatim — signature, credited
+/// deposit address, mint; no slot, no counter, no total. Pinned as a literal shape
+/// because this string is the durable primary key in `pay_processed`: changing its shape
+/// re-opens every already credited payment for a second credit (a rebuild, with the
+/// store re-genesised — never a silent in-place change).
 #[test]
 fn the_stored_reference_is_the_transaction_signature() {
     let chain = Chain::with_transfer("PaymentSignatureOne", 500);
@@ -266,6 +274,92 @@ fn the_stored_reference_is_the_transaction_signature() {
         .unwrap();
     assert_eq!(
         payments[0].reference,
-        PaymentRef("soltx:PaymentSignatureOne".to_string())
+        PaymentRef(format!(
+            "soltx:PaymentSignatureOne:{}:{}",
+            bs58::encode(WALLET).into_string(),
+            bs58::encode(MINT).into_string()
+        ))
+    );
+}
+
+/// ONE transaction, post − pre deltas on TWO watched deposit accounts (alice's and
+/// bob's) — the transaction anyone can build: 1 unit to a victim, 1 unit to themselves.
+/// A transport that reports the transfers of exactly the polled owner.
+struct OneTxTwoAccounts;
+
+impl TransferFetcher for OneTxTwoAccounts {
+    fn fetch_transfers(
+        &self,
+        owner: &DepositAddress,
+        mint: &[u8; 32],
+        token_program: &[u8; 32],
+        _limit: usize,
+    ) -> Result<Vec<ObservedTransfer>, WatchError> {
+        let delta = match owner.to_bytes() {
+            ALICE_WALLET => 500,
+            BOB_WALLET => 300,
+            _ => return Ok(Vec::new()),
+        };
+        Ok(vec![ObservedTransfer {
+            signature: "OneTxPaysTwoUsers".to_string(),
+            slot: 7,
+            amount: delta,
+            mint: *mint,
+            token_owner: owner.to_bytes(),
+            token_program: *token_program,
+        }])
+    }
+}
+
+const ALICE_WALLET: [u8; 32] = [0xA1u8; 32];
+const BOB_WALLET: [u8; 32] = [0xB0u8; 32];
+
+/// **Two credits from one transaction.** Keyed on the signature alone, alice's credit
+/// marked `soltx:OneTxPaysTwoUsers` processed and bob's credit for the same transaction
+/// came back `AlreadyCredited` — bob's 300 units lost, by anyone who pays two addresses
+/// in one transaction. Each credited account gets its own key, both credit, and a
+/// re-poll of either still credits nothing twice.
+#[test]
+fn one_transaction_paying_two_deposit_addresses_credits_both() {
+    let cfg = config();
+    let ledger = CreditLedger::new(InMemoryStore::new(), PRICE_PER_RUN);
+    let watcher = SignatureWatcher::new(&cfg, OneTxTwoAccounts).unwrap();
+    let (alice, bob) = (UserId::from("alice"), UserId::from("bob"));
+    let (alice_addr, bob_addr) = (DepositAddress(ALICE_WALLET), DepositAddress(BOB_WALLET));
+
+    let alice_pays = watcher.poll(&alice, &alice_addr).unwrap();
+    let bob_pays = watcher.poll(&bob, &bob_addr).unwrap();
+    let alice_outcome = ledger.credit(&alice_pays[0]);
+    let bob_outcome = ledger.credit(&bob_pays[0]);
+    assert!(matches!(alice_outcome, CreditOutcome::Credited { .. }));
+    assert!(
+        matches!(bob_outcome, CreditOutcome::Credited { .. }),
+        "bob's credit from the shared transaction was refused as processed: {bob_outcome:?}"
+    );
+    assert_ne!(
+        alice_pays[0].reference, bob_pays[0].reference,
+        "one transaction paying two accounts is two payments with two keys"
+    );
+    assert_eq!(ledger.balance(&alice), 5);
+    assert_eq!(ledger.balance(&bob), 3);
+
+    // Re-polling both (a restart, a second tick) credits nothing more.
+    for (user, addr) in [(&alice, &alice_addr), (&bob, &bob_addr)] {
+        for p in watcher.poll(user, addr).unwrap() {
+            assert!(matches!(ledger.credit(&p), CreditOutcome::AlreadyCredited));
+        }
+    }
+    assert_eq!((ledger.balance(&alice), ledger.balance(&bob)), (5, 3));
+}
+
+/// The same collision across ASSETS: one transaction paying one deposit address in both
+/// `$DREGG` and USDC is two credits. The key carries the mint, so they are distinct.
+#[test]
+fn one_transaction_paying_both_assets_to_one_address_has_two_keys() {
+    let cfg = config();
+    let addr = DepositAddress(ALICE_WALLET);
+    assert_ne!(
+        signature_payment_ref("OneTxTwoAssets", &addr, &cfg.mint),
+        signature_payment_ref("OneTxTwoAssets", &addr, &cfg.usdc_mint)
     );
 }
