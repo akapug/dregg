@@ -2106,14 +2106,18 @@ impl TurnExecutor {
             .map_err(|(err, _path)| err)
     }
 
-    fn token_auth_request(&self, action: &Action) -> dregg_token::AuthRequest {
+    fn token_auth_request(
+        action: &Action,
+        federation_id: &[u8; 32],
+        block_height: u64,
+    ) -> dregg_token::AuthRequest {
         // Deterministic, consensus-bound "now": the block height. Temporal
         // caveats reference this, never wall-clock.
         dregg_token::AuthRequest {
             action: Some(hex::encode(action.method)),
             service: Some(hex::encode(action.target.as_bytes())),
-            app_id: Some(hex::encode(self.local_federation_id)),
-            now: Some(self.block_height as i64),
+            app_id: Some(hex::encode(federation_id)),
+            now: Some(block_height as i64),
             ..Default::default()
         }
     }
@@ -2174,29 +2178,48 @@ impl TurnExecutor {
         path: &[usize],
         _turn_nonce: u64,
     ) -> Result<(), (TurnError, Vec<usize>)> {
+        Self::verify_token_credential(
+            action,
+            target_cell,
+            encoded,
+            key_ref,
+            &self.local_federation_id,
+            self.block_height,
+        )
+        .map_err(|e| (e, path.to_vec()))
+    }
+
+    /// The WHOLE `Authorization::Token` verdict as a function of its inputs: the action (its
+    /// `method` and `target`), the target cell (the trust anchor), the credential, the key_ref,
+    /// and the two executor facts the call-bound `AuthRequest` reads (the local federation id and
+    /// the block height). [`Self::verify_token_authorization`] is this function applied to the
+    /// executor's own federation id and height, so there is ONE token verifier.
+    ///
+    /// Public for the reason [`Self::compute_signing_message`] is: the verified-producer
+    /// marshaller (`dregg-exec-lean`'s `lean_shadow::token_echo_wire`) realizes the token WHO leg
+    /// by folding THIS verdict into the wire credential, so the Lean gate decides on the verdict
+    /// the executor reaches rather than on a reconstruction of it.
+    pub fn verify_token_credential(
+        action: &Action,
+        target_cell: &Cell,
+        encoded: &[u8],
+        key_ref: &crate::action::TokenKeyRef,
+        federation_id: &[u8; 32],
+        block_height: u64,
+    ) -> Result<(), TurnError> {
         use crate::action::TokenKeyRef;
         use dregg_token::TokenFormat;
         use dregg_token::traits::AuthToken;
 
-        let token_str = std::str::from_utf8(encoded).map_err(|_| {
-            (
-                TurnError::TokenAuthInvalid {
-                    reason: "encoded token is not valid UTF-8".to_string(),
-                },
-                path.to_vec(),
-            )
+        let token_str = std::str::from_utf8(encoded).map_err(|_| TurnError::TokenAuthInvalid {
+            reason: "encoded token is not valid UTF-8".to_string(),
         })?;
 
-        let fmt = TokenFormat::detect(token_str).map_err(|e| {
-            (
-                TurnError::TokenAuthInvalid {
-                    reason: format!("token format detection failed: {e}"),
-                },
-                path.to_vec(),
-            )
+        let fmt = TokenFormat::detect(token_str).map_err(|e| TurnError::TokenAuthInvalid {
+            reason: format!("token format detection failed: {e}"),
         })?;
 
-        let request = self.token_auth_request(action);
+        let request = Self::token_auth_request(action, federation_id, block_height);
 
         // Build the concrete token, resolving + trust-checking the root key.
         let token: Box<dyn AuthToken> = match (fmt, key_ref) {
@@ -2211,35 +2234,24 @@ impl TurnExecutor {
                     .map(|vk| vk.data.as_slice() == issuer_pubkey.as_slice())
                     .unwrap_or(false);
                 if &cell_pk != issuer_pubkey && !vk_match {
-                    return Err((
-                        TurnError::TokenAuthInvalid {
-                            reason: "biscuit issuer is not a granting authority the target \
+                    return Err(TurnError::TokenAuthInvalid {
+                        reason: "biscuit issuer is not a granting authority the target \
                                      cell trusts (must equal the cell's public key or its \
                                      verification key)"
-                                .to_string(),
-                        },
-                        path.to_vec(),
-                    ));
+                            .to_string(),
+                    });
                 }
                 let pk = dregg_token::biscuit_auth::PublicKey::from_bytes(
                     issuer_pubkey,
                     dregg_token::biscuit_auth::Algorithm::Ed25519,
                 )
-                .map_err(|e| {
-                    (
-                        TurnError::TokenAuthInvalid {
-                            reason: format!("biscuit issuer pubkey invalid: {e}"),
-                        },
-                        path.to_vec(),
-                    )
+                .map_err(|e| TurnError::TokenAuthInvalid {
+                    reason: format!("biscuit issuer pubkey invalid: {e}"),
                 })?;
                 let bt = dregg_token::BiscuitToken::from_encoded(token_str, pk).map_err(|e| {
-                    (
-                        TurnError::TokenAuthInvalid {
-                            reason: format!("biscuit decode/signature-check failed: {e}"),
-                        },
-                        path.to_vec(),
-                    )
+                    TurnError::TokenAuthInvalid {
+                        reason: format!("biscuit decode/signature-check failed: {e}"),
+                    }
                 })?;
                 Box::new(bt)
             }
@@ -2269,32 +2281,23 @@ impl TurnExecutor {
                 // wearing a credential's clothes. Cross-domain / cell-authorized
                 // credentials go through the biscuit arm above, which anchors on
                 // the cell's own public key or verification key.
-                return Err((
-                    TurnError::TokenAuthInvalid {
-                        reason: "cell-scoped macaroons are refused: the root key is derived \
+                return Err(TurnError::TokenAuthInvalid {
+                    reason: "cell-scoped macaroons are refused: the root key is derived \
                                  from the federation id and the cell id, both public, so it \
                                  is not a secret and possession of it proves nothing; use a \
                                  biscuit anchored on the cell's own key"
-                            .to_string(),
-                    },
-                    path.to_vec(),
-                ));
+                        .to_string(),
+                });
             }
             (TokenFormat::Biscuit, TokenKeyRef::CellScopedMacaroon { .. }) => {
-                return Err((
-                    TurnError::TokenAuthInvalid {
-                        reason: "token is a biscuit but key_ref is CellScopedMacaroon".to_string(),
-                    },
-                    path.to_vec(),
-                ));
+                return Err(TurnError::TokenAuthInvalid {
+                    reason: "token is a biscuit but key_ref is CellScopedMacaroon".to_string(),
+                });
             }
             (TokenFormat::Macaroon, TokenKeyRef::BiscuitIssuer { .. }) => {
-                return Err((
-                    TurnError::TokenAuthInvalid {
-                        reason: "token is a macaroon but key_ref is BiscuitIssuer".to_string(),
-                    },
-                    path.to_vec(),
-                ));
+                return Err(TurnError::TokenAuthInvalid {
+                    reason: "token is a macaroon but key_ref is BiscuitIssuer".to_string(),
+                });
             }
         };
 
@@ -2303,28 +2306,21 @@ impl TurnExecutor {
         // not grant the requested (action, resource) under its caveats.
         match token.verify(&request) {
             Ok(_clearance) => Ok(()),
-            Err(dregg_token::TokenError::Denied(msg)) => Err((
-                TurnError::TokenInsufficientCapability {
+            Err(dregg_token::TokenError::Denied(msg)) => {
+                Err(TurnError::TokenInsufficientCapability {
                     cell: action.target,
                     action: hex::encode(action.method),
                     reason: format!("token caveats/Datalog do not authorize this call: {msg}"),
-                },
-                path.to_vec(),
-            )),
-            Err(dregg_token::TokenError::Expired) => Err((
-                TurnError::TokenInsufficientCapability {
-                    cell: action.target,
-                    action: hex::encode(action.method),
-                    reason: "token expired by block height".to_string(),
-                },
-                path.to_vec(),
-            )),
-            Err(e) => Err((
-                TurnError::TokenAuthInvalid {
-                    reason: format!("token verification failed: {e}"),
-                },
-                path.to_vec(),
-            )),
+                })
+            }
+            Err(dregg_token::TokenError::Expired) => Err(TurnError::TokenInsufficientCapability {
+                cell: action.target,
+                action: hex::encode(action.method),
+                reason: "token expired by block height".to_string(),
+            }),
+            Err(e) => Err(TurnError::TokenAuthInvalid {
+                reason: format!("token verification failed: {e}"),
+            }),
         }
     }
 
