@@ -229,12 +229,11 @@ EVERY reachable state of the cell's whole run, given it holds at the start. Prod
 verification loop. -/
 theorem ledger_run_sound
     {s s' : RecChained}
-    (hprogInv : ∀ x : RecChained, x.program = ledgerSM)
-    (hmethodInv : ∀ x : RecChained, x.method = 0)
+    (hstart : RunsProgram ledgerSM 0 s)
     (hrun : Execution.Run (inducedSystem recordCell) s s')
     (h0 : sumScalars s.value ["escrowed", "paidOut"] = some 100) :
     sumScalars s'.value ["escrowed", "paidOut"] = some 100 :=
-  (vcg_run_sound ledgerSM ledgerSpec hprogInv hmethodInv ledgerVCs hrun h0).1
+  (vcg_run_sound ledgerSM 0 ledgerSpec ledgerVCs hstart hrun h0).1
 
 #assert_axioms ledger_VC_preserve
 #assert_axioms ledgerVCs
@@ -264,13 +263,11 @@ theorem ledgerCounterVCs (n₀ : Int) : vcg ledgerSM 0 (ledgerCounterSpec n₀) 
 multi-field invariant, produced by the same automated pipeline. -/
 theorem ledgerCounter_run_sound (n₀ : Int)
     {s s' : RecChained}
-    (hprogInv : ∀ x : RecChained, x.program = ledgerSM)
-    (hmethodInv : ∀ x : RecChained, x.method = 0)
+    (hstart : RunsProgram ledgerSM 0 s)
     (hrun : Execution.Run (inducedSystem recordCell) s s')
     (h0 : ∃ c, s.value.scalar "seq" = some c ∧ n₀ ≤ c) :
     ∃ c, s'.value.scalar "seq" = some c ∧ n₀ ≤ c :=
-  (vcg_run_sound ledgerSM (ledgerCounterSpec n₀) hprogInv hmethodInv
-    (ledgerCounterVCs n₀) hrun h0).1
+  (vcg_run_sound ledgerSM 0 (ledgerCounterSpec n₀) (ledgerCounterVCs n₀) hstart hrun h0).1
 
 #assert_axioms ledgerCounter_VC_preserve
 #assert_axioms ledgerCounterVCs

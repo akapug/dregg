@@ -24,8 +24,8 @@ open Dregg2.Circuit.FriVerifierBridge
 
 /-- **`DeployedRefines` DISCHARGED for the reduced `verifyBatch`.** `verifyBatch` acceptance FORCES
 `verifyAlgo` acceptance on the mapped data — because `verifyBatch` IS
-`verifyAlgoUnifiedFaithfulExt … (cfgView pi π) (cfgExtView pi π) && cfgExtra …`, an `accept`
-occurs only when the quartic-extension verifier returned `true`. Extension-faithful acceptance
+`vk = cfgKey ∧ (verifyAlgoUnifiedFaithfulExt … (cfgView pi π) (cfgExtView pi π) && cfgExtra …)`,
+an `accept` occurs only when the quartic-extension verifier returned `true`. Extension-faithful acceptance
 first strengthens to the scalar faithful verifier, then to `verifyAlgoUnified`, then to
 `verifyAlgo` (`verifyAlgoUnifiedFaithfulExt_imp_verifyAlgoUnifiedFaithful`, followed by
 `verifyAlgoUnifiedFaithful_imp_verifyAlgoUnified`, followed by
@@ -33,23 +33,16 @@ first strengthens to the scalar faithful verifier, then to `verifyAlgoUnified`, 
 theorem deployedRefines_cfg (R : Registry) :
     DeployedRefines R cfgPerm cfgRATE cfgToNat cfgParams cfgVk cfgChecks cfgInitState cfgLogN cfgView := by
   intro pi π hacc
-  unfold verifyBatch at hacc
-  by_cases h :
-      (Dregg2.Circuit.ExtFieldChallenge.verifyAlgoUnifiedFaithfulExt
-          cfgPerm cfgRATE cfgToNat cfgParams cfgVk cfgCore cfgA cfgExtCore cfgExtA cfgExtW
-          cfgInitState cfgLogN (cfgView pi π).1 (cfgView pi π).2 (cfgExtView pi π)
-        && cfgExtra (cfgView pi π).1 (cfgView pi π).2) = true
-  · simp only [Bool.and_eq_true] at h
-    have hf := Dregg2.Circuit.ExtFieldChallenge.verifyAlgoUnifiedFaithfulExt_imp_verifyAlgoUnifiedFaithful
+  have h := ((verifyBatch_accept_iff _ pi π).mp hacc).2
+  simp only [Bool.and_eq_true] at h
+  have hf := Dregg2.Circuit.ExtFieldChallenge.verifyAlgoUnifiedFaithfulExt_imp_verifyAlgoUnifiedFaithful
       cfgPerm cfgRATE cfgToNat cfgParams cfgVk cfgCore cfgA cfgExtCore cfgExtA cfgExtW
       cfgInitState cfgLogN (cfgView pi π).1 (cfgView pi π).2 (cfgExtView pi π) h.1
-    have hu := Dregg2.Circuit.FriChallengerUnified.verifyAlgoUnifiedFaithful_imp_verifyAlgoUnified
+  have hu := Dregg2.Circuit.FriChallengerUnified.verifyAlgoUnifiedFaithful_imp_verifyAlgoUnified
       cfgPerm cfgRATE cfgToNat cfgParams cfgVk cfgCore cfgA cfgInitState cfgLogN
       (cfgView pi π).1 (cfgView pi π).2 hf
-    exact Dregg2.Circuit.FriChallengerUnified.verifyAlgoUnified_imp_verifyAlgo cfgPerm cfgRATE cfgToNat
+  exact Dregg2.Circuit.FriChallengerUnified.verifyAlgoUnified_imp_verifyAlgo cfgPerm cfgRATE cfgToNat
       cfgParams cfgVk cfgCore cfgA cfgInitState cfgLogN (cfgView pi π).1 (cfgView pi π).2 hu
-  · rw [if_neg h] at hacc
-    exact absurd hacc (by decide)
 
 /-- **`StarkSound` on ONE floor.** With `DeployedRefines` discharged, the apex `StarkSound hash R`
 follows from `AlgoStarkSound` ALONE — the irreducible math floor (FRI proximity @ BabyBear + AIR

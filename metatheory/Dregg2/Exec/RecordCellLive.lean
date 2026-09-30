@@ -144,6 +144,27 @@ theorem recCexec_program {s s' : RecChained} {op : RecOp} (h : recCexec s op = s
     s'.program = s.program ∧ s'.method = s.method :=
   ⟨(recCexec_attests h).2.2.2.2.1, (recCexec_attests h).2.2.2.2.2⟩
 
+/-- The total successor carries the program and method: a commit carries them by
+`recCexec_program`, a stay-put leaves the whole state unchanged. -/
+theorem recNext_program (s : RecChained) (op : RecOp) :
+    (recNext s op).program = s.program ∧ (recNext s op).method = s.method := by
+  rcases recNext_commits_or_stays s op with hc | hstay
+  · exact recCexec_program hc
+  · rw [hstay]; exact ⟨rfl, rfl⟩
+
+/-- **`RunsProgram program method x`** — the cell `x` runs `program` under dispatch `method`.
+A property of ONE state, not of the type: the run-level theorems assume it at the START state and
+carry it along the run (`runsProgram_run`), because the cell never rewrites its own program. -/
+def RunsProgram (program : RecordProgram) (method : Nat) (x : RecChained) : Prop :=
+  x.program = program ∧ x.method = method
+
+/-- `RunsProgram` is preserved by every step of the living coalgebra. -/
+theorem runsProgram_next {program : RecordProgram} {method : Nat} {x : RecChained}
+    (h : RunsProgram program method x) (op : RecOp) :
+    RunsProgram program method (recNext x op) := by
+  obtain ⟨hp, hm⟩ := recNext_program x op
+  exact ⟨hp.trans h.1, hm.trans h.2⟩
+
 /-- **`recCexec_sumEquals`** — a single committed step of a `sumEquals`-enforcing program
 lands in a post-state whose named-field sum is the conserved constant `c`. -/
 theorem recCexec_sumEquals {s s' : RecChained} {op : RecOp}
@@ -223,27 +244,53 @@ theorem recordCell_stepComplete :
 /-- **`recordCell_run_preserves_sumEquals` — conservation over records, via the abstract
 keystone.** The `sumEquals` invariant is preserved along every reachable run of the record
 *coalgebra*, obtained by instantiating `Boundary.stepComplete_preserves` (the "no drifting future"
-safety invariant) with `Good := (Σ fields = c)`. So the record cell's conservation is not a bespoke
-result beside the spine — it is an instance of the general step-completeness ⇒ safety theorem. -/
+safety invariant) with `Good := (x.program = .predicate cs ∧ Σ fields = c)`. So the record cell's
+conservation is not a bespoke result beside the spine — it is an instance of the general
+step-completeness ⇒ safety theorem.
+
+The program is assumed of the START state `s` only (`hprog0`) and carried inside `Good`: the step
+never rewrites it (`recNext_program`). An earlier revision assumed `∀ x : RecChained,
+x.program = .predicate cs`, a premise false of the type (`RecChained.program` is a free field), so
+the theorem held of nothing; `not_forall_program_eq` below refutes that premise. -/
 theorem recordCell_run_preserves_sumEquals {cs : List StateConstraint}
     {fields : List FieldName} {c : Int}
     (hmem : StateConstraint.sumEquals fields c ∈ cs)
     {s s' : RecChained}
-    (hprogInv : ∀ x : RecChained, x.program = .predicate cs)   -- the cell's program is fixed
+    (hprog0 : s.program = .predicate cs)
     (hrun : Execution.Run (inducedSystem recordCell) s s')
     (h0 : sumScalars s.value fields = some c) :
     sumScalars s'.value fields = some c := by
-  refine stepComplete_preserves recordCell recCons recAdmit recChain recObsA
-    (Good := fun x => sumScalars x.value fields = some c)
-    recordCell_stepComplete ?_ hrun h0
-  intro x op hgood _
-  -- preservation: from `Good x` (Σ x = c) and the totalized step, derive `Good (recNext x op)`.
-  show sumScalars (recNext x op).value fields = some c
-  rcases recNext_commits_or_stays x op with hc | hstay
-  · -- commit: the admitted post-state satisfies `sumEquals`, so Σ = c.
-    exact recCexec_sumEquals (hprogInv x) hmem hc
-  · -- stay-put: the value is unchanged, so `Good` carries over.
-    rw [hstay]; exact hgood
+  have hgood : (fun x : RecChained => x.program = .predicate cs ∧ sumScalars x.value fields = some c) s' := by
+    refine stepComplete_preserves recordCell recCons recAdmit recChain recObsA
+      (Good := fun x => x.program = .predicate cs ∧ sumScalars x.value fields = some c)
+      recordCell_stepComplete ?_ hrun ⟨hprog0, h0⟩
+    intro x op ⟨hprog, hsum⟩ _
+    show (recNext x op).program = .predicate cs ∧ sumScalars (recNext x op).value fields = some c
+    refine ⟨(recNext_program x op).1.trans hprog, ?_⟩
+    rcases recNext_commits_or_stays x op with hc | hstay
+    · -- commit: the admitted post-state satisfies `sumEquals`, so Σ = c.
+      exact recCexec_sumEquals hprog hmem hc
+    · -- stay-put: the value is unchanged, so `Good` carries over.
+      rw [hstay]; exact hsum
+  exact hgood.2
+
+/-- **The retired premise is refutable.** No program is the program of EVERY `RecChained`: the
+state with the program swapped for a different one refutes `∀ x, x.program = p`. This is why the
+run theorems assume the program at the start state instead. -/
+theorem not_forall_program_eq (p : RecordProgram) :
+    ¬ ∀ x : RecChained, x.program = p := by
+  intro h
+  have h1 := h { value := .record [], program := .predicate [], method := 0, log := [] }
+  have h2 := h { value := .record [], program := .predicate [.sumEquals [] 0], method := 0, log := [] }
+  rw [← h2] at h1
+  simp at h1
+
+/-- The retired method premise is refutable the same way: `method + 1` is a different method. -/
+theorem not_forall_method_eq (m : Nat) :
+    ¬ ∀ x : RecChained, x.method = m := by
+  intro h
+  have := h { value := .record [], program := .predicate [], method := m + 1, log := [] }
+  simp at this
 
 /-! ## It runs (`#eval`) — a conserving "split" record cell over the live coalgebra. -/
 
@@ -275,5 +322,9 @@ def liveCounter : RecChained :=
 #assert_axioms recReplay_preserves_sumEquals
 #assert_axioms recordCell_stepComplete
 #assert_axioms recordCell_run_preserves_sumEquals
+#assert_axioms recNext_program
+#assert_axioms runsProgram_next
+#assert_axioms not_forall_program_eq
+#assert_axioms not_forall_method_eq
 
 end Dregg2.Exec.RecordCell

@@ -298,8 +298,9 @@ this module does NOT re-state them and does NOT re-introduce an unproven hole:
     honestly scoped-out THERE: that a shared voter is a CONTRADICTION for conflicting
     blocks (the honest-vote-once discipline), which lives with the τ-BFT protocol layer.
   • `Dregg2.World.liveness_after_gst` — after GST some block's quorum forms. PROVED from
-    the NAMED class hypothesis `World.gst_liveness` (the partial-synchrony delivery law —
-    a carried hypothesis, not an axiom).
+    the NAMED class hypothesis `World.gst_delivery` (DLS88 partial-synchrony delivery: a
+    message sent by round `r` arrives by `max r gst + Δ` — a carried, refutable hypothesis,
+    not an axiom) plus an honest-sending premise.
 
 -- OPEN: a *cell-level* Byzantine safety theorem ("no two `NetCell`s for conflicting blocks
 -- are both `IsBftFinal` under an honest majority") would be the natural next obligation on

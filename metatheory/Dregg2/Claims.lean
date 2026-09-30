@@ -326,8 +326,8 @@ Pinned at the namespace level (every theorem in each namespace is asserted kerne
 /-! ## §19 — OPENs closed + authority-turn LTS.
 
 Deadness-undecidability (computable form via `haltGraph` halting reduction),
-quorum-intersection (honest union-cardinality bound), and GST-liveness (from a
-`World.gst_liveness` class field). -/
+quorum-intersection (honest union-cardinality bound), and GST-liveness (derived from the
+`World.gst_delivery` partial-synchrony class field + an honest-sending premise). -/
 #assert_axioms Dregg2.Liveness.dead_undecidable
 #assert_axioms Dregg2.Spec.Lifecycle.distributed_death_not_co_witnessable
 #assert_axioms Dregg2.Exec.CellLiveness.death_not_decidable
