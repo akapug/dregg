@@ -10185,6 +10185,19 @@ mod privacy_wiring {
         agent: CellId,
         executor_pub: &[u8; 32],
     ) -> EncryptedTurn {
+        build_encrypted_turn_with_claims(turn, agent, executor_pub, turn.nonce, 0)
+    }
+
+    /// As [`build_consistent_encrypted_turn`], with the signed claims chosen by the
+    /// caller — so a test can make the envelope's claims disagree with the agent cell
+    /// or with the turn inside it.
+    fn build_encrypted_turn_with_claims(
+        turn: &Turn,
+        agent: CellId,
+        executor_pub: &[u8; 32],
+        claimed_nonce: u64,
+        min_fee: u64,
+    ) -> EncryptedTurn {
         let conflict_set = ConflictSet::new();
         let plaintext = serde_json::to_vec(turn).unwrap();
         let expected_commit = {
@@ -10197,8 +10210,8 @@ mod privacy_wiring {
             public_inputs: TurnValidityPublicInputs {
                 turn_commitment: expected_commit,
                 agent_commitment: TurnValidityPublicInputs::compute_agent_commitment(&agent),
-                claimed_nonce: turn.nonce,
-                min_fee: 0,
+                claimed_nonce,
+                min_fee,
                 conflict_set_commitment: conflict_set.commitment(),
             },
             // Unauthenticated by default: the gated path rejects this (the
@@ -10653,11 +10666,9 @@ mod privacy_wiring {
     /// because the executor's per-agent nonce / receipt-chain head moved
     /// forward after the first commit.
     ///
-    /// This is the "nullifier-set / nonce-bump catches at the inner turn
-    /// level" requirement from the deliverable: the encrypted layer doesn't
-    /// have its own replay protection beyond what the inner Turn provides.
-    /// That's correct — putting replay protection at *both* layers would be
-    /// duplicate gating; we just verify the inner gate fires.
+    /// The envelope signs `claimed_nonce`, and admission compares it to the agent
+    /// cell's nonce before decrypting, so a replay is refused there
+    /// (`ClaimedNonceStale`) without the node spending decrypt work on it.
     #[test]
     fn apply_encrypted_turn_replay_rejected_by_inner_nonce() {
         let mut ledger = Ledger::new();
@@ -10689,12 +10700,140 @@ mod privacy_wiring {
         let second = executor.apply_encrypted_turn(&encrypted, &sealer_secret, &mut ledger);
         let err = second.expect_err("replayed encrypted turn must reject");
         let msg = format!("{err:?}");
-        // Acceptable rejection categories: nonce-mismatch, receipt-chain
-        // mismatch, or other inner-execute errors. We just need the second
-        // attempt to NOT commit.
         assert!(
-            !msg.is_empty(),
-            "replay should produce a non-empty error message, got: {msg}"
+            msg.contains("ClaimedNonceStale"),
+            "a replayed envelope is refused at admission on its signed nonce claim, got: {msg}"
+        );
+    }
+
+    /// The four claim refusals on the executor's encrypted path, each against a
+    /// ledger whose agent cell is at nonce 0 with balance 1_000_000, and each
+    /// leaving the ledger untouched.
+    fn claims_fixture(
+        seed: u8,
+    ) -> (
+        Ledger,
+        CellId,
+        TestKeypair,
+        TurnExecutor,
+        [u8; 32],
+        [u8; 32],
+    ) {
+        let mut ledger = Ledger::new();
+        let (agent, agent_kp) = make_open_cell(seed, 1_000_000);
+        let agent_id = agent.id();
+        ledger.insert_cell(agent).unwrap();
+        let sealer_secret = [seed; 32];
+        let sealer_public =
+            *x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(sealer_secret))
+                .as_bytes();
+        let mut executor = TurnExecutor::new(ComputronCosts::zero());
+        executor.set_proof_verifier(Box::new(AcceptAll));
+        (
+            ledger,
+            agent_id,
+            agent_kp,
+            executor,
+            sealer_secret,
+            sealer_public,
+        )
+    }
+
+    fn assert_refused_untouched(
+        executor: &TurnExecutor,
+        encrypted: &EncryptedTurn,
+        sealer_secret: &[u8; 32],
+        ledger: &mut Ledger,
+        agent_id: CellId,
+        variant: &str,
+    ) {
+        let err = executor
+            .apply_encrypted_turn(encrypted, sealer_secret, ledger)
+            .expect_err("an envelope whose claims do not hold must not commit");
+        let msg = format!("{err:?}");
+        assert!(msg.contains(variant), "expected {variant}, got: {msg}");
+        let cell = ledger.get(&agent_id).unwrap();
+        assert_eq!(cell.state.nonce(), 0, "refused envelope moved the nonce");
+        assert_eq!(
+            cell.state.balance(),
+            1_000_000,
+            "refused envelope moved the balance"
+        );
+    }
+
+    #[test]
+    fn encrypted_turn_claims_hold_commits() {
+        // Positive pole: claims that hold (nonce 0 = cell nonce = turn nonce; min_fee
+        // 100 <= turn fee 100 <= balance) commit.
+        let (mut ledger, agent_id, agent_kp, executor, secret, public) = claims_fixture(41);
+        let turn = build_authorizing_turn(agent_id, &agent_kp, 0, 100, [0u8; 32]);
+        let encrypted = build_encrypted_turn_with_claims(&turn, agent_id, &public, 0, 100);
+        let receipt = executor
+            .apply_encrypted_turn(&encrypted, &secret, &mut ledger)
+            .expect("claims that hold must commit");
+        assert!(receipt.was_encrypted);
+    }
+
+    #[test]
+    fn encrypted_turn_refuses_stale_claimed_nonce() {
+        let (mut ledger, agent_id, agent_kp, executor, secret, public) = claims_fixture(42);
+        let turn = build_authorizing_turn(agent_id, &agent_kp, 0, 100, [0u8; 32]);
+        let encrypted = build_encrypted_turn_with_claims(&turn, agent_id, &public, 7, 0);
+        assert_refused_untouched(
+            &executor,
+            &encrypted,
+            &secret,
+            &mut ledger,
+            agent_id,
+            "ClaimedNonceStale",
+        );
+    }
+
+    #[test]
+    fn encrypted_turn_refuses_unfunded_min_fee() {
+        let (mut ledger, agent_id, agent_kp, executor, secret, public) = claims_fixture(43);
+        let turn = build_authorizing_turn(agent_id, &agent_kp, 0, 2_000_000, [0u8; 32]);
+        let encrypted = build_encrypted_turn_with_claims(&turn, agent_id, &public, 0, 2_000_000);
+        assert_refused_untouched(
+            &executor,
+            &encrypted,
+            &secret,
+            &mut ledger,
+            agent_id,
+            "MinFeeUnfunded",
+        );
+    }
+
+    #[test]
+    fn encrypted_turn_refuses_content_nonce_differing_from_claim() {
+        // The claim matches the cell; the turn inside does not match the claim.
+        let (mut ledger, agent_id, agent_kp, executor, secret, public) = claims_fixture(44);
+        let turn = build_authorizing_turn(agent_id, &agent_kp, 5, 100, [0u8; 32]);
+        let encrypted = build_encrypted_turn_with_claims(&turn, agent_id, &public, 0, 0);
+        assert_refused_untouched(
+            &executor,
+            &encrypted,
+            &secret,
+            &mut ledger,
+            agent_id,
+            "DecryptedNonceDiffersFromClaim",
+        );
+    }
+
+    #[test]
+    fn encrypted_turn_refuses_fee_below_claimed_minimum() {
+        // The one case the inner executor would have COMMITTED: fee 100 is payable,
+        // but the envelope signed `min_fee = 101`. Its claim is a lie about its content.
+        let (mut ledger, agent_id, agent_kp, executor, secret, public) = claims_fixture(45);
+        let turn = build_authorizing_turn(agent_id, &agent_kp, 0, 100, [0u8; 32]);
+        let encrypted = build_encrypted_turn_with_claims(&turn, agent_id, &public, 0, 101);
+        assert_refused_untouched(
+            &executor,
+            &encrypted,
+            &secret,
+            &mut ledger,
+            agent_id,
+            "DecryptedFeeBelowClaimedMinimum",
         );
     }
 

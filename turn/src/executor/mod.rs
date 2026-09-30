@@ -1897,8 +1897,9 @@ impl TurnExecutor {
     ///
     /// SECURITY: The agent in the recovered turn MUST match the envelope's
     /// claimed `agent` field. A mismatch is treated as a Byzantine submission
-    /// and the turn is rejected. This binds the public-side fee/nonce
-    /// preflight to the actual turn body.
+    /// and the turn is rejected. The envelope's signed `claimed_nonce`/`min_fee`
+    /// are checked against the agent cell before decrypting and against the
+    /// recovered turn after, so the fee/nonce preflight is about the turn that runs.
     pub fn execute_encrypted_turn(
         &self,
         encrypted: &crate::encrypted::EncryptedTurn,
@@ -1929,6 +1930,18 @@ impl TurnExecutor {
                     at_action: vec![],
                 };
             }
+        }
+
+        // 1c. The signed claims against the agent cell, before any decrypt work:
+        //     `claimed_nonce` is the cell's nonce and its balance covers `min_fee`.
+        //     Unconditional — a claim the envelope signs is a claim the node checks.
+        if let Err(e) = encrypted.check_claims_against_agent_cell(ledger) {
+            return TurnResult::Rejected {
+                reason: TurnError::InvalidEffect {
+                    reason: format!("encrypted turn claim refused at admission: {:?}", e),
+                },
+                at_action: vec![],
+            };
         }
 
         // 2. Decrypt with the executor's X25519 secret.
@@ -1966,6 +1979,18 @@ impl TurnExecutor {
                 reason: TurnError::InvalidEffect {
                     reason: "encrypted turn agent mismatch: decrypted turn.agent != envelope.agent"
                         .to_string(),
+                },
+                at_action: vec![],
+            };
+        }
+
+        // 3b. The decrypted turn must be the turn the claims described: same nonce,
+        //     fee at least `min_fee`. Without this, step 1c checked numbers unrelated to
+        //     the turn that runs.
+        if let Err(e) = encrypted.check_decrypted_turn_against_claims(&turn) {
+            return TurnResult::Rejected {
+                reason: TurnError::InvalidEffect {
+                    reason: format!("encrypted turn differs from its signed claims: {:?}", e),
                 },
                 at_action: vec![],
             };
@@ -2026,8 +2051,11 @@ impl TurnExecutor {
     /// Returns `TurnError::InvalidEffect { reason }` when:
     /// - the envelope's metadata fails self-consistency (`verify_metadata`),
     /// - decryption fails (wrong key / tampered ciphertext → Poly1305 MAC fail),
-    /// - the decrypted `turn.agent` does not match `envelope.agent` (binding
-    ///   the public-side fee/nonce preflight to the actual turn body), or
+    /// - the envelope's signed `claimed_nonce`/`min_fee` do not hold against the
+    ///   agent cell (`check_claims_against_agent_cell`, before decrypting),
+    /// - the decrypted `turn.agent` does not match `envelope.agent`, or its
+    ///   `nonce`/`fee` do not match the signed claims
+    ///   (`check_decrypted_turn_against_claims`), or
     /// - the inner turn was rejected by `execute` (insufficient fee, replayed
     ///   nullifier, broken receipt chain, etc.).
     pub fn apply_encrypted_turn(
@@ -2053,6 +2081,14 @@ impl TurnExecutor {
                 })?;
         }
 
+        // 1c. The signed claims against the agent cell, before any decrypt work (see
+        //     `execute_encrypted_turn`).
+        encrypted
+            .check_claims_against_agent_cell(ledger)
+            .map_err(|e| TurnError::InvalidEffect {
+                reason: format!("encrypted turn claim refused at admission: {:?}", e),
+            })?;
+
         // 2. Recompute the public key from the secret and decrypt.
         let public = {
             let pk =
@@ -2074,6 +2110,13 @@ impl TurnExecutor {
                     .to_string(),
             });
         }
+
+        // 3b. The decrypted turn must match the signed claims.
+        encrypted
+            .check_decrypted_turn_against_claims(&turn)
+            .map_err(|e| TurnError::InvalidEffect {
+                reason: format!("encrypted turn differs from its signed claims: {:?}", e),
+            })?;
 
         // 4. Apply through the standard execute path.
         match self.execute(&turn, ledger) {

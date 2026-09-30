@@ -220,7 +220,6 @@ THEATRE	verify_tick	sdk/src/beacon_cell.rs	337	4
 UNCALLED	verify_trace_with_request	trace/src/verify.rs	14	0
 UNCALLED	verify_tug_play_on_device	wasm/src/bindings_multiway_tug.rs	183	0
 THEATRE	verify_turn_in_batch	blocklace/src/delegation.rs	299	3
-THEATRE	verify_turn_sign	turn/src/fast_path.rs	562	4
 THEATRE	verify_uniform_allocation_optimizer_worker_result	fhir/src/optimizer_protocol.rs	624	5
 THEATRE	verify_update_commitment_signature	sandstorm-bridge/src/grain.rs	180	3
 UNCALLED	verify_validated_ivc_proof	sdk/src/verify.rs	567	0

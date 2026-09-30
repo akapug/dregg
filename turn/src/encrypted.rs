@@ -9,11 +9,14 @@
 //!   EMPTY `proof_bytes` — there is no validity STARK in the tree
 //!
 //! The federation orders encrypted turns by:
-//! 1. Checking admission ([`EncryptedTurn::verify_admission_binding`]): an Ed25519
-//!    signature by the key controlling the claimed `agent`. **It does NOT check that the
-//!    agent can pay or that the nonce is fresh** — those are the standard executor gates
-//!    downstream, after decryption. Proving them in zero knowledge is the Phase-2 STARK,
-//!    which is named, not built.
+//! 1. Checking admission: [`EncryptedTurn::verify_admission_binding`] (an Ed25519
+//!    signature by the key controlling the claimed `agent`, over the public inputs) and
+//!    [`EncryptedTurn::check_claims_against_agent_cell`] (the signed `claimed_nonce` equals
+//!    the agent cell's nonce, and its balance covers the signed `min_fee`). After
+//!    decryption, [`EncryptedTurn::check_decrypted_turn_against_claims`] refuses a turn whose
+//!    `nonce`/`fee` differ from what the envelope claimed. What stays open is proving the
+//!    claim↔content binding BEFORE decryption, in zero knowledge — the Phase-2 STARK, which
+//!    is named, not built.
 //! 2. Detecting conflicts via Bloom filter overlap — on the filter the SUBMITTER declared.
 //! 3. Serializing conflicting turns, parallelizing non-conflicting ones.
 //!
@@ -55,10 +58,10 @@ use crate::turn::Turn;
 
 /// An encrypted turn submission for privacy-preserving federation ordering.
 ///
-/// The federation orders these without seeing their content. It does **not** know the
-/// enclosed turn is well-formed or payable: [`Self::validity_proof`] carries submitter
-/// authentication only, so those remain executor gates applied after decryption. See
-/// [`TurnValidityProof`].
+/// The federation orders these without seeing their content. At admission it checks the
+/// submitter's authentication and the signed nonce/fee claims against the agent cell; it
+/// does **not** know the enclosed turn is well-formed or matches those claims until
+/// decryption, when the claims are re-checked against the turn. See [`TurnValidityProof`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EncryptedTurn {
     /// The agent submitting this turn (public — needed for nonce/fee lookup).
@@ -84,9 +87,9 @@ pub struct EncryptedTurn {
     /// Used for conflict detection without revealing specific cell IDs.
     pub conflict_set: ConflictSet,
 
-    /// The validity carrier. At HEAD this is submitter AUTHENTICATION with empty
-    /// `proof_bytes` — it proves neither nonce correctness nor fee sufficiency. See
-    /// [`TurnValidityProof`] for exactly what is and is not enforced.
+    /// The validity carrier. At HEAD this is submitter AUTHENTICATION over signed
+    /// nonce/fee claims, with empty `proof_bytes`. See [`TurnValidityProof`] for exactly
+    /// what is and is not enforced.
     pub validity_proof: TurnValidityProof,
 
     /// Submission timestamp, carried on the envelope and **read by no ordering
@@ -98,23 +101,26 @@ pub struct EncryptedTurn {
 }
 
 /// The validity carrier for an encrypted turn. **Despite the name, no STARK is carried or
-/// verified at HEAD**: `proof_bytes` is empty and the only enforced leg is
-/// [`SubmitterAuth`].
+/// verified at HEAD**: `proof_bytes` is empty; what is enforced is [`SubmitterAuth`] and
+/// host-side comparisons of the signed claims.
 ///
-/// What is ACTUALLY enforced today ([`EncryptedTurn::verify_admission_binding`]):
-/// - an Ed25519 signature over [`TurnValidityPublicInputs::signing_message`], by a key
+/// What is ACTUALLY enforced today:
+/// - ([`EncryptedTurn::verify_admission_binding`]) an Ed25519 signature over [`TurnValidityPublicInputs::signing_message`], by a key
 ///   whose `derive_raw` equals the claimed agent cell (so only the controlling agent can
-///   make a node spend decrypt/execute work, bound to this exact envelope).
+///   make a node spend decrypt/execute work, bound to this exact envelope);
+/// - the signed claims against the agent cell
+///   ([`EncryptedTurn::check_claims_against_agent_cell`], pre-decrypt): `claimed_nonce ==
+///   agent_cell.nonce` and `agent_cell.balance >= min_fee`;
+/// - the decrypted turn against the signed claims
+///   ([`EncryptedTurn::check_decrypted_turn_against_claims`], post-decrypt): `T.nonce ==
+///   claimed_nonce` and `T.fee >= min_fee`.
 ///
 /// What the Phase-2 STARK is NAMED to prove — and does not, because no prover exists:
-/// - knowledge of a Turn T with `BLAKE3(T) = turn_commitment`;
-/// - `T.nonce` = the agent cell's current nonce (replay protection);
-/// - `agent_cell.balance >= T.fee` (fee sufficiency);
+/// - knowledge of a Turn T with `BLAKE3(T) = turn_commitment`, and that T's nonce and fee
+///   satisfy the claims — i.e. the claim↔content binding held BEFORE decryption, so an
+///   envelope whose content lies about its claims costs nothing but its own refusal;
 /// - and the conflict set matching the cells T touches (see the seam on
 ///   `verify_admission_binding`).
-///
-/// Until then those are ordinary executor gates applied AFTER decryption, not
-/// zero-knowledge guarantees held at ordering time.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TurnValidityProof {
     /// The STARK proof bytes (serialized StarkProof from dregg-circuit).
@@ -180,23 +186,18 @@ pub struct TurnValidityPublicInputs {
 
     /// The nonce this turn claims to use.
     ///
-    /// ⚠ **NOTHING COMPARES THIS TO ANY CELL'S NONCE.** The line here read *"The verifier
-    /// checks: agent_cell.nonce == claimed_nonce"* until 2026-08-06, in the present tense.
-    /// Measured that day: every occurrence repo-wide is a construction site, a field of
-    /// [`Self::signing_message`], or a test XOR. It is IN THE SIGNING MESSAGE AND COMPARED
-    /// AGAINST NOTHING — the same shape as the sovereign `effects_hash` this repo's
-    /// CLAUDE.md opens with. The type-level docblock above already lists nonce-freshness as
-    /// part of the UNBUILT Phase-2 STARK; this field doc contradicted it, and a reader
-    /// meets this one first. Binding it is that STARK's job, not a host-side compare.
+    /// Compared twice: at admission, `claimed_nonce == agent_cell.nonce`
+    /// ([`EncryptedTurn::check_claims_against_agent_cell`], refusal
+    /// [`EncryptedTurnError::ClaimedNonceStale`]); after decryption, `turn.nonce ==
+    /// claimed_nonce` ([`EncryptedTurn::check_decrypted_turn_against_claims`], refusal
+    /// [`EncryptedTurnError::DecryptedNonceDiffersFromClaim`]).
     pub claimed_nonce: u64,
 
-    /// Minimum fee this turn will pay (claimed lower bound).
+    /// Minimum fee this turn will pay (a claimed lower bound; the exact fee stays hidden).
     ///
-    /// ⚠ **NOTHING COMPARES THIS TO ANY CELL'S BALANCE** — see [`Self::claimed_nonce`].
-    /// The line here read *"The verifier checks: agent_cell.balance >= min_fee"*; there is
-    /// no such comparison anywhere. Also "proven lower bound" was two claims in three
-    /// words, and neither holds: it is claimed, and it is unproven.
-    /// This may be lower than the actual fee (privacy: exact fee is hidden).
+    /// Compared twice: at admission, `agent_cell.balance >= min_fee`
+    /// ([`EncryptedTurnError::MinFeeUnfunded`]); after decryption, `turn.fee >= min_fee`
+    /// ([`EncryptedTurnError::DecryptedFeeBelowClaimedMinimum`]).
     pub min_fee: u64,
 
     /// Commitment to the conflict set: BLAKE3(conflict_set.filter).
@@ -428,9 +429,10 @@ impl EncryptedTurn {
     /// (`CellId::derive_raw(submitter_public, default_token)` must equal
     /// `self.agent`). This proves only the controlling agent can make the node
     /// spend decrypt/execute work, and binds the signature to this exact turn
-    /// commitment (no replay onto a different envelope). It does NOT yet prove
-    /// nonce-freshness / fee-sufficiency *in zero knowledge* — those are the
-    /// standard executor gates downstream, plus the Phase-2 STARK below.
+    /// commitment (no replay onto a different envelope). The signed nonce/fee claims
+    /// are compared against the agent cell by
+    /// [`Self::check_claims_against_agent_cell`], which needs the ledger and so is a
+    /// separate call made at the same admission point.
     ///
     /// # Phase-2 (named remainder): the validity STARK
     ///
@@ -514,6 +516,65 @@ impl EncryptedTurn {
         Ok(())
     }
 
+    /// Compare the envelope's signed claims against the agent cell it charges, BEFORE
+    /// any decrypt work: `claimed_nonce` must equal the agent cell's current nonce, and
+    /// the agent cell's balance must cover `min_fee` (a negative balance covers nothing).
+    ///
+    /// These are the same two gates the executor applies to the cleartext turn
+    /// (`NonceReplay`, `InsufficientBalance`), lifted onto the claims so that a stale or
+    /// unfunded envelope is refused at admission. Without the post-decrypt counterpart
+    /// ([`Self::check_decrypted_turn_against_claims`]) this would be a check on a number
+    /// unrelated to the turn that runs; the two are one gate and every admission path
+    /// calls both.
+    pub fn check_claims_against_agent_cell(
+        &self,
+        ledger: &dregg_cell::Ledger,
+    ) -> Result<(), EncryptedTurnError> {
+        let claims = &self.validity_proof.public_inputs;
+        let cell = ledger
+            .get(&self.agent)
+            .ok_or(EncryptedTurnError::AgentCellAbsent)?;
+        let current = cell.state.nonce();
+        if claims.claimed_nonce != current {
+            return Err(EncryptedTurnError::ClaimedNonceStale {
+                claimed: claims.claimed_nonce,
+                current,
+            });
+        }
+        let balance = cell.state.balance();
+        if balance < 0 || (balance as u64) < claims.min_fee {
+            return Err(EncryptedTurnError::MinFeeUnfunded {
+                min_fee: claims.min_fee,
+                balance,
+            });
+        }
+        Ok(())
+    }
+
+    /// Compare the DECRYPTED turn against the envelope's signed claims: `turn.nonce`
+    /// must equal `claimed_nonce` and `turn.fee` must be at least `min_fee`. This is
+    /// what makes [`Self::check_claims_against_agent_cell`] a statement about the turn
+    /// that executes rather than about a number the submitter chose.
+    pub fn check_decrypted_turn_against_claims(
+        &self,
+        turn: &Turn,
+    ) -> Result<(), EncryptedTurnError> {
+        let claims = &self.validity_proof.public_inputs;
+        if turn.nonce != claims.claimed_nonce {
+            return Err(EncryptedTurnError::DecryptedNonceDiffersFromClaim {
+                claimed: claims.claimed_nonce,
+                decrypted: turn.nonce,
+            });
+        }
+        if turn.fee < claims.min_fee {
+            return Err(EncryptedTurnError::DecryptedFeeBelowClaimedMinimum {
+                min_fee: claims.min_fee,
+                fee: turn.fee,
+            });
+        }
+        Ok(())
+    }
+
     /// Check if this encrypted turn might conflict with another.
     ///
     /// Uses the Bloom filter conflict sets. False positives are possible
@@ -546,6 +607,17 @@ pub enum EncryptedTurnError {
     RandomFailed(String),
     /// Executor has no decryption key configured.
     NoDecryptionKey,
+    /// The envelope's `agent` names no cell in the ledger, so its claims have nothing to
+    /// be compared against.
+    AgentCellAbsent,
+    /// The signed `claimed_nonce` is not the agent cell's current nonce.
+    ClaimedNonceStale { claimed: u64, current: u64 },
+    /// The agent cell's balance does not cover the signed `min_fee`.
+    MinFeeUnfunded { min_fee: u64, balance: i64 },
+    /// The decrypted turn's nonce is not the nonce the envelope claimed.
+    DecryptedNonceDiffersFromClaim { claimed: u64, decrypted: u64 },
+    /// The decrypted turn's fee is below the `min_fee` the envelope claimed.
+    DecryptedFeeBelowClaimedMinimum { min_fee: u64, fee: u64 },
 }
 
 /// Result of ordering a batch of encrypted turns.
@@ -957,5 +1029,113 @@ mod tests {
             Err(EncryptedTurnError::InvalidValidityProof(_)) => {}
             other => panic!("expected InvalidValidityProof, got {other:?}"),
         }
+    }
+
+    // ── The signed claims (`claimed_nonce`, `min_fee`) against the agent cell and the
+    //    decrypted turn. Both poles of every comparison.
+
+    /// The agent cell `authenticated_encrypted_turn(seed)` charges, with the given
+    /// nonce and balance.
+    fn ledger_with_agent(seed: u8, nonce: u64, balance: i64) -> dregg_cell::Ledger {
+        let sk = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]);
+        let default_token = *blake3::hash(b"default").as_bytes();
+        let mut cell =
+            dregg_cell::Cell::with_balance(sk.verifying_key().to_bytes(), default_token, balance);
+        cell.state.set_nonce(nonce);
+        let mut ledger = dregg_cell::Ledger::new();
+        ledger.insert_cell(cell).unwrap();
+        ledger
+    }
+
+    #[test]
+    fn claims_accepted_when_nonce_current_and_min_fee_funded() {
+        let (et, _sk) = authenticated_encrypted_turn(7); // claims nonce 0, min_fee 100
+        let ledger = ledger_with_agent(7, 0, 100);
+        assert_eq!(et.check_claims_against_agent_cell(&ledger), Ok(()));
+    }
+
+    #[test]
+    fn claims_refuse_a_stale_nonce() {
+        let (et, _sk) = authenticated_encrypted_turn(7);
+        let ledger = ledger_with_agent(7, 3, 1_000);
+        assert_eq!(
+            et.check_claims_against_agent_cell(&ledger),
+            Err(EncryptedTurnError::ClaimedNonceStale {
+                claimed: 0,
+                current: 3
+            })
+        );
+    }
+
+    #[test]
+    fn claims_refuse_an_unfunded_min_fee() {
+        let (et, _sk) = authenticated_encrypted_turn(7);
+        let ledger = ledger_with_agent(7, 0, 99);
+        assert_eq!(
+            et.check_claims_against_agent_cell(&ledger),
+            Err(EncryptedTurnError::MinFeeUnfunded {
+                min_fee: 100,
+                balance: 99
+            })
+        );
+        // A negative balance covers nothing, not even a zero floor.
+        let (mut et0, sk) = authenticated_encrypted_turn(7);
+        et0.validity_proof.public_inputs.min_fee = 0;
+        let sig = {
+            use ed25519_dalek::Signer;
+            sk.sign(&et0.validity_proof.public_inputs.signing_message())
+                .to_bytes()
+        };
+        et0.validity_proof
+            .submitter_auth
+            .as_mut()
+            .unwrap()
+            .signature = sig;
+        assert_eq!(et0.verify_admission_binding(), Ok(()));
+        let negative = ledger_with_agent(7, 0, -5);
+        assert_eq!(
+            et0.check_claims_against_agent_cell(&negative),
+            Err(EncryptedTurnError::MinFeeUnfunded {
+                min_fee: 0,
+                balance: -5
+            })
+        );
+    }
+
+    #[test]
+    fn claims_refuse_an_absent_agent_cell() {
+        let (et, _sk) = authenticated_encrypted_turn(7);
+        assert_eq!(
+            et.check_claims_against_agent_cell(&dregg_cell::Ledger::new()),
+            Err(EncryptedTurnError::AgentCellAbsent)
+        );
+    }
+
+    #[test]
+    fn decrypted_turn_must_match_the_signed_claims() {
+        let (et, _sk) = authenticated_encrypted_turn(7); // claims nonce 0, min_fee 100
+        let turn = |nonce, fee| crate::TurnBuilder::new(et.agent, nonce).fee(fee).build();
+        assert_eq!(
+            et.check_decrypted_turn_against_claims(&turn(0, 100)),
+            Ok(())
+        );
+        assert_eq!(
+            et.check_decrypted_turn_against_claims(&turn(0, 5_000)),
+            Ok(())
+        );
+        assert_eq!(
+            et.check_decrypted_turn_against_claims(&turn(1, 100)),
+            Err(EncryptedTurnError::DecryptedNonceDiffersFromClaim {
+                claimed: 0,
+                decrypted: 1
+            })
+        );
+        assert_eq!(
+            et.check_decrypted_turn_against_claims(&turn(0, 99)),
+            Err(EncryptedTurnError::DecryptedFeeBelowClaimedMinimum {
+                min_fee: 100,
+                fee: 99
+            })
+        );
     }
 }

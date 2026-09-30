@@ -104,14 +104,12 @@ pub mod encrypted;
 pub mod error;
 pub mod eventual;
 pub mod exact_fnsp_v4_consensus_envelope;
-pub mod execution_path;
 pub mod executor;
 pub mod faithful_note_spend;
 pub mod faithful_note_spend_exact_v3;
 pub mod faithful_note_spend_exact_v3_acceptance;
 pub mod faithful_note_spend_exact_v3_anchor;
 pub mod faithful_note_spend_exact_v3_receipt_epoch;
-pub mod fast_path;
 pub mod finalized_receipt_core_v1;
 pub mod forest;
 pub(crate) mod journal;
@@ -178,7 +176,6 @@ pub use exact_fnsp_v4_consensus_envelope::{
     ExactReceiptIdV4, HYBRID_LOCAL_EXACT_FNSP_V4_ENVELOPE_LEN, HybridExactFnspV4ValidatorIdentity,
     HybridExactFnspV4ValidatorSigner, HybridLocalExactFnspV4Envelope,
 };
-pub use execution_path::{ExecutionPath, compute_execution_path};
 pub use executor::{
     AtomicProofEntry, AtomicSovereignTurn, AtomicTurnError, BridgeEscrowReceipt,
     BridgeEscrowRecord, BridgeMintError, BridgeMintReceipt, BridgeMintRequest,
@@ -202,11 +199,6 @@ pub use faithful_note_spend_exact_v3_receipt_epoch::{
     ExactFnspV3ReceiptEpochV1, ExactFnspV3ReceiptLinkV1, ExactFnspV3StatePoint,
     FullTurnReceiptStateCommit8, PreparedExactFnspV3ReceiptFrameV1,
     UntrustedExactFnspV3CommittedFrameHeadBindingV1, UntrustedExactFnspV3ReceiptFrameJoinV1,
-};
-pub use fast_path::{
-    CellLockEntry, CellLockTable, FastPathConfig, FastPathError, TurnCertificate, TurnSign,
-    assemble_certificate, clear_all_locks, execute_certified_turn, expire_stale_locks,
-    is_fast_path_eligible, process_fast_path_lock, verify_turn_sign,
 };
 pub use finalized_receipt_core_v1::{
     FINALIZED_EXECUTION_CONTEXT_V1_LEN, FINALIZED_RECEIPT_CORE_V1_LEN, FinalizedExecutionContextV1,
