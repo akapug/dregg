@@ -1232,6 +1232,8 @@ int dregg_ffi_init_executor_module(void) {
  * Like the DelegAdmit and FFIDirect families it never marks the end of
  * initialization, so a later full init still runs every module it lists; a
  * module initialized here is a no-op there, through its generated guard.
+ * This is the ONLY list of the PQ modules: `dregg_ffi_init_modules` calls this
+ * function for them, so a default full init initializes exactly this family.
  * Returns 0 on success, 1 on a failed initializer, 2 when no PQ core is linked. */
 static int dregg_ffi_init_one_pq_module(lean_object *res) {
     if (!lean_io_result_is_ok(res)) {
@@ -1487,101 +1489,11 @@ int dregg_ffi_init_modules(void) {
     }
     lean_dec_ref(cccres);
 #endif
-#if defined(DREGG_FIPS204_VERIFY) || defined(DREGG_FIPS204_VERIFY_REAL)
-    /* The verified ML-DSA verify-core module is OUTSIDE the FFI closure; initialize it explicitly so
-     * `dregg_fips204_verify` AND the full-byte `dregg_fips204_verify_real` (BRICK 8, same module) are
-     * callable. Its dependency closure (Crypto.Fips204Spec / Crypto.DreggPqRefinement /
-     * Crypto.HybridCombiner / — for the real verify — Crypto.MlDsaVerifyReal and its Keccak/Ring/Codec
-     * bricks) is re-entrant-safe under Lean's init guards. */
-    lean_object *fvres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Crypto_Fips204Verify);
-    if (!lean_io_result_is_ok(fvres)) {
-        lean_io_result_show_error(fvres);
-        lean_dec_ref(fvres);
+    /* The PQ modules are the narrow PQ family's list, run from its one definition above, so the
+     * coordinator's `pq_ready = pq_present()` after a default full init holds by construction.
+     * Its 2 ("no PQ core linked") is success here: the full list has nothing to add. */
+    if (dregg_ffi_init_pq_modules() == 1)
         return 1;
-    }
-    lean_dec_ref(fvres);
-#endif
-#ifdef DREGG_FIPS203
-    /* The verified ML-KEM encaps/decaps-core module is OUTSIDE the FFI closure; initialize it explicitly
-     * so `dregg_fips203_encaps` / `dregg_fips203_decaps` are callable. Its dependency closure
-     * (Crypto.MlKemIndCca / Crypto.DreggKemRefinement / Crypto.HybridCombiner) is re-entrant-safe under
-     * Lean's init guards (shared with the ML-DSA verify-core module above). */
-    lean_object *kres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Crypto_Fips203Kem);
-    if (!lean_io_result_is_ok(kres)) {
-        lean_io_result_show_error(kres);
-        lean_dec_ref(kres);
-        return 1;
-    }
-    lean_dec_ref(kres);
-#endif
-#ifdef DREGG_MLKEM_DECAPS_REAL
-    /* BRICK K6 — the REAL, FULL-BYTE ML-KEM-768 decaps-core module (`Dregg2.Crypto.MlKemDecaps`) is OUTSIDE
-     * the FFI closure and is its OWN module (distinct from `Fips203Kem`), so initialize it explicitly so
-     * `dregg_mlkem_decaps_real` is callable. Its dependency closure (Crypto.Keccak / MlKemRing / MlKemSample
-     * / MlKemCodec) is re-entrant-safe under Lean's init guards. */
-    lean_object *kdres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Crypto_MlKemDecaps);
-    if (!lean_io_result_is_ok(kdres)) {
-        lean_io_result_show_error(kdres);
-        lean_dec_ref(kdres);
-        return 1;
-    }
-    lean_dec_ref(kdres);
-#endif
-#ifdef DREGG_MLKEM_ENCAPS_REAL
-    /* BRICK K5 — the REAL, FULL-BYTE ML-KEM-768 encaps-core module (`Dregg2.Crypto.MlKemEncaps`) is OUTSIDE
-     * the FFI closure and is its OWN module (imports `MlKemDecaps`), so initialize it explicitly so
-     * `dregg_mlkem_encaps_real` is callable. Its dependency closure (Crypto.Keccak / MlKemRing / MlKemSample /
-     * MlKemCodec / MlKemDecaps) is re-entrant-safe under Lean's init guards (shared with the decaps module). */
-    lean_object *keres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Crypto_MlKemEncaps);
-    if (!lean_io_result_is_ok(keres)) {
-        lean_io_result_show_error(keres);
-        lean_dec_ref(keres);
-        return 1;
-    }
-    lean_dec_ref(keres);
-#endif
-#ifdef DREGG_MLKEM_KEYGEN_REAL
-    /* BRICK K7 — the REAL, FULL-BYTE ML-KEM-768 keygen-core module (`Dregg2.Crypto.MlKemKeygen`) is OUTSIDE
-     * the FFI closure and is its OWN module (imports `MlKemDecaps` for SHA3), so initialize it explicitly so
-     * `dregg_mlkem_keygen_real` is callable. Its dependency closure (Crypto.Keccak / MlKemRing / MlKemSample /
-     * MlKemCodec / MlKemDecaps) is re-entrant-safe under Lean's init guards (shared with the encaps/decaps
-     * modules). */
-    lean_object *kgres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Crypto_MlKemKeygen);
-    if (!lean_io_result_is_ok(kgres)) {
-        lean_io_result_show_error(kgres);
-        lean_dec_ref(kgres);
-        return 1;
-    }
-    lean_dec_ref(kgres);
-#endif
-
-#ifdef DREGG_MLDSA_KEYGEN_REAL
-    /* The identity-key KEYGEN mirror — the REAL, FULL-BYTE ML-DSA-65 keygen-core module
-     * (`Dregg2.Crypto.MlDsaKeygen`) is OUTSIDE the FFI closure and is its OWN module, so initialize it
-     * explicitly so `dregg_mldsa_keygen_real` is callable. Its dependency closure (Crypto.Keccak / MlDsaRing /
-     * MlDsaExpandA / MlDsaCodec / MlKemDecaps) is re-entrant-safe under Lean's init guards. */
-    lean_object *dkgres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Crypto_MlDsaKeygen);
-    if (!lean_io_result_is_ok(dkgres)) {
-        lean_io_result_show_error(dkgres);
-        lean_dec_ref(dkgres);
-        return 1;
-    }
-    lean_dec_ref(dkgres);
-#endif
-#ifdef DREGG_FIPS204_SIGN_REAL
-    /* THE brick-8 SIGN analog — the REAL, FULL-BYTE ML-DSA-65 sign-core module
-     * (`Dregg2.Crypto.MlDsaSignReal`) is OUTSIDE the FFI closure and is its OWN module (distinct from
-     * `Fips204Verify`), so initialize it explicitly so `dregg_fips204_sign_real` is callable. Its dependency
-     * closure (Crypto.Keccak / MlDsaRing / MlDsaSampleInBall / MlDsaExpandA / MlDsaCodec / MlDsaVerifyReal)
-     * is re-entrant-safe under Lean's init guards (shared with the real verify-core module above). */
-    lean_object *sdres = DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Crypto_MlDsaSignReal);
-    if (!lean_io_result_is_ok(sdres)) {
-        lean_io_result_show_error(sdres);
-        lean_dec_ref(sdres);
-        return 1;
-    }
-    lean_dec_ref(sdres);
-#endif
 #ifdef DREGG_AUTOMATAFL_RULES
     /* The automatafl game-oracle module is OUTSIDE the FFI closure; initialize it explicitly so
      * `dregg_automatafl_rules` is callable. Unlike the self-contained cores below it MUST be
