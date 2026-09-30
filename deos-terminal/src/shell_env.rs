@@ -97,7 +97,10 @@ mod tests {
         let mut keys: Vec<&str> = env.keys().map(String::as_str).collect();
         keys.sort_unstable();
         assert_eq!(keys, ["HOME", "LANG", "PATH", "TERM", "USER"]);
-        assert_eq!(env["TERM"], DEFAULT_TERM, "TERM defaults when the host has none");
+        assert_eq!(
+            env["TERM"], DEFAULT_TERM,
+            "TERM defaults when the host has none"
+        );
         for (_, v) in &env {
             assert!(!v.contains("secret") && !v.contains("token") && v != "aws");
         }

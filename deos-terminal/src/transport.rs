@@ -65,7 +65,10 @@ impl std::fmt::Debug for WireMsg {
                 .field("rows", rows)
                 .finish(),
             WireMsg::Exit { code } => f.debug_struct("Exit").field("code", code).finish(),
-            WireMsg::Auth { .. } => f.debug_struct("Auth").field("token", &"<redacted>").finish(),
+            WireMsg::Auth { .. } => f
+                .debug_struct("Auth")
+                .field("token", &"<redacted>")
+                .finish(),
         }
     }
 }

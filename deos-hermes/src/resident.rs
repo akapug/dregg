@@ -441,13 +441,23 @@ mod tests {
     fn curl_argv_never_carries_the_key() {
         let key = "sk-ant-D2-SECRET-0123456789";
         let body = json!({ "model": "m", "messages": [] });
-        let (argv, stdin) =
-            curl_invocation("https://api.example/v1/messages", &[("x-api-key", key)], &body)
-                .unwrap();
+        let (argv, stdin) = curl_invocation(
+            "https://api.example/v1/messages",
+            &[("x-api-key", key)],
+            &body,
+        )
+        .unwrap();
         assert_eq!(argv, ["-sS", "-K", "-"]);
-        assert!(!argv.iter().any(|a| a.contains(key) || a.contains("api.example")));
+        assert!(
+            !argv
+                .iter()
+                .any(|a| a.contains(key) || a.contains("api.example"))
+        );
         let stdin = String::from_utf8(stdin).unwrap();
-        assert!(stdin.contains(&format!("header = \"x-api-key: {key}\"")), "{stdin}");
+        assert!(
+            stdin.contains(&format!("header = \"x-api-key: {key}\"")),
+            "{stdin}"
+        );
 
         let bearer = format!("Bearer {key}");
         let (argv2, _) =
@@ -487,7 +497,8 @@ mod tests {
                 .iter()
                 .find_map(|h| {
                     let (k, v) = h.split_once(':')?;
-                    k.eq_ignore_ascii_case("content-length").then(|| v.trim().parse().unwrap())
+                    k.eq_ignore_ascii_case("content-length")
+                        .then(|| v.trim().parse().unwrap())
                 })
                 .expect("content-length");
             let mut body = vec![0u8; len];
@@ -522,7 +533,11 @@ mod tests {
             headers.iter().any(|h| h == &format!("x-api-key: {key}")),
             "auth header arrived intact: {headers:?}"
         );
-        assert!(headers.iter().any(|h| h.eq_ignore_ascii_case("content-type: application/json")));
+        assert!(
+            headers
+                .iter()
+                .any(|h| h.eq_ignore_ascii_case("content-type: application/json"))
+        );
         assert!(headers[0].starts_with("POST /v1/messages "), "{headers:?}");
         let received: Value = serde_json::from_slice(&received).unwrap();
         assert_eq!(received, body, "the body arrived byte-faithful");

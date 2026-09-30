@@ -711,10 +711,20 @@ mod env_strip_tests {
             .collect();
         assert_eq!(
             unset,
-            ["ALACRITTY_WINDOW_ID", "ANTHROPIC_API_KEY", "HERMES_API_KEY", "HOME", "USER", "WINDOWID"]
+            [
+                "ALACRITTY_WINDOW_ID",
+                "ANTHROPIC_API_KEY",
+                "HERMES_API_KEY",
+                "HOME",
+                "USER",
+                "WINDOWID"
+            ]
         );
         assert_eq!(&argv[argv.len() - 3..], ["--", "/bin/sh", "-i"]);
-        assert!(!argv.iter().any(|a| a == "/bin" || a == "$ "), "no value on argv");
+        assert!(
+            !argv.iter().any(|a| a == "/bin" || a == "$ "),
+            "no value on argv"
+        );
     }
 
     #[test]

@@ -21,7 +21,8 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 
-type Ws = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+type Ws =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 /// A scratch dir holding the spawn-marker script and the marker it writes.
 struct Probe {
@@ -85,14 +86,11 @@ async fn server(probe: &Probe) -> (String, SessionToken) {
     (format!("ws://{addr}"), token)
 }
 
-async fn dial(
-    url: &str,
-    origin: Option<&str>,
-    bearer: Option<&str>,
-) -> Result<Ws, WsError> {
+async fn dial(url: &str, origin: Option<&str>, bearer: Option<&str>) -> Result<Ws, WsError> {
     let mut req = url.into_client_request().unwrap();
     if let Some(o) = origin {
-        req.headers_mut().insert("Origin", HeaderValue::from_str(o).unwrap());
+        req.headers_mut()
+            .insert("Origin", HeaderValue::from_str(o).unwrap());
     }
     if let Some(t) = bearer {
         req.headers_mut().insert(
@@ -100,7 +98,9 @@ async fn dial(
             HeaderValue::from_str(&format!("Bearer {t}")).unwrap(),
         );
     }
-    tokio_tungstenite::connect_async(req).await.map(|(ws, _)| ws)
+    tokio_tungstenite::connect_async(req)
+        .await
+        .map(|(ws, _)| ws)
 }
 
 fn auth_frame(token: &str) -> Message {
@@ -154,7 +154,10 @@ async fn await_close(ws: &mut Ws) -> (Option<CloseCode>, String) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        assert!(!remaining.is_zero(), "server did not close an unauthenticated socket");
+        assert!(
+            !remaining.is_zero(),
+            "server did not close an unauthenticated socket"
+        );
         match tokio::time::timeout(remaining, ws.next()).await {
             Ok(Some(Ok(Message::Close(frame)))) => return (frame.map(|f| f.code), output),
             Ok(Some(Ok(Message::Binary(b)))) => output.push_str(&String::from_utf8_lossy(&b)),
@@ -168,7 +171,9 @@ async fn await_close(ws: &mut Ws) -> (Option<CloseCode>, String) {
 /// The control half of every refusal test: the same server DOES spawn for an
 /// authenticated client, so the absent marker above was the gate.
 async fn authenticated_client_spawns(url: &str, token: &SessionToken, probe: &Probe) {
-    let mut ws = dial(url, Some("http://localhost:5173"), None).await.expect("dial");
+    let mut ws = dial(url, Some("http://localhost:5173"), None)
+        .await
+        .expect("dial");
     ws.send(auth_frame(token.expose())).await.unwrap();
     let (found, seen) = shell_echoes(&mut ws, "DEOS_GATE_CONTROL_77").await;
     assert!(found, "authenticated shell did not echo. Bytes:\n{seen}");
@@ -183,10 +188,15 @@ async fn settle() {
 async fn first_frame_token_drives_a_shell() {
     let probe = Probe::new("first-frame");
     let (url, token) = server(&probe).await;
-    let mut ws = dial(&url, Some("http://127.0.0.1:8080"), None).await.expect("dial");
+    let mut ws = dial(&url, Some("http://127.0.0.1:8080"), None)
+        .await
+        .expect("dial");
     ws.send(auth_frame(token.expose())).await.unwrap();
     let (found, seen) = shell_echoes(&mut ws, "DEOS_WS_OK_5151").await;
-    assert!(found, "shell did not echo over the WebSocket. Bytes:\n{seen}");
+    assert!(
+        found,
+        "shell did not echo over the WebSocket. Bytes:\n{seen}"
+    );
     assert!(probe.spawned());
 }
 
@@ -196,7 +206,10 @@ async fn header_token_drives_a_shell() {
     let (url, token) = server(&probe).await;
     let mut ws = dial(&url, None, Some(token.expose())).await.expect("dial");
     let (found, seen) = shell_echoes(&mut ws, "DEOS_WS_HDR_6262").await;
-    assert!(found, "shell did not echo over the WebSocket. Bytes:\n{seen}");
+    assert!(
+        found,
+        "shell did not echo over the WebSocket. Bytes:\n{seen}"
+    );
     assert!(probe.spawned());
 }
 
@@ -206,15 +219,27 @@ async fn header_token_drives_a_shell() {
 async fn no_token_is_closed_before_any_pty_is_spawned() {
     let probe = Probe::new("no-token");
     let (url, token) = server(&probe).await;
-    let mut ws = dial(&url, Some("http://localhost:3000"), None).await.expect("dial");
+    let mut ws = dial(&url, Some("http://localhost:3000"), None)
+        .await
+        .expect("dial");
     ws.send(Message::Binary(b"echo PWNED_NO_TOKEN\n".to_vec().into()))
         .await
         .unwrap();
     let (code, output) = await_close(&mut ws).await;
-    assert_eq!(code, Some(CloseCode::Policy), "closed as a policy violation");
-    assert!(output.is_empty(), "PTY output reached an unauthenticated client: {output}");
+    assert_eq!(
+        code,
+        Some(CloseCode::Policy),
+        "closed as a policy violation"
+    );
+    assert!(
+        output.is_empty(),
+        "PTY output reached an unauthenticated client: {output}"
+    );
     settle().await;
-    assert!(!probe.spawned(), "a PTY child ran for an unauthenticated connection");
+    assert!(
+        !probe.spawned(),
+        "a PTY child ran for an unauthenticated connection"
+    );
 
     authenticated_client_spawns(&url, &token, &probe).await;
 }
@@ -287,7 +312,10 @@ async fn disconnect_kills_the_shell() {
     let (found, seen) = shell_echoes(&mut ws, "DEOS_WS_DISC_9191").await;
     assert!(found, "shell did not run the command. Bytes:\n{seen}");
     let pid = probe.shell_pid();
-    assert!(alive(&pid), "the shell {pid} should be running while connected");
+    assert!(
+        alive(&pid),
+        "the shell {pid} should be running while connected"
+    );
 
     ws.close(None).await.unwrap();
     drop(ws);
@@ -357,13 +385,20 @@ async fn bin_mints_prints_and_requires_its_token() {
     };
 
     let mut ws = dial(&url, None, None).await.expect("dial");
-    ws.send(Message::Binary(b"echo PWNED_BIN\n".to_vec().into())).await.unwrap();
+    ws.send(Message::Binary(b"echo PWNED_BIN\n".to_vec().into()))
+        .await
+        .unwrap();
     let (code, _) = await_close(&mut ws).await;
     assert_eq!(code, Some(CloseCode::Policy));
     settle().await;
-    assert!(!probe.spawned(), "the bin spawned a shell without its token");
+    assert!(
+        !probe.spawned(),
+        "the bin spawned a shell without its token"
+    );
 
-    let mut ws = dial(&url, None, Some(&token)).await.expect("dial with token");
+    let mut ws = dial(&url, None, Some(&token))
+        .await
+        .expect("dial with token");
     let (found, seen) = shell_echoes(&mut ws, "DEOS_BIN_OK_8383").await;
     assert!(found, "bin shell did not echo. Bytes:\n{seen}");
     assert!(probe.spawned());

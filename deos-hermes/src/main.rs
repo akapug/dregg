@@ -465,7 +465,9 @@ fn run_live_mcp() {
 ///
 /// Logs go to STDERR (stdout is the MCP wire — it must carry only ndjson frames).
 fn run_mcp_server() {
-    eprintln!("deos-hermes — the dregg confined MCP server (stdio); tools = run_js, confinement_probe");
+    eprintln!(
+        "deos-hermes — the dregg confined MCP server (stdio); tools = run_js, confinement_probe"
+    );
 
     // The dregg confinement the tools route through: a grantor runtime + the
     // standard per-kind/per-tool floors (terminal rate 5, run_js granted). Every

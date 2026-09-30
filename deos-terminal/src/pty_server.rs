@@ -168,7 +168,10 @@ fn is_loopback_origin(origin: &str) -> bool {
         }
     };
     let port_ok = port.is_empty()
-        || (port.len() > 1 && port.len() <= 6 && port[1..].bytes().all(|b| b.is_ascii_digit()) && port.starts_with(':'));
+        || (port.len() > 1
+            && port.len() <= 6
+            && port[1..].bytes().all(|b| b.is_ascii_digit())
+            && port.starts_with(':'));
     matches!(host, "localhost" | "127.0.0.1" | "[::1]") && port_ok
 }
 
@@ -200,7 +203,8 @@ impl ServerConfig {
             Err(_) => (SessionToken::mint()?, true),
         };
         std::env::remove_var(TOKEN_VAR);
-        let origins = OriginPolicy::from_list(&std::env::var(ALLOWED_ORIGINS_VAR).unwrap_or_default());
+        let origins =
+            OriginPolicy::from_list(&std::env::var(ALLOWED_ORIGINS_VAR).unwrap_or_default());
         Ok((
             Self {
                 token,
@@ -260,7 +264,10 @@ pub async fn bind_serve(
     addr: &str,
     allow_non_loopback: bool,
     config: ServerConfig,
-) -> anyhow::Result<(SocketAddr, impl std::future::Future<Output = anyhow::Result<()>>)> {
+) -> anyhow::Result<(
+    SocketAddr,
+    impl std::future::Future<Output = anyhow::Result<()>>,
+)> {
     let listener = bind(addr, allow_non_loopback).await?;
     let local = listener.local_addr()?;
     Ok((local, serve(listener, config)))
@@ -487,7 +494,10 @@ mod tests {
         ] {
             assert!(!p.admits(Some(bad)), "{bad} should be refused");
         }
-        assert!(p.admits(None), "a non-browser client (no Origin) reaches the token check");
+        assert!(
+            p.admits(None),
+            "a non-browser client (no Origin) reaches the token check"
+        );
     }
 
     #[test]
@@ -495,7 +505,10 @@ mod tests {
         let p = OriginPolicy::from_list(" https://cockpit.example , ");
         assert!(p.admits(Some("https://cockpit.example")));
         assert!(!p.admits(Some("http://localhost")));
-        assert!(matches!(OriginPolicy::from_list(" , "), OriginPolicy::Loopback));
+        assert!(matches!(
+            OriginPolicy::from_list(" , "),
+            OriginPolicy::Loopback
+        ));
     }
 
     #[test]

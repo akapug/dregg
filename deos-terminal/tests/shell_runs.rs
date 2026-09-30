@@ -121,7 +121,9 @@ fn host_environment_does_not_reach_the_shell() {
     );
 
     // `[S:<secret-or-absent>]` and `[N:<named>]` land as the command's output.
-    term.write_str("echo \"[S:${DEOS_D10_HOST_SECRET:-absent}]\" \"[N:${DEOS_D10_NAMED:-absent}]\"\n");
+    term.write_str(
+        "echo \"[S:${DEOS_D10_HOST_SECRET:-absent}]\" \"[N:${DEOS_D10_NAMED:-absent}]\"\n",
+    );
     let done = wait_for(&term, Duration::from_secs(8), |t| {
         screen_text(t).contains("[N:named-ok]")
     });

@@ -137,7 +137,9 @@ fn the_confined_model_has_only_dregg_tools() {
 
 /// The text of a `tools/call` reply's first content block.
 fn text_of(result: &Value) -> &str {
-    result["content"][0]["text"].as_str().expect("a text content block")
+    result["content"][0]["text"]
+        .as_str()
+        .expect("a text content block")
 }
 
 /// Drive one `tools/call` after the MCP handshake; return the call's `result`.
@@ -146,7 +148,11 @@ fn call_once(server: &mut McpServer<'_>, name: &str, arguments: Value) -> Value 
         "{}{}{}",
         req(1, "initialize", json!({ "protocolVersion": "2025-06-18" })),
         note("notifications/initialized"),
-        req(2, "tools/call", json!({ "name": name, "arguments": arguments })),
+        req(
+            2,
+            "tools/call",
+            json!({ "name": name, "arguments": arguments })
+        ),
     );
     let replies = drive(server, &session);
     replies
@@ -178,8 +184,16 @@ fn confinement_probe_reports_every_tooth_and_runs_nothing() {
     let verdict = result["_deos"]["sandboxVerdict"]
         .as_i64()
         .expect("a probe verdict") as i32;
-    assert_eq!(verdict & probe::OPEN_DENIED, probe::OPEN_DENIED, "0x{verdict:x}");
-    assert_eq!(verdict & probe::NET_DENIED, probe::NET_DENIED, "0x{verdict:x}");
+    assert_eq!(
+        verdict & probe::OPEN_DENIED,
+        probe::OPEN_DENIED,
+        "0x{verdict:x}"
+    );
+    assert_eq!(
+        verdict & probe::NET_DENIED,
+        probe::NET_DENIED,
+        "0x{verdict:x}"
+    );
     assert_eq!(
         verdict & probe::ONLY_ENDPOINT_FD,
         probe::ONLY_ENDPOINT_FD,
@@ -225,10 +239,17 @@ fn no_reply_claims_a_command_ran() {
     let registry =
         GrantRegistry::default_for_session(1_000_000).with_standard_tool_grants(1_000_000);
     let mut server = McpServer::new(host(&runtime, root, registry));
-    let with_command = call_once(&mut server, "confinement_probe", json!({ "command": command }));
+    let with_command = call_once(
+        &mut server,
+        "confinement_probe",
+        json!({ "command": command }),
+    );
     assert_eq!(with_command["isError"], json!(true), "{with_command}");
     assert!(with_command["_deos"]["receipt"].is_null(), "not metered");
-    assert!(with_command["_deos"]["sandboxVerdict"].is_null(), "no PD launched");
+    assert!(
+        with_command["_deos"]["sandboxVerdict"].is_null(),
+        "no PD launched"
+    );
     let text = text_of(&with_command);
     assert!(text.contains("nothing was run"), "{text}");
     assert_claims_no_execution(text, command);
@@ -262,14 +283,24 @@ fn a_rate_zero_probe_grant_refuses_before_any_pd_launches() {
     let mut server = McpServer::new(host(&runtime, root, registry));
     let result = call_once(&mut server, "confinement_probe", json!({}));
 
-    assert_eq!(result["isError"], json!(true), "the rate-0 probe call is refused");
-    assert!(result["_deos"]["receipt"].is_null(), "no receipt — no turn committed");
+    assert_eq!(
+        result["isError"],
+        json!(true),
+        "the rate-0 probe call is refused"
+    );
+    assert!(
+        result["_deos"]["receipt"].is_null(),
+        "no receipt — no turn committed"
+    );
     assert!(
         result["_deos"]["sandboxVerdict"].is_null(),
         "no PD launched — the gate bit first"
     );
     let text = text_of(&result);
-    assert!(text.contains("refused"), "the model sees the in-band refusal: {text}");
+    assert!(
+        text.contains("refused"),
+        "the model sees the in-band refusal: {text}"
+    );
 }
 
 /// (d) tools/call run_js — the model's chosen script runs on the dregg verified
