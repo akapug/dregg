@@ -240,7 +240,7 @@ pub(super) async fn tool_create_cell_from_factory_effect(
         .get(&agent_cell_id)
         .map(|c| c.state.nonce())
         .unwrap_or(0);
-    // The MCP agent cell's own causal head — `append_receipt` below is agent-scoped
+    // The MCP agent cell's own causal head — the settle's `append_receipt` is agent-scoped
     // (`agent_receipt_head_hash(&receipt.agent)`), so the node-wide log head was refused
     // as soon as any other agent committed. Seeded onto the fresh executor too.
     let previous_receipt_hash = s.cclerk.agent_receipt_head_hash(&agent_cell_id);
@@ -284,16 +284,16 @@ pub(super) async fn tool_create_cell_from_factory_effect(
     if let Some(head) = previous_receipt_hash {
         executor.set_last_receipt_hash(agent_cell_id, head);
     }
-    let exec_result = mcp_execute(&mut s, &executor, &turn);
+    let exec_result = match mcp_execute(&mut s, &executor, &turn) {
+        Ok(result) => result,
+        Err(refused) => return refused.into_tool_result(),
+    };
 
     let new_cell_id = dregg_cell::CellId::derive_raw(&owner_pubkey, &token_id);
     let new_cell_hex = hex_encode(&new_cell_id.0);
 
     match exec_result {
-        dregg_turn::TurnResult::Committed { receipt, .. } => {
-            s.cclerk
-                .append_receipt(receipt)
-                .expect("local executor and cclerk chains must agree; divergence is a serious bug");
+        dregg_turn::TurnResult::Committed { .. } => {
             drop(s);
             state.emit(crate::state::NodeEvent::Receipt {
                 hash: turn_hash.clone(),
@@ -424,7 +424,7 @@ pub(super) async fn run_starbridge_action(
         .get(&agent_cell_id)
         .map(|c| c.state.nonce())
         .unwrap_or(0);
-    // The MCP agent cell's own causal head — `append_receipt` below is agent-scoped
+    // The MCP agent cell's own causal head — the settle's `append_receipt` is agent-scoped
     // (`agent_receipt_head_hash(&receipt.agent)`), so the node-wide log head was refused
     // as soon as any other agent committed. Seeded onto the fresh executor too. This is
     // the shared body behind `dregg_register_name` / `dregg_publish_subscription` /
@@ -471,7 +471,10 @@ pub(super) async fn run_starbridge_action(
     if let Some(head) = previous_receipt_hash {
         executor.set_last_receipt_hash(agent_cell_id, head);
     }
-    let exec_result = mcp_execute(&mut s, &executor, &turn);
+    let exec_result = match mcp_execute(&mut s, &executor, &turn) {
+        Ok(result) => result,
+        Err(refused) => return refused.into_tool_result(),
+    };
 
     match exec_result {
         dregg_turn::TurnResult::Committed { receipt, .. } => {
@@ -491,10 +494,6 @@ pub(super) async fn run_starbridge_action(
                 receipt_hash,
                 &turn_hash,
             );
-
-            s.cclerk
-                .append_receipt(receipt.clone())
-                .expect("local executor and cclerk chains must agree; divergence is a serious bug");
 
             let turn_data = postcard::to_stdvec(&signed).expect("SignedTurn serialization");
             drop(s);
