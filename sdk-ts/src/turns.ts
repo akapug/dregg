@@ -522,12 +522,16 @@ export class AuthorizedTurn {
   /**
    * Execute the turn on the node and return the [`Receipt`] noun.
    *
-   * The agent cell pays; the turn rides the cell's live nonce, the node's
-   * receipt-chain head (`previous_receipt_hash` causal binding), and a
-   * deadline of the node's `latest_height` + 1800 heights, decided once; the
-   * envelope signature binds the canonical
-   * `Turn::hash` (v3). A chain-head race (another commit landing between
-   * read and submit) is retried once with fresh bindings. Because
+   * The agent cell pays; the turn rides the agent's live nonce and the
+   * agent's OWN receipt-chain head (`previous_receipt_hash`), both from one
+   * `GET /api/cell/{agent}` read, and a deadline of the node's
+   * `latest_height` + 1800 heights, decided once. The envelope signature binds
+   * the canonical `Turn::hash` (v3).
+   *
+   * Another agent committing in between changes nothing this turn binds. If
+   * THIS agent's head or nonce moved between the read and the submit (a
+   * concurrent turn of its own landed), the node refuses with a receipt-chain
+   * or nonce mismatch, and the turn is retried once over a FRESH read. Because
    * `dregg-action-sig-v3` binds the turn nonce into the ACTION signature, a
    * moved nonce means the action is re-signed too — not just the envelope.
    * One-shot: a second call is refused (the consumed turn would replay-fail
@@ -541,7 +545,7 @@ export class AuthorizedTurn {
     const validUntil = (await this.runtime.node.latestHeight()) + DEFAULT_TURN_VALIDITY_HORIZON_BLOCKS;
     let lastError: unknown;
     for (let attempt = 0; attempt < 2; attempt++) {
-      const nonce = await this.runtime.currentNonce();
+      const { nonce, previousReceiptHash } = await this.runtime.chainBinding();
       // v3: the action signature covers the turn nonce. If the live counter
       // moved since `sign()`, the banked signature is bound to a stale nonce
       // and would be rejected — re-sign over the live one.
@@ -553,7 +557,6 @@ export class AuthorizedTurn {
         );
         this.signedNonce = nonce;
       }
-      const previousReceiptHash = await this.runtime.node.receiptChainHead();
       const turn: Turn = {
         agent: this.runtime.identity.cellId(),
         nonce,
@@ -568,7 +571,7 @@ export class AuthorizedTurn {
         lastError = e;
         const msg = e instanceof Error ? e.message : String(e);
         if (attempt === 0 && /receipt chain mismatch|nonce/i.test(msg)) {
-          continue; // racing commit moved the head; rebind and retry once
+          continue; // this agent's own head/nonce moved; re-read both and retry once
         }
         throw e;
       }

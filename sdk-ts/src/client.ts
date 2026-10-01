@@ -21,6 +21,24 @@ import { hexDecodeExact, hexEncode } from "./internal/bytes";
 import type { Turn } from "./internal/wire";
 import { turnHash } from "./internal/wire";
 
+/**
+ * The agent receipt head a cell view carries — strict, like the Rust
+ * `agent_receipt_head`: `null` is "no turn committed yet", a string must be 32
+ * hex bytes, and a view WITHOUT the field is an error (the head is unknown, and
+ * guessing `undefined` would bind a first-turn claim the node then refuses).
+ */
+export function agentReceiptHeadOf(cell: CellDetail): Uint8Array | undefined {
+  const head = cell.last_receipt_hash;
+  if (head === null) return undefined;
+  if (typeof head === "string") return hexDecodeExact(head, 32);
+  if (head === undefined) {
+    throw new Error(
+      "the cell view carries no last_receipt_hash, so this agent's receipt head is unknown",
+    );
+  }
+  throw new Error(`cell last_receipt_hash is not a hex string: ${JSON.stringify(head)}`);
+}
+
 export interface NodeClientOptions {
   /** Devnet gate key, sent as both `X-Devnet-Key` and `Authorization: Bearer`. */
   devnetKey?: string;
@@ -68,6 +86,12 @@ export interface CellDetail {
   nonce: number;
   public_key: string;
   fields: string[];
+  /**
+   * This cell's receipt-chain head AS AN AGENT: the `receipt_hash` of the last
+   * turn it committed, `null` before its first. The node serves it for a
+   * not-found cell too. See [`agentReceiptHeadOf`].
+   */
+  last_receipt_hash?: string | null;
   [extra: string]: unknown;
 }
 
@@ -252,17 +276,19 @@ export class NodeClient {
   }
 
   /**
-   * The node's receipt-chain head hash (32 bytes), or undefined on an empty
-   * chain. Submitted turns bind to this via `previous_receipt_hash` (causal
-   * ordering; the node verifies the claim against its live head).
+   * `cellId`'s receipt-chain head AS AN AGENT (`GET /api/cell/{id}` →
+   * `last_receipt_hash`), or `undefined` before its first committed turn.
+   *
+   * This is the value a turn whose `agent` is `cellId` must carry as
+   * `previous_receipt_hash`: the node admits a signed turn only when that field
+   * equals `agent_receipt_head_hash(turn.agent)`. There is deliberately no
+   * node-wide "chain head" reader here — the unfiltered `/api/receipts` tip is
+   * some other agent's receipt whenever another agent committed since, and
+   * threading it refused every such turn (and its retry, which read the same
+   * tip). Same read as the Rust `NodeHttpClient::fetch_agent_receipt_head`.
    */
-  async receiptChainHead(): Promise<Uint8Array | undefined> {
-    const infos = await this.receipts();
-    if (infos.length === 0) return undefined;
-    const head =
-      infos.find((r) => r.chain_head) ??
-      infos.reduce((a, b) => (a.chain_index >= b.chain_index ? a : b));
-    return hexDecodeExact(head.receipt_hash, 32);
+  async agentReceiptHead(cellId: Uint8Array | string): Promise<Uint8Array | undefined> {
+    return agentReceiptHeadOf(await this.cell(cellId));
   }
 
   /**
@@ -503,6 +529,21 @@ export class AgentRuntime {
       if (e instanceof NodeError && e.status === 404) return 0n;
       throw e;
     }
+  }
+
+  /**
+   * The two per-agent coordinates a submitted turn binds, from ONE read of
+   * `GET /api/cell/{agent}` so they describe the same moment: the live nonce
+   * (a pinned [`NodeClientOptions.nonce`] still wins) and this agent's own
+   * receipt-chain head for `previous_receipt_hash`.
+   */
+  async chainBinding(): Promise<{ nonce: bigint; previousReceiptHash: Uint8Array | undefined }> {
+    const cell = await this.node.cell(this.identity.cellId());
+    const pinned = this.node.pinnedNonce();
+    return {
+      nonce: pinned ?? (cell.found ? BigInt(cell.nonce) : 0n),
+      previousReceiptHash: agentReceiptHeadOf(cell),
+    };
   }
 
   /**

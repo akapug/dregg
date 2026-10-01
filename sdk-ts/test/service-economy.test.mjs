@@ -9,7 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 
-import { hex, raw, sdk } from "./helpers.mjs";
+import { SIGNED_TURN_SUFFIX_LEN, decodeTurnCoordinates, hex, raw, sdk } from "./helpers.mjs";
 
 const PINNED_FED = Uint8Array.from({ length: 32 }, () => 3);
 
@@ -175,6 +175,11 @@ test("lease meter program postcard is byte-faithful to the Rust canonical_progra
 // A minimal mock node that accepts the signed envelope and returns a receipt —
 // enough to prove the FULL pay path (sign → submit → Receipt), not just the
 // action shape. Mirrors the envelope verification in turns.test.mjs.
+/** The mock's attested height: `submit()` counts the turn's deadline from it. */
+const MOCK_HEIGHT = 41;
+/** The payer's own receipt-chain head, served on `/api/cell/{payer}`. */
+const PAYER_HEAD = "a7".repeat(32);
+
 async function mockNode({ onEnvelope }) {
   const nodePubkey = Uint8Array.from({ length: 32 }, () => 5);
   const receipts = [];
@@ -190,9 +195,18 @@ async function mockNode({ onEnvelope }) {
       return send(200, [{ id: "00".repeat(32), federation_id: "00".repeat(32), committee_epoch: 0, member_count: 0, is_local: true }]);
     }
     if (req.url?.startsWith("/api/cell/")) {
-      return send(200, { id: req.url.slice("/api/cell/".length), found: true, balance: 500, nonce: 3, public_key: "", fields: [] });
+      return send(200, {
+        id: req.url.slice("/api/cell/".length),
+        found: true,
+        balance: 500,
+        nonce: 3,
+        public_key: "",
+        fields: [],
+        last_receipt_hash: PAYER_HEAD,
+      });
     }
     if (req.url === "/api/receipts") return send(200, receipts);
+    if (req.url === "/status") return send(200, { latest_height: MOCK_HEIGHT });
     if (req.url === "/api/turns/submit-signed" && req.method === "POST") {
       const chunks = [];
       req.on("data", (c) => chunks.push(c));
@@ -215,7 +229,7 @@ test("pay rides the full path: sign -> submit -> Receipt (canonical hybrid envel
   const { server, url, nodePubkey } = await mockNode({
     onEnvelope: (body, receipts) => {
       // Canonical hybrid frame: turn ++ Ed signature/key ++ ML-DSA signature/key.
-      const turnLen = body.length - (1 + 64 + 1 + 32 + 2 + 3309 + 2 + 1952);
+      const turnLen = body.length - SIGNED_TURN_SUFFIX_LEN;
       assert.equal(body[turnLen], 0x40);
       assert.equal(body[turnLen + 65], 0x20);
       const signer = body.subarray(turnLen + 66, turnLen + 98);
@@ -224,6 +238,14 @@ test("pay rides the full path: sign -> submit -> Receipt (canonical hybrid envel
       assert.equal(hex(pqSigner), hex(identity.mlDsaPublicKey()), "the payer's PQ identity is carried too");
       assert.equal(hex(rawMod.deriveCellId(signer)), agentHex);
       assert.equal(hex(body.subarray(0, 32)), agentHex, "turn begins with the agent cell id");
+      const coords = decodeTurnCoordinates(body.subarray(0, turnLen));
+      assert.equal(coords.nonce, 3n, "the turn rides the payer's live nonce");
+      assert.equal(
+        coords.validUntil,
+        BigInt(MOCK_HEIGHT) + 1800n,
+        "valid_until is a BLOCK HEIGHT: the node's latest_height + 1800, never a timestamp",
+      );
+      assert.equal(coords.previousReceiptHash, PAYER_HEAD, "the turn threads the PAYER's own receipt head");
       saw = true;
       const turnHashHex = "ab".repeat(32);
       receipts.push({

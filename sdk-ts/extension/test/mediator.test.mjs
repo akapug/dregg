@@ -47,13 +47,11 @@ class MockNode extends NodeClient {
     return FED;
   }
   async cell() {
-    return { id: "", found: true, balance: 1_000_000, nonce: 0, public_key: "", fields: [] };
+    // A fresh agent: nonce 0 and no receipt head yet (`previous_receipt_hash: None`).
+    return { id: "", found: true, balance: 1_000_000, nonce: 0, public_key: "", fields: [], last_receipt_hash: null };
   }
-  async receipts() {
-    return []; // empty chain → receiptChainHead() is undefined
-  }
-  async receiptChainHead() {
-    return undefined;
+  async latestHeight() {
+    return 0n; // `submit()` sets valid_until = latest_height + 1800 (a block height)
   }
   async submitSignedEnvelope(envelope) {
     this.submitted.push(envelope);

@@ -8,7 +8,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 
-import { hex, raw, sdk } from "./helpers.mjs";
+import { SIGNED_TURN_SUFFIX_LEN, decodeTurnCoordinates, hex, raw, sdk } from "./helpers.mjs";
 
 async function mockNode({ onEnvelope }) {
   const rawMod = await raw();
@@ -35,7 +35,15 @@ async function mockNode({ onEnvelope }) {
       ]);
     }
     if (req.url?.startsWith("/api/cell/")) {
-      return send(200, { id: req.url.slice("/api/cell/".length), found: true, balance: 500, nonce: 7, public_key: "", fields: [] });
+      return send(200, {
+        id: req.url.slice("/api/cell/".length),
+        found: true,
+        balance: 500,
+        nonce: 7,
+        public_key: "",
+        fields: [],
+        last_receipt_hash: null, // this agent has committed nothing yet
+      });
     }
     if (req.url === "/api/receipts") {
       return send(200, receipts);
@@ -203,5 +211,204 @@ test("on(target) retargets the action while the agent still signs and pays", asy
     assert.equal(hex(action.effects[0].cell), hex(target));
   } finally {
     server.close();
+  }
+});
+
+// ─── the per-agent receipt head ─────────────────────────────────────────────
+//
+// The node admits a signed turn only when `previous_receipt_hash` equals the
+// AGENT's own head (`agent_receipt_head_hash(turn.agent)`), served on
+// `GET /api/cell/{agent}` as `last_receipt_hash`. Until 2026-09-30 `submit()`
+// threaded the NODE-WIDE tip of `GET /api/receipts`, so any turn was refused
+// whenever another agent had committed since this agent's last receipt, and its
+// one retry read the same wrong tip. This mock enforces the node's rule.
+
+const AGENT_SUBMIT_REFUSAL = "receipt chain mismatch";
+
+/** A mock node that keeps per-agent heads and nonces and refuses exactly as the node does. */
+async function chainMockNode({ afterAgentCellRead } = {}) {
+  const nodePubkey = Uint8Array.from({ length: 32 }, () => 5);
+  const agents = new Map(); // agentHex -> { nonce: bigint, head: string | null }
+  const receipts = []; // node-wide, newest last
+  const submits = []; // every envelope the node saw: { agent, nonce, previousReceiptHash, accepted }
+  let minted = 0;
+  const commit = (agentHex) => {
+    const a = agents.get(agentHex) ?? { nonce: 0n, head: null };
+    minted += 1;
+    // Heads never end in 0x00 (see `decodeTurnCoordinates`).
+    const receiptHash = minted.toString(16).padStart(2, "0").repeat(32);
+    const turnHash = (0x80 + minted).toString(16).repeat(32);
+    for (const r of receipts) r.chain_head = false;
+    receipts.push({
+      chain_index: receipts.length,
+      chain_head: true,
+      receipt_hash: receiptHash,
+      turn_hash: turnHash,
+      agent: agentHex,
+      pre_state: "11".repeat(32),
+      post_state: "22".repeat(32),
+      timestamp: 1,
+      computrons_used: 10,
+      action_count: 1,
+      previous_receipt_hash: a.head,
+      finality: "tentative",
+      was_encrypted: false,
+      was_burn: false,
+      has_proof: false,
+    });
+    agents.set(agentHex, { nonce: a.nonce + 1n, head: receiptHash });
+    return { receiptHash, turnHash };
+  };
+  const server = createServer((req, res) => {
+    const send = (code, body) => {
+      res.writeHead(code, { "content-type": "application/json" });
+      res.end(JSON.stringify(body));
+    };
+    if (req.url === "/api/node/identity") {
+      return send(200, { public_key: hex(nodePubkey), agent_cell: "00".repeat(32), unlocked: true, agent_balance: 0, agent_nonce: 0 });
+    }
+    if (req.url === "/api/federations") {
+      return send(200, [{ id: "00".repeat(32), federation_id: "00".repeat(32), committee_epoch: 0, member_count: 0, is_local: true }]);
+    }
+    if (req.url?.startsWith("/api/cell/")) {
+      const id = req.url.slice("/api/cell/".length);
+      const a = agents.get(id) ?? { nonce: 0n, head: null };
+      send(200, { id, found: true, balance: 500, nonce: Number(a.nonce), public_key: "", fields: [], last_receipt_hash: a.head });
+      afterAgentCellRead?.(id, { commit, agents, receipts });
+      return;
+    }
+    if (req.url === "/api/receipts") return send(200, receipts);
+    if (req.url === "/status") return send(200, { latest_height: receipts.length });
+    if (req.url === "/api/turns/submit-signed" && req.method === "POST") {
+      const chunks = [];
+      req.on("data", (c) => chunks.push(c));
+      req.on("end", () => {
+        const body = new Uint8Array(Buffer.concat(chunks));
+        const turnBytes = body.subarray(0, body.length - SIGNED_TURN_SUFFIX_LEN);
+        const agent = hex(turnBytes.subarray(0, 32));
+        const coords = decodeTurnCoordinates(turnBytes);
+        const live = agents.get(agent) ?? { nonce: 0n, head: null };
+        const seen = { agent, nonce: coords.nonce, previousReceiptHash: coords.previousReceiptHash ?? null };
+        submits.push(seen);
+        if (seen.previousReceiptHash !== live.head) {
+          seen.accepted = false;
+          return send(200, { accepted: false, turn_hash: null, error: AGENT_SUBMIT_REFUSAL });
+        }
+        if (coords.nonce !== live.nonce) {
+          seen.accepted = false;
+          return send(200, { accepted: false, turn_hash: null, error: `nonce mismatch: expected ${live.nonce}` });
+        }
+        seen.accepted = true;
+        const { turnHash } = commit(agent);
+        send(200, { accepted: true, turn_hash: turnHash, action_count: 1 });
+      });
+      return;
+    }
+    send(404, { error: "nope" });
+  });
+  await new Promise((r) => server.listen(0, r));
+  return { server, commit, agents, receipts, submits, url: `http://127.0.0.1:${server.address().port}` };
+}
+
+test("submit() threads the AGENT's own head: another agent committing between the read and the submit does not refuse it", async () => {
+  const { AgentRuntime, Identity } = await sdk();
+  const identity = Identity.fromKeyBytes(Uint8Array.from({ length: 32 }, (_, i) => 0x61 + i));
+  const me = identity.cellIdHex();
+  const other = "b0".repeat(32);
+
+  let submitPhase = false;
+  const node = await chainMockNode({
+    // Another agent commits right AFTER this agent's coordinates are read —
+    // the node-wide tip moves between the read and the submit.
+    afterAgentCellRead: (id, { commit }) => {
+      if (submitPhase && id === me) commit(other);
+    },
+  });
+  try {
+    // History: I committed once, then the other agent committed after me, so
+    // the node-wide tip is NOT my head even before the race.
+    const mine = node.commit(me);
+    node.commit(other);
+
+    const runtime = new AgentRuntime(identity, node.url);
+    const authorized = await runtime.turn().incrementNonce().sign();
+    submitPhase = true;
+    const receipt = await authorized.submit();
+
+    const nodeWideTip = node.receipts.find((r) => r.chain_head).receipt_hash;
+    assert.notEqual(nodeWideTip, mine.receiptHash, "precondition: the node-wide tip is another agent's receipt");
+    assert.equal(node.submits.length, 1, "lands on the FIRST attempt — nothing to retry");
+    assert.equal(node.submits[0].previousReceiptHash, mine.receiptHash, "the turn carried MY head, not the node-wide tip");
+    assert.equal(node.submits[0].nonce, 1n);
+    assert.equal(receipt.agent, me);
+    assert.equal(receipt.previousReceiptHash, mine.receiptHash);
+  } finally {
+    node.server.close();
+  }
+});
+
+test("a turn carrying the NODE-WIDE tip is refused by this mock (the head test can fail)", async () => {
+  // The falsifier for the test above: the mock really enforces the agent's own
+  // head, so an SDK threading `/api/receipts`' tip would be refused here.
+  const rawMod = await raw();
+  const { Identity } = await sdk();
+  const identity = Identity.fromKeyBytes(Uint8Array.from({ length: 32 }, (_, i) => 0x62 + i));
+  const node = await chainMockNode();
+  try {
+    node.commit(identity.cellIdHex());
+    const tip = node.commit("b1".repeat(32)).receiptHash;
+    const agent = identity.cellId();
+    const fed = new Uint8Array(32);
+    const action = identity.signAction(rawMod.unsignedActionNamed(agent, "execute", [{ kind: "incrementNonce", cell: agent }]), fed, 1n);
+    const turn = { agent, nonce: 1n, roots: [{ action, children: [] }], fee: 0n, validUntil: 1800n, previousReceiptHash: Uint8Array.from(Buffer.from(tip, "hex")) };
+    const res = await fetch(`${node.url}/api/turns/submit-signed`, { method: "POST", body: identity.signTurnEnvelope(turn) });
+    const json = await res.json();
+    assert.equal(json.accepted, false);
+    assert.equal(json.error, AGENT_SUBMIT_REFUSAL);
+  } finally {
+    node.server.close();
+  }
+});
+
+test("submit() retries once over a RE-READ head when this agent's own head moved under it", async () => {
+  const rawMod = await raw();
+  const { AgentRuntime, Identity } = await sdk();
+  const identity = Identity.fromKeyBytes(Uint8Array.from({ length: 32 }, (_, i) => 0x63 + i));
+  const me = identity.cellIdHex();
+
+  let submitReads = 0;
+  let raced = null;
+  const node = await chainMockNode({
+    // On the FIRST submit-phase read only, a concurrent turn of MINE commits
+    // after my coordinates were read: my head and nonce both move.
+    afterAgentCellRead: (id, { commit }) => {
+      if (id !== me) return;
+      submitReads += 1;
+      if (submitReads === 2) raced = commit(me); // read #1 is sign()'s, #2 is submit()'s first
+    },
+  });
+  try {
+    const first = node.commit(me);
+    const runtime = new AgentRuntime(identity, node.url);
+    const authorized = await runtime.turn().incrementNonce().sign();
+    const receipt = await authorized.submit();
+
+    assert.ok(raced, "the race happened");
+    assert.equal(node.submits.length, 2, "refused once, then retried once");
+    assert.deepEqual(
+      node.submits.map((s) => [s.previousReceiptHash, s.nonce, s.accepted]),
+      [
+        [first.receiptHash, 1n, false],
+        [raced.receiptHash, 2n, true],
+      ],
+      "the retry re-read BOTH coordinates and carried the moved head and nonce",
+    );
+    assert.equal(receipt.previousReceiptHash, raced.receiptHash);
+    // sig-v3 binds the nonce, so the retry re-signed the ACTION over the new one.
+    const fed = rawMod.blake3(Uint8Array.from({ length: 32 }, () => 5));
+    const action = authorized.action();
+    assert.ok(rawMod.ed25519Verify(identity.publicKey, rawMod.actionSigningMessage(action, fed, 2n), action.authorization.ed25519));
+  } finally {
+    node.server.close();
   }
 });
