@@ -186,7 +186,7 @@ pub(super) async fn tool_submit_turn(params: &Value, state: &NodeState) -> McpTo
         .map(|c| c.state.nonce())
         .unwrap_or(0);
     // The MCP agent cell's OWN causal head. `receipt_chain()` is the node-wide
-    // observation log across every agent; `append_receipt` below checks
+    // observation log across every agent; the settle's `append_receipt` checks
     // `agent_receipt_head_hash(&receipt.agent)`, so the wide head was refused as soon
     // as any other agent committed. The fresh `TurnExecutor` a few lines down carries
     // an EMPTY per-agent head map, so the same value is seeded onto it — without that,
@@ -249,14 +249,13 @@ pub(super) async fn tool_submit_turn(params: &Value, state: &NodeState) -> McpTo
     if let Some(head) = previous_receipt_hash {
         executor.set_last_receipt_hash(agent_cell_id, head);
     }
-    let exec_result = mcp_execute_via_producer(&mut s, &executor, &turn);
+    let exec_result = match mcp_execute_via_producer(&mut s, &executor, &turn) {
+        Ok(result) => result,
+        Err(refused) => return refused.into_tool_result(),
+    };
 
     match exec_result {
-        dregg_turn::TurnResult::Committed { receipt, .. } => {
-            s.cclerk
-                .append_receipt(receipt)
-                .expect("local executor and cclerk chains must agree; divergence is a serious bug");
-
+        dregg_turn::TurnResult::Committed { .. } => {
             // Serialize the full SignedTurn for gossip (postcard format).
             let turn_data = postcard::to_stdvec(&signed).expect("SignedTurn serialization");
 
@@ -500,9 +499,6 @@ pub(super) async fn tool_fulfill_intent(params: &Value, state: &NodeState) -> Mc
     match result {
         Ok(receipt) => {
             let turn_hash = hex_encode(&receipt.turn_hash);
-            s.cclerk
-                .append_receipt(receipt)
-                .expect("local executor and cclerk chains must agree; divergence is a serious bug");
             drop(s);
             state.emit(crate::state::NodeEvent::Receipt {
                 hash: turn_hash.clone(),
@@ -513,7 +509,11 @@ pub(super) async fn tool_fulfill_intent(params: &Value, state: &NodeState) -> Mc
                 "turn_hash": turn_hash,
             }))
         }
-        Err(e) => {
+        Err(McpApplyError::Settle(refused)) => {
+            drop(s);
+            refused.into_tool_result()
+        }
+        Err(McpApplyError::Flow(e)) => {
             drop(s);
             McpToolResult::json(&serde_json::json!({
                 "intent_id": intent_id_hex,
@@ -971,13 +971,13 @@ pub(super) async fn tool_captp_deliver(params: &Value, state: &NodeState) -> Mcp
     if let Some(head) = previous_receipt_hash {
         executor.set_last_receipt_hash(agent_cell_id, head);
     }
-    let exec_result = mcp_execute(&mut s, &executor, &turn);
+    let exec_result = match mcp_execute(&mut s, &executor, &turn) {
+        Ok(result) => result,
+        Err(refused) => return refused.into_tool_result(),
+    };
 
     match exec_result {
-        dregg_turn::TurnResult::Committed { receipt, .. } => {
-            s.cclerk
-                .append_receipt(receipt)
-                .expect("local executor and cclerk chains must agree; divergence is a serious bug");
+        dregg_turn::TurnResult::Committed { .. } => {
             drop(s);
             state.emit(crate::state::NodeEvent::Receipt {
                 hash: turn_hash.clone(),
@@ -1254,7 +1254,10 @@ pub(super) async fn tool_bilateral_action(params: &Value, state: &NodeState) -> 
     if let Some(head) = previous_receipt_hash {
         executor.set_last_receipt_hash(agent_cell_id, head);
     }
-    let exec_result = mcp_execute(&mut s, &executor, &turn);
+    let exec_result = match mcp_execute(&mut s, &executor, &turn) {
+        Ok(result) => result,
+        Err(refused) => return refused.into_tool_result(),
+    };
 
     let (committed, rejection) = match exec_result {
         dregg_turn::TurnResult::Committed { receipt, .. } => {
@@ -1266,9 +1269,6 @@ pub(super) async fn tool_bilateral_action(params: &Value, state: &NodeState) -> 
                 receipt_hash,
                 &turn_hash,
             );
-            s.cclerk
-                .append_receipt(receipt.clone())
-                .expect("local executor and cclerk chains must agree; divergence is a serious bug");
             (Some((receipt, receipt_hash, planned)), None)
         }
         dregg_turn::TurnResult::Rejected { reason, .. } => (

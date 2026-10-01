@@ -108,6 +108,11 @@ mod receipt_head_e2e;
 /// durable image the node rebuilds at boot.
 #[cfg(test)]
 mod refused_turn_is_free_e2e;
+/// A refused durable receipt append, per handler family: the settle rolls the
+/// ledger back and the handler answers `not_applied` instead of panicking under
+/// the write lock with the ledger change already kept.
+#[cfg(test)]
+mod settle_append_refusal_e2e;
 mod tools_def;
 
 // Re-import every submodule namespace so the shared helpers below, the
@@ -228,7 +233,7 @@ pub(super) fn mcp_execute(
     s: &mut crate::state::NodeStateInner,
     executor: &dregg_turn::TurnExecutor,
     turn: &Turn,
-) -> dregg_turn::TurnResult {
+) -> Result<dregg_turn::TurnResult, SettleError> {
     arm_mcp_turn(s);
     let result = executor.execute(turn, &mut s.ledger);
     settle_mcp_turn(s, result)
@@ -269,7 +274,7 @@ pub(super) fn mcp_execute_via_producer(
     s: &mut crate::state::NodeStateInner,
     executor: &dregg_turn::TurnExecutor,
     turn: &Turn,
-) -> dregg_turn::TurnResult {
+) -> Result<dregg_turn::TurnResult, SettleError> {
     let lean_producer_enabled = s.lean_producer_enabled;
     arm_mcp_turn(s);
     let result = crate::executor_setup::execute_via_producer(
@@ -288,34 +293,105 @@ pub(super) fn mcp_execute_via_producer(
 /// calls and returns `Err` if the second fails — leaving the payer debited and
 /// the recipient uncredited in live node RAM, which is the fee wound's shape
 /// with value destroyed instead of a fee. The mutation now survives only if the
-/// flow reports success.
-pub(super) fn mcp_apply_to_ledger<T, E>(
+/// flow reports success AND its receipt is durably appended.
+pub(super) fn mcp_apply_to_ledger<E>(
     s: &mut crate::state::NodeStateInner,
-    f: impl FnOnce(&mut dregg_cell::Ledger) -> Result<T, E>,
-) -> Result<T, E> {
+    f: impl FnOnce(&mut dregg_cell::Ledger) -> Result<dregg_turn::TurnReceipt, E>,
+) -> Result<dregg_turn::TurnReceipt, McpApplyError<E>> {
     arm_mcp_turn(s);
-    let outcome = f(&mut s.ledger);
-    if outcome.is_ok() {
-        s.ledger.commit_restore_point();
-    } else {
-        s.ledger.rollback_restore_point();
+    match f(&mut s.ledger) {
+        Ok(receipt) => {
+            append_then_commit(s, &receipt).map_err(McpApplyError::Settle)?;
+            Ok(receipt)
+        }
+        Err(e) => {
+            s.ledger.rollback_restore_point();
+            Err(McpApplyError::Flow(e))
+        }
     }
-    outcome
 }
 
-/// Keep the mutation iff the turn committed. The non-`Committed`, non-`Rejected`
-/// arms (`ProofPending` &c.) roll back too: they are not applications either, and
-/// every MCP caller renders them as a refusal.
+/// Why [`mcp_apply_to_ledger`] kept nothing: the flow itself refused (`Flow`),
+/// or it succeeded and the node could not make its receipt durable (`Settle`).
+#[derive(Debug)]
+pub(super) enum McpApplyError<E> {
+    Flow(E),
+    Settle(SettleError),
+}
+
+/// The node could not SETTLE a turn that executed and committed. This is a
+/// fault of the node, not a verdict on the turn, so it is deliberately not a
+/// `TurnResult::Rejected`: the turn may be perfectly valid and the same
+/// request can succeed once the node's receipt store accepts writes again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum SettleError {
+    /// `AgentCipherclerk::append_receipt` refused the turn's receipt — the
+    /// durable sink (`set_receipt_persist`) failed, or the agent-scoped chain
+    /// link did not match. The ledger mutation was rolled back; the receipt
+    /// chain is unchanged (a refused append advances no in-memory head).
+    AppendRefused(String),
+}
+
+impl SettleError {
+    /// The one MCP rendering of a settle refusal: an `isError` tool result
+    /// whose `structuredContent` carries `activity_status: "not_applied"` and
+    /// `refusal: "receipt_append_refused"` — distinct from the
+    /// `activity_status: "rejected"` a turn verdict renders as.
+    fn into_tool_result(self) -> McpToolResult {
+        match self {
+            SettleError::AppendRefused(reason) => {
+                let mut r = McpToolResult::actionable_error(
+                    format!("receipt append refused: {reason}"),
+                    "the turn was NOT applied (the ledger change was rolled back and no receipt \
+                     was recorded); this is a node storage fault, not a verdict on the turn — \
+                     retry once the node's receipt store accepts writes",
+                );
+                if let Some(Value::Object(obj)) = r.structured_content.as_mut() {
+                    obj.insert("activity_status".into(), Value::from("not_applied"));
+                    obj.insert("proof_status".into(), Value::from("not_committed"));
+                    obj.insert("refusal".into(), Value::from("receipt_append_refused"));
+                }
+                r
+            }
+        }
+    }
+}
+
+/// Durably append `receipt`, THEN keep the ledger mutation. On a refused append
+/// the restore point is rolled back, so a committed turn that cannot be
+/// recorded leaves neither a ledger change nor a receipt behind.
+fn append_then_commit(
+    s: &mut crate::state::NodeStateInner,
+    receipt: &dregg_turn::TurnReceipt,
+) -> Result<(), SettleError> {
+    match s.cclerk.append_receipt(receipt.clone()) {
+        Ok(()) => {
+            s.ledger.commit_restore_point();
+            Ok(())
+        }
+        Err(e) => {
+            s.ledger.rollback_restore_point();
+            Err(SettleError::AppendRefused(e.to_string()))
+        }
+    }
+}
+
+/// Keep the mutation iff the turn committed AND its receipt was durably
+/// appended. The settle owns the append: no handler calls `append_receipt`
+/// itself, because committing the ledger first and appending afterwards left
+/// a kept ledger change with no receipt behind it whenever the append was
+/// refused. The non-`Committed`, non-`Rejected` arms (`ProofPending` &c.) roll
+/// back too: they are not applications either, and every MCP caller renders
+/// them as a refusal.
 fn settle_mcp_turn(
     s: &mut crate::state::NodeStateInner,
     result: dregg_turn::TurnResult,
-) -> dregg_turn::TurnResult {
-    if result.is_committed() {
-        s.ledger.commit_restore_point();
-    } else {
-        s.ledger.rollback_restore_point();
+) -> Result<dregg_turn::TurnResult, SettleError> {
+    match &result {
+        dregg_turn::TurnResult::Committed { receipt, .. } => append_then_commit(s, receipt)?,
+        _ => s.ledger.rollback_restore_point(),
     }
-    result
+    Ok(result)
 }
 
 #[cfg(test)]
