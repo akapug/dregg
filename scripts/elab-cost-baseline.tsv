@@ -323,6 +323,7 @@ Dregg2.Games.PathOfAngels.BazaarGameExamples	2000000	100000	0
 Dregg2.Games.PathOfAngels.BazaarGameRuntime	0	100000	0
 Dregg2.Games.PathOfAngels.CrewFieldMissionAdmission	0	20000	0
 Dregg2.Games.PathOfAngels.CrewFieldMissionAdmissionFixtures	0	20000	0
+Dregg2.Games.PathOfAngels.CrewFieldMissionRuntimeFixtures	4000000	0	0
 Dregg2.Games.PathOfAngels.CrewSigningVectors	0	131072	0
 Dregg2.Games.PathOfAngels.NightWatchCampaign	2000000	100000	0
 Dregg2.Games.PathOfAngels.NightWatchCampaignAdmission	0	10000	0

@@ -129,14 +129,6 @@ def officer : Digest32 := digest 40
 open: each `entry` is rederived by the cap-gated judge. -/
 def officerRotation : List RotationEntry := generatedRotation config officer
 
-/-- (Pinned `= true` in `SalvageCrateExamplesFixtures`.) -/
-def check_generated_rotation_has_every_authored_period : Bool :=
-  decide (officerRotation.map RotationEntry.period = [⟨31⟩, ⟨32⟩, ⟨35⟩])
-
-/-- (Pinned `= true` in `SalvageCrateExamplesFixtures`.) -/
-def check_generated_rotation_has_no_draw_exhaustion : Bool :=
-  officerRotation.all (fun day => day.entry.isSome)
-
 theorem generated_rotation_is_deterministic :
     generatedRotation config officer = officerRotation := rfl
 

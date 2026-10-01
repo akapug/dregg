@@ -125,14 +125,6 @@ def fibreSizes (bound : Nat) : List Nat :=
   (List.range bound).map fun r =>
     ((acceptedBytes bound).filter fun b => b % bound == r).length
 
-/-- Uniformity over the WHOLE domain a byte stream can serve.  For every bound
-in `1..256`, every residue below it has exactly `256 / bound` accepted preimages,
-so no residue is favoured — this is the complete finite domain of `drawBelow?`,
-not a sample of it. -/
-def drawUniformB : Bool :=
-  (List.range 257).all fun bound =>
-    bound == 0 || (fibreSizes bound).all (fun n => n == 256 / bound)
-
 /-! ⚑ **THE UNIFORMITY PIN NO LONGER EVALUATES IN THIS MODULE (2026-08-08).**  This module
 is in the `Dregg2.FFI` closure — the crypto archive's build — and a `native_decide` here
 made a game-fixture regression a hard failure of every Rust proving target.  The
@@ -142,11 +134,6 @@ without running); the EVALUATION lives in `SeedDrawFixtures.lean`, rooted in the
 
 Named residue: NONE.  `drawUniformB` is a closed Bool over `List.range 257`, so nothing
 here needs a draw to elaborate. -/
-
-/-- Uniformity over the WHOLE domain a byte stream can serve: for every bound in
-`1..256`, every residue below it has exactly `256 / bound` accepted preimages.
-(Pinned `= true` in `SeedDrawFixtures`.) -/
-def check_draw_is_uniform_on_every_bound : Bool := drawUniformB
 
 /-- Three bytes whose values differ, to exhibit the contrast below. -/
 def probeBytes : List (Fin 256) := [1, 2, 0]

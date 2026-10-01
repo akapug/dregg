@@ -201,17 +201,6 @@ The crate is reused; only the panel deployment is authored here. -/
 `configValidB` of it, so this is a reference and not a second config. -/
 abbrev stationCrate : SalvageCrate.Config := SalvageCrateExamples.config
 
-/-- ⭐ Every authored row leaves four of the five meters at zero, so the panel
-below authors exactly one dial.  A second dial would be one that provably cannot
-move — this fact is the reason there is not one.
-(Pinned `= true` in `StationDailyRuntimeFixtures`.) -/
-def check_the_authored_table_moves_only_supplies : Bool :=
-  stationCrate.raw.table.all (fun entry =>
-    decide (entry.contribution.intel = 0) &&
-    decide (entry.contribution.cohesion = 0) &&
-    decide (entry.contribution.influence = 0) &&
-    decide (entry.contribution.score = 0))
-
 /-- The station's panel — `StationCrateOpen.panel`, the one the WRITE path folds
 receipts into.  Identity is read off the crate's mission rather than re-typed;
 `fullAt` is an authored display scale for the reclamation bins and is
@@ -539,8 +528,6 @@ def replyOver (crate : SalvageCrate.Config) (panel : ShipInstrumentPanel.Panel)
   ticketCount := (SalvageCrate.ticketEntries crate.raw).length
   crew := request.crew.map (crewWireOver crate)
 
-abbrev crewWireOf : Digest32 → CrewWire := crewWireOver stationCrate
-
 abbrev replyFor : ShipInstrumentPanel.State → Request → Reply :=
   replyOver stationCrate stationPanel
 
@@ -705,135 +692,9 @@ theorem the_mutation_is_exactly_one_logged_open :
     theLogAfterOneOpen = [{ player := StationCrateOpen.crew41, period := 31 }] := by
   refine ⟨by simp [theLogAfterOneOpen], rfl, rfl⟩
 
-/-- The communal fields a reader takes off the served document for a given log —
-hoisted so the gate check below has no `let` inside its `decide`. -/
-private def servedSummaryFor (history : List HistoryRow) :
-    Option (List GaugeWire × Nat × Nat × Nat) :=
-  (readFor { crew := none, history }).map
-    (fun reply => (reply.gauges, reply.recoveredKinds, reply.observed, reply.admitted))
-
-/-- ⭐ THE SERVED SHIP MOVES WHEN THE LOG RECORDS AN OPENING.  Same deployment,
-same anonymous request, one row of difference in the node's durable log: the
-empty log serves one dial at zero with nothing observed or admitted, and the
-one-row log serves supplies 1, one recovered kind, one observation and one
-admission.
-
-This is the assertion the retired one claimed to be.  Delete the fold — make
-`servedStateOver` ignore its history and answer `ShipInstrumentPanel.initial` —
-and the second half goes red immediately, because the two halves would then be
-the same document. (Pinned `= true` in `StationDailyRuntimeFixtures`.) -/
-def check_the_served_ship_moves_when_the_log_records_an_opening : Bool :=
-  decide (servedSummaryFor [] =
-    some ([{ gauge := 1, meter := "supplies", exactTotal := 0, fullAt := 64,
-             shown := 0, atFull := false }], 0, 0, 0)) &&
-  decide (servedSummaryFor theLogAfterOneOpen =
-    some ([{ gauge := 1, meter := "supplies", exactTotal := 1, fullAt := 64,
-             shown := 1, atFull := false }], 1, 1, 1))
-
-/-- ⭐ And the two really are DIFFERENT DOCUMENTS on the wire, byte for byte, so
-the move is visible to a reader who parses nothing.  A refusal is `""`, so this
-cannot be satisfied by declining either one.
-(Pinned `= true` in `StationDailyRuntimeFixtures`.) -/
-def check_the_two_logs_serve_different_documents : Bool :=
-  decide (stationDailyReadFFI { crew := none, history := [] : Request }.toJson ≠ "") &&
-  decide (stationDailyReadFFI
-    { crew := none, history := theLogAfterOneOpen : Request }.toJson ≠ "") &&
-  decide (stationDailyReadFFI { crew := none, history := [] : Request }.toJson ≠
-    stationDailyReadFFI { crew := none, history := theLogAfterOneOpen : Request }.toJson)
-
-/-- ⭐ A log that is not one this crate could have produced is REFUSED, and the
-honest pole above shows the same wire shape does serve a document — so this is
-the replay guard firing rather than the transport failing.  `period 32` is not
-the period the crate is at, and a row is never silently re-dated.
-(Pinned `= true` in `StationDailyRuntimeFixtures`.) -/
-def check_a_log_row_from_another_period_is_refused : Bool :=
-  decide (stationDailyReadFFI
-    { crew := none,
-      history := [{ player := StationCrateOpen.crew41, period := 32 }] : Request }.toJson = "") &&
-  decide (stationDailyReadFFI
-    { crew := none,
-      history := [{ player := SalvageCrateExamples.digest 77,
-                    period := 31 }] : Request }.toJson = "")
-
 /-! ## Executable fixture and hostile paths -/
 
-def anonymousRequest : Request := { crew := none, history := [] }
-
-def officerRequest : Request := { crew := some SalvageCrateExamples.officer, history := [] }
-
-/-- (Pinned `= true` in `StationDailyRuntimeFixtures`.) -/
-def check_anonymous_request_round_trips : Bool :=
-  decide (decodeRequest anonymousRequest.toJson = some anonymousRequest)
-
-/-- (Pinned `= true` in `StationDailyRuntimeFixtures`.) -/
-def check_officer_request_round_trips : Bool :=
-  decide (decodeRequest officerRequest.toJson = some officerRequest)
-
-/-- The export really emits a document for both spellings; a refusal is `""`, so
-this cannot be satisfied by declining. (Pinned `= true` in `StationDailyRuntimeFixtures`.) -/
-def check_both_requests_are_served : Bool :=
-  decide (stationDailyReadFFI anonymousRequest.toJson ≠ "") &&
-  decide (stationDailyReadFFI officerRequest.toJson ≠ "")
-
-/-- The authored officer is on the curator's roster and their whole rotation is
-served: three authored periods, every one of them with a drawn row.
-(Pinned `= true` in `StationDailyRuntimeFixtures`.) -/
-def check_the_officer_is_eligible_and_draws_every_authored_period : Bool :=
-  (crewWireOf SalvageCrateExamples.officer).eligible &&
-  decide ((crewWireOf SalvageCrateExamples.officer).rotation.length =
-    stationCrate.raw.beacons.length) &&
-  (crewWireOf SalvageCrateExamples.officer).rotation.all
-    (fun period => period.entry.isSome)
-
 /-! ### Hostile wires, each refused -/
-
-/-- An extra field — the shape an attempt to smuggle a streak or an attendance
-count would take. (Pinned `= true` in `StationDailyRuntimeFixtures`.) -/
-def check_hostile_unknown_field_refuses : Bool :=
-  decide (stationDailyReadFFI
-    "{\"format\":\"POA-STATION-DAILY-1\",\"crew\":null,\"history\":[],\"streak\":3}" = "")
-
-/-- (Pinned `= true` in `StationDailyRuntimeFixtures`.) -/
-def check_hostile_transposed_keys_refuse : Bool :=
-  decide (stationDailyReadFFI
-    "{\"crew\":null,\"format\":\"POA-STATION-DAILY-1\",\"history\":[]}" = "")
-
-/-- (Pinned `= true` in `StationDailyRuntimeFixtures`.) -/
-def check_hostile_wrong_format_refuses : Bool :=
-  decide (stationDailyReadFFI
-    "{\"format\":\"POA-STATION-DAILY-OUT-1\",\"crew\":null,\"history\":[]}" = "")
-
-/-- `false` is not a spelling of "absent". (Pinned `= true` in `StationDailyRuntimeFixtures`.) -/
-def check_hostile_boolean_crew_refuses : Bool :=
-  decide (stationDailyReadFFI
-    "{\"format\":\"POA-STATION-DAILY-1\",\"crew\":false,\"history\":[]}" = "")
-
-/-- (Pinned `= true` in `StationDailyRuntimeFixtures`.) -/
-def check_hostile_short_digest_refuses : Bool :=
-  decide (stationDailyReadFFI
-    "{\"format\":\"POA-STATION-DAILY-1\",\"crew\":\"00\",\"history\":[]}" = "")
-
-/-- (Pinned `= true` in `StationDailyRuntimeFixtures`.) -/
-def check_hostile_trailing_byte_refuses : Bool :=
-  decide (stationDailyReadFFI
-    "{\"format\":\"POA-STATION-DAILY-1\",\"crew\":null,\"history\":[]} " = "")
-
-/-- ⚠ THE OLD REQUEST SHAPE REFUSES TO LOAD.  `{"format":…,"crew":null}` was the
-whole request until this module grew the log, and it is now a MISSING FIELD
-rather than a request with an implicitly empty history.  A wire that defaulted it
-would serve the installed ship to every caller of the old shape — which is
-precisely the silent zero this change exists to remove.
-(Pinned `= true` in `StationDailyRuntimeFixtures`.) -/
-def check_the_pre_history_request_shape_refuses : Bool :=
-  decide (stationDailyReadFFI "{\"format\":\"POA-STATION-DAILY-1\",\"crew\":null}" = "")
-
-/-- A log row carrying its own counter — the field the fold DERIVES — is not a
-row this wire has a spelling for. (Pinned `= true` in `StationDailyRuntimeFixtures`.) -/
-def check_hostile_row_with_a_counter_refuses : Bool :=
-  decide (stationDailyReadFFI
-    ("{\"format\":\"POA-STATION-DAILY-1\",\"crew\":null,\"history\":[{\"player\":\"" ++
-      Emit.bytes32Hex StationCrateOpen.crew41 ++
-      "\",\"period\":31,\"counter\":0}]}") = "")
 
 /-! ## The pins, split honestly
 

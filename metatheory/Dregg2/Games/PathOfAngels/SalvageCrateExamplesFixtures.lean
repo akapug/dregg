@@ -29,6 +29,22 @@ import Dregg2.Games.PathOfAngels.SalvageCrateExamples
 namespace Dregg2.Games.PathOfAngels.SalvageCrateExamples
 
 set_option autoImplicit false
+open Dregg2.Games.PathOfAngels
+open Dregg2.Games.PathOfAngels.SalvageCrate
+
+/-! ## The laboratory, moved out of the runtime module (#86)
+
+These definitions were compiled into the `Dregg2.FFI` closure, and Lean computes every compiled
+no-argument `def` when its module initializes: each `check_*` and fixture here ran on every node
+boot. They live beside the pins that evaluate them now; nothing linked into the node reaches them. -/
+
+/-- (Pinned `= true` in `SalvageCrateExamplesFixtures`.) -/
+def check_generated_rotation_has_every_authored_period : Bool :=
+  decide (officerRotation.map RotationEntry.period = [⟨31⟩, ⟨32⟩, ⟨35⟩])
+
+/-- (Pinned `= true` in `SalvageCrateExamplesFixtures`.) -/
+def check_generated_rotation_has_no_draw_exhaustion : Bool :=
+  officerRotation.all (fun day => day.entry.isSome)
 
 theorem generated_rotation_has_every_authored_period :
     check_generated_rotation_has_every_authored_period = true := by native_decide
