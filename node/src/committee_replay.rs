@@ -229,16 +229,11 @@ pub fn fold_membership_block(
 ///    severity measured rather than assumed.
 fn finalized_order(lace: &Blocklace, participants: &[[u8; 32]]) -> Vec<BlockId> {
     if participants.len() <= 1 {
-        let mut v: Vec<(u64, [u8; 32], BlockId)> = lace
-            .iter()
-            .filter_map(|(id, b)| match &b.payload {
-                Payload::Turn(_)
-                | Payload::TurnBundle(_)
-                | Payload::MembershipVote { .. }
-                | Payload::Checkpoint { .. } => Some((b.seq, b.creator, *id)),
-                _ => None,
-            })
-            .collect();
+        // Every payload, as the live solo arm of `poll_finalized_blocks` serves it (and as
+        // `tau` orders at n>1): only `MembershipVote` folds below, but the version stamp
+        // covers every served block.
+        let mut v: Vec<(u64, [u8; 32], BlockId)> =
+            lace.iter().map(|(id, b)| (b.seq, b.creator, *id)).collect();
         v.sort_unstable();
         v.into_iter().map(|(_, _, id)| id).collect()
     } else {
