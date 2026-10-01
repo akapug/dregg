@@ -602,6 +602,14 @@ impl FederationLiveness {
         //    that crosses the threshold; at threshold 1 that is the self-vote.
         //    A solo node whose finality loop runs therefore notes a quorum on
         //    every finalized block, and one whose loop has stopped does not.
+        //    (Heartbeats reach that loop at n=1 only since the solo arm of
+        //    `poll_finalized_blocks` stopped dropping `Ack` payloads; before,
+        //    an idle solo node read stalled one window after its last turn.)
+        //    A turn this node cannot finalize stops the loop's prefix (solo
+        //    orders by seq; a retryable failure re-polls the same prefix, a
+        //    fatal one ends the executor), so the heartbeats behind it are not
+        //    acknowledged and this leg fires — idle stays green, owed-and-stuck
+        //    goes red.
         //  * the exemption is exactly the blind spot of the live outage: the
         //    deployment was collapsed to ONE validator on 2026-08-05, and a
         //    threshold-1 node then reported `healthy: true` with
@@ -2461,7 +2469,7 @@ impl BlocklaceHandle {
         //     hazard) — nor run tau over a subset (the divergence hazard).
         //   * projection covers all admitted → run the verified multi-party tau order.
         let ordered = if admitted.len() <= 1 {
-            // Solo: the actionable blocks of an ENROLLED creator, ordered by sequence.
+            // Solo: every block of an ENROLLED creator, ordered by sequence.
             //
             // ⚑ THE ENROLLMENT FILTER, SOLO ARM — the sibling `c6f00c228` named and left open, now
             // closed. The multi-party arm below finalizes only ENROLLED creators (the verified
@@ -2525,17 +2533,21 @@ impl BlocklaceHandle {
             // two blocks at the same seq came out in ARBITRARY order. At n=1 that is an
             // equivocation, but the order fed to the executor must be a function of the lace, not
             // of hash iteration. Same tiebreak `committee_replay::finalized_order` already uses.
+            //
+            // ⚑ EVERY PAYLOAD, `Ack` heartbeats included — the same set the multi-party arm
+            // finalizes. `tau` orders every block in a final leader's causal past, and the mapping
+            // below turns `Ack`/`Data` into `FinalizedBlock::Inert`, which the executor acknowledges
+            // and VOTES on; so at n>1 an idle heartbeat crosses quorum like any other block. This arm
+            // used to keep only the actionable payloads (a filter from 2026-05-23, before finality
+            // votes existed), so at n=1 an idle node finalized NOTHING between turns: no self-vote,
+            // no `note_quorum`, and `/status` went `finality_stalled` / `healthy:false` one stall
+            // window after the last turn on a node that was fine (measured on the edge, 2026-09-30).
+            // The stall leg relies on heartbeats being finalized — that is how an idle node shows
+            // its finality pipeline still runs — and now they are, at every committee size.
             let mut all_blocks: Vec<(u64, [u8; 32], BlockId)> = lace
                 .iter()
                 .filter(|(_, block)| solo_enrolled.contains(&block.creator))
-                .filter_map(|(id, block)| match &block.payload {
-                    Payload::Turn(_)
-                    | Payload::TurnBundle(_)
-                    | Payload::ConsensusTimedTurnV1(_)
-                    | Payload::MembershipVote { .. }
-                    | Payload::Checkpoint { .. } => Some((block.seq, block.creator, *id)),
-                    _ => None,
-                })
+                .map(|(id, block)| (block.seq, block.creator, *id))
                 .collect();
             all_blocks.sort_unstable();
             all_blocks
@@ -17927,14 +17939,234 @@ mod tests {
         {
             let mut lace = handle.lace.write().await;
             lace.add_block(Payload::Turn(vec![9, 9, 9]));
+            lace.add_block(Payload::Ack);
         }
 
         let finalized = handle.poll_finalized_blocks(&state).await;
-        assert_eq!(
-            finalized.len(),
-            1,
+        assert!(
+            matches!(finalized.first(), Some(FinalizedBlock::Turn { .. })),
             "a genuine solo node (admitted == 1) must still finalize its actionable Turn — \
              the fail-closed fix must not halt real solo finality"
+        );
+        assert!(
+            matches!(finalized.get(1), Some(FinalizedBlock::Inert { .. })) && finalized.len() == 2,
+            "and its idle heartbeat (`Ack`) is finalized too, as `Inert`, exactly as the \
+             multi-party arm serves it — that is what the executor votes on while idle, and the \
+             stall leg reads those votes. Finalized {} block(s).",
+            finalized.len()
+        );
+    }
+
+    // ─── IDLE SOLO HEALTH (B5b): heartbeats reach finality; an owed turn that cannot does not ────
+
+    /// A solo node exactly as `run_blocklace_sync` builds it, for the stall-leg tests: the lace
+    /// signer IS the constitutional participant, the vote collector knows this node's OWN ML-DSA
+    /// key (production inserts it: `pq_committee.insert(self_key, pq_public_key)`) so the self-vote
+    /// counts toward the threshold-1 quorum, and the liveness tracker runs a SHORT stall window so
+    /// "idle for longer than the window" is seconds, not six minutes. The real finality executor is
+    /// spawned over the handle — the loop whose self-votes are the only thing that moves the clock.
+    async fn solo_node_with_finality_executor(
+        seed: u8,
+        stall_window: Duration,
+    ) -> (BlocklaceHandle, crate::state::NodeState, tempfile::TempDir) {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let sk = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]);
+        let pk = sk.verifying_key().to_bytes();
+        let mut handle = test_handle_for_signer(sk, vec![pk]).await;
+        handle.liveness = Arc::new(FederationLiveness::with_stall_window(stall_window));
+        {
+            let mut pq = HashMap::new();
+            pq.insert(pk, handle.pq_public_key.clone());
+            handle.votes.write().await.set_committee(vec![pk], pq);
+        }
+        assert_eq!(
+            handle.votes.read().await.quorum_threshold(),
+            1,
+            "fixture: a solo committee has threshold 1"
+        );
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = crate::state::NodeState::new(tmp.path(), Vec::new()).expect("node state");
+        spawn_finality_executor(state.clone(), handle.clone());
+        (handle, state, tmp)
+    }
+
+    fn last_quorum_instant(handle: &BlocklaceHandle) -> Option<std::time::Instant> {
+        *handle
+            .liveness
+            .last_quorum
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Wait (foreground, bounded) until the liveness tracker notes a quorum later than `after`.
+    /// The bound is generous because the first vote pays Lean/ML-DSA initialisation in a debug
+    /// test process; a later quorum lands within one 150 ms executor debounce.
+    async fn await_quorum_after(
+        handle: &BlocklaceHandle,
+        after: Option<std::time::Instant>,
+    ) -> Option<std::time::Instant> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(600);
+        while std::time::Instant::now() < deadline {
+            let now_last = last_quorum_instant(handle);
+            if now_last.is_some() && now_last != after {
+                return now_last;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        None
+    }
+
+    /// ⚑ THE LIVE EDGE SHAPE (2026-09-30): an idle solo node whose heartbeats keep arriving must
+    /// stay healthy. On the redeployed edge node `seconds_since_quorum` climbed 121 → 632 while
+    /// heartbeats advanced `dag_height` 33 → 37, and at 361 s `/status` read
+    /// `finality_stalled: true, healthy: false` until the next turn. The cause: the solo arm of
+    /// `poll_finalized_blocks` dropped `Ack` payloads, so a heartbeat was never finalized, never
+    /// voted on, and never reached `note_quorum`.
+    ///
+    /// Shape: a turn finalizes (the clock starts), the node then sits idle past the stall window
+    /// (stalled — asserted, so the recovery below is not vacuous), then ONE idle heartbeat is
+    /// produced through the production `submit_heartbeat`. It must be finalized and voted on by
+    /// the real executor, reset the clock, and clear `finality_stalled`.
+    #[tokio::test]
+    async fn an_idle_solo_nodes_heartbeat_reaches_finality_and_clears_the_stall() {
+        let window = Duration::from_secs(2);
+        let (handle, state, _tmp) = solo_node_with_finality_executor(0x5B, window).await;
+
+        // The last turn before going idle. Undecodable on purpose: it finalizes as a
+        // deterministic rejection, which is still a finalized block the executor votes on.
+        {
+            let mut lace = handle.lace.write().await;
+            lace.add_block(Payload::Turn(vec![9, 9, 9]));
+        }
+        handle.finality_notify.notify_one();
+        let after_turn = await_quorum_after(&handle, None).await;
+        assert!(
+            after_turn.is_some(),
+            "fixture: the solo node's finalized turn must cross its threshold-1 quorum on the \
+             self-vote — otherwise neither pole below measures anything"
+        );
+
+        // Idle past the window: nothing produced, nothing finalized. Stalled is the honest read.
+        tokio::time::sleep(window + Duration::from_millis(500)).await;
+        let idle = handle.federation_liveness().await;
+        assert!(
+            idle.finality_stalled,
+            "precondition: {} s without a finalized block on a {} s window must read stalled — \
+             else the heartbeat below clears nothing",
+            idle.seconds_since_quorum, idle.finality_stall_window_secs
+        );
+
+        // One idle heartbeat, through the production path.
+        let hb = handle
+            .submit_heartbeat(&state)
+            .await
+            .expect("heartbeat block authored");
+        let after_heartbeat = await_quorum_after(&handle, after_turn).await;
+        let snap = handle.federation_liveness().await;
+        assert!(
+            after_heartbeat.is_some() && !snap.finality_stalled,
+            "an idle solo node's heartbeat must reach finality and reset the stall clock — \
+             heartbeat {hb} was produced, but seconds_since_quorum = {} on a {} s window \
+             (finality_stalled = {}). This is the edge going `healthy:false` after every idle \
+             stretch longer than the window.",
+            snap.seconds_since_quorum,
+            snap.finality_stall_window_secs,
+            snap.finality_stalled
+        );
+        assert!(
+            handle.cursor.read().await.is_executed(&hb),
+            "the heartbeat must be in the executed set: it was FINALIZED, not merely produced"
+        );
+    }
+
+    /// ⚑ THE OTHER POLE — what the fix must not buy with the first one. A solo node that OWES a
+    /// turn it cannot finalize must go stalled even though its heartbeats keep coming. The solo arm
+    /// orders by seq, so the heartbeats behind the stuck turn wait on it: none of them is
+    /// acknowledged, none is voted on, and the clock runs out.
+    ///
+    /// The stuck turn is made real, not simulated: a CONFLICTING deterministic-rejection row is
+    /// written under its block id before it finalizes, so the executor hits
+    /// `refusing to overwrite a conflicting finalized-payload rejection record` →
+    /// `FatalIntegrity` and stops (the production disposition). Anti-vacuity: the same node is
+    /// first shown able to note a quorum on a heartbeat, and the mutation is asserted present and
+    /// the turn asserted un-executed before the verdict is read.
+    #[tokio::test]
+    async fn a_solo_node_owing_a_turn_it_cannot_finalize_is_stalled_despite_heartbeats() {
+        let window = Duration::from_secs(2);
+        let (handle, state, _tmp) = solo_node_with_finality_executor(0x5C, window).await;
+
+        // The pipeline works on this node: a heartbeat crosses quorum.
+        handle
+            .submit_heartbeat(&state)
+            .await
+            .expect("first heartbeat authored");
+        let healthy_at = await_quorum_after(&handle, None).await;
+        assert!(
+            healthy_at.is_some(),
+            "anti-vacuity: this node's finality pipeline must be shown to note a quorum on a \
+             heartbeat before its failure to do so below means anything"
+        );
+
+        // The owed turn, with a conflicting durable row already under its id.
+        let turn_payload = vec![7u8, 7, 7];
+        let turn_id = {
+            let mut lace = handle.lace.write().await;
+            lace.add_block(Payload::Turn(turn_payload.clone())).id()
+        };
+        let key =
+            crate::signed_turn_validation::FinalizedPayloadRejectionRecord::storage_key(&turn_id.0);
+        state
+            .read()
+            .await
+            .store
+            .set_config(&key, b"a conflicting verdict for this immutable block id")
+            .expect("seed conflicting rejection row");
+        handle.finality_notify.notify_one();
+
+        // Heartbeats keep arriving for well past the window.
+        let mut heartbeats = Vec::new();
+        let until = std::time::Instant::now() + window + Duration::from_millis(1500);
+        while std::time::Instant::now() < until {
+            heartbeats.push(
+                handle
+                    .submit_heartbeat(&state)
+                    .await
+                    .expect("heartbeat authored"),
+            );
+            tokio::time::sleep(Duration::from_millis(400)).await;
+        }
+
+        assert_eq!(
+            state
+                .read()
+                .await
+                .store
+                .get_config(&key)
+                .expect("read row")
+                .as_deref(),
+            Some(&b"a conflicting verdict for this immutable block id"[..]),
+            "mutation: the conflicting row must still be the one under the turn's id"
+        );
+        let cursor = handle.cursor.read().await;
+        assert!(
+            !cursor.is_executed(&turn_id),
+            "the turn must still be OWED (un-executed) when the verdict is read"
+        );
+        assert!(
+            heartbeats.iter().all(|hb| !cursor.is_executed(hb)),
+            "no heartbeat behind the stuck turn may be acknowledged — finality is held at the turn"
+        );
+        drop(cursor);
+        let snap = handle.federation_liveness().await;
+        assert!(
+            snap.finality_stalled,
+            "a solo node that cannot finalize an owed turn must read stalled however many \
+             heartbeats it produces — {} heartbeats over {} s, seconds_since_quorum = {} on a \
+             {} s window",
+            heartbeats.len(),
+            (window + Duration::from_millis(1500)).as_secs_f32(),
+            snap.seconds_since_quorum,
+            snap.finality_stall_window_secs
         );
     }
 
