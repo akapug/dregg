@@ -21,8 +21,8 @@ const CANON_FILE: &str = include_str!("fixtures/poa-network-genesis-canon-v1.jso
 // from `1` to `1 * MISSION_RELIC_BLOCK + 0 = 16`. The four frozen fixtures beside this file were
 // re-frozen from Lean in the same pass and differ from their predecessors in exactly those two
 // arrays. `CANON_SHA256` did NOT move: the genesis Canon carries an empty world.
-const CONFIG_SHA256: &str = "522cb2c079ec217acc778011c1a7d89a4e5ec2a2f4ea305846c6d20eaadeefd1";
-const CANON_SHA256: &str = "f770d6bd6fd3fe09ec7c2fe882b74aa655c4ce6687f1a01e02e4faa468ba6181";
+const CONFIG_SHA256: &str = "cd76188f330310a1c9e3eb94e8c83526b458e4fe692ab8eb6fdcb115941ca18a";
+const CANON_SHA256: &str = "9b2a9e91caffeef4d68d7a6e7d22cf829ae9f9f75d1157bac7198102881d90f1";
 
 fn fixture(bytes: &'static str) -> &'static str {
     bytes

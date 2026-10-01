@@ -305,9 +305,18 @@ mod tests {
         SigningKey::from_bytes(&[seed; 32])
     }
 
-    /// Build a 3-round, fully cross-linked lace over `creators` — each round's blocks reference ALL of
-    /// the previous round, the shape of the Lean `trace3`. Every block carries a Turn payload
-    /// (actionable), matching what the live producer emits.
+    /// Two full waves at wavelength 3 — the shortest fully cross-linked lace whose order covers wave 0.
+    ///
+    /// Under Cordial Miners Def. 6 (`d182d10fc`) an anchor orders ITS OWN closure. The wave-0 anchor
+    /// is a seq-0 block with no predecessors, so a three-round lace finalizes exactly that one block
+    /// (Lean `trace3`); the rest of wave 0 is ordered one wave later by the wave-1 anchor
+    /// `wave_leader(1)` at seq 3, once seq 5 super-ratifies it (Lean `trace6`, golden
+    /// `[10, 20, 30, 11, 21, 31, 12, 22, 32, 23]`).
+    const TWO_WAVES: u64 = 6;
+
+    /// Build a `rounds`-round, fully cross-linked lace over `creators` — each round's blocks reference
+    /// ALL of the previous round, the shape of the Lean `trace3`/`trace6`. Every block carries a Turn
+    /// payload (actionable), matching what the live producer emits.
     ///
     /// `receive_block` (ed25519-only) is deliberate: it does NOT filter by enrollment, so a caller can
     /// put a non-participant's blocks into the lace and let the FINALITY GATE be the thing under test.
@@ -315,10 +324,10 @@ mod tests {
     /// falsifier's HONEST SCOPE below for the two production paths that reach the same lace state
     /// (roster rotation-out, and the roster-blind `from_checkpoint` restore on restart) without
     /// that check applying.
-    fn cross_linked_lace(creators: &[SigningKey]) -> Blocklace {
-        let mut lace = Blocklace::new(creators[0].clone(), 3);
+    fn cross_linked_lace(creators: &[SigningKey], rounds: u64, quorum: usize) -> Blocklace {
+        let mut lace = Blocklace::new(creators[0].clone(), quorum);
         let mut round_prev: Vec<BlockId> = Vec::new();
-        for round in 0u64..=2 {
+        for round in 0u64..rounds {
             let mut this_round = Vec::new();
             for (i, k) in creators.iter().enumerate() {
                 let b = Block::new(
@@ -333,6 +342,45 @@ mod tests {
             round_prev = this_round;
         }
         lace
+    }
+
+    /// The Rust `dregg_blocklace::ordering::tau` order over `lace`, as `(creator, seq)` in order.
+    /// The node lace is re-inserted into an ordering lace seq-major, so every predecessor is present.
+    fn rust_tau_order(lace: &Blocklace, participants: &[[u8; 32]]) -> Vec<([u8; 32], u64)> {
+        let mut ordering_lace = dregg_blocklace::Blocklace::new();
+        let mut fin_to_ord: HashMap<BlockId, dregg_blocklace::BlockId> = HashMap::new();
+        let mut blocks: Vec<_> = lace.iter().collect();
+        blocks.sort_by(|(_, a), (_, b)| a.seq.cmp(&b.seq).then_with(|| a.creator.cmp(&b.creator)));
+        let mut ord_to_cs: HashMap<dregg_blocklace::BlockId, ([u8; 32], u64)> = HashMap::new();
+        for (fin_id, b) in &blocks {
+            let preds: Vec<dregg_blocklace::BlockId> = b
+                .predecessors
+                .iter()
+                .map(|p| *fin_to_ord.get(p).expect("seq-major insert holds every predecessor"))
+                .collect();
+            let ob = dregg_blocklace::Block::new(b.creator, b.seq, preds, vec![]);
+            let oid = ob.id();
+            ordering_lace
+                .insert_unverified(ob)
+                .expect("ordering-lace insert");
+            fin_to_ord.insert(**fin_id, oid);
+            ord_to_cs.insert(oid, (b.creator, b.seq));
+        }
+        dregg_blocklace::ordering::tau(&ordering_lace, participants)
+            .iter()
+            .map(|oid| ord_to_cs[oid])
+            .collect()
+    }
+
+    /// What a fully cross-linked TWO_WAVES lace over `participants` must finalize: every block of
+    /// wave 0 (seqs 0..3) and the wave-1 anchor that orders them — `trace6`'s golden set.
+    fn two_wave_finalized(participants: &[[u8; 32]]) -> std::collections::HashSet<([u8; 32], u64)> {
+        let mut set: std::collections::HashSet<([u8; 32], u64)> = participants
+            .iter()
+            .flat_map(|p| (0u64..3).map(move |s| (*p, s)))
+            .collect();
+        set.insert((dregg_blocklace::ordering::wave_leader(1, participants), 3));
+        set
     }
 
     /// **THE TOOTH — a REAL lace, a REAL attacker block, and the VERIFIED rule refuses it.**
@@ -405,7 +453,7 @@ mod tests {
             honest_keys[2].clone(),
             attacker.clone(),
         ];
-        let lace = cross_linked_lace(&all_creators);
+        let lace = cross_linked_lace(&all_creators, TWO_WAVES, 3);
         let attacker_seqs: Vec<u64> = lace
             .iter()
             .filter(|(_, b)| b.creator == attacker_hybrid)
@@ -413,7 +461,7 @@ mod tests {
             .collect();
         assert_eq!(
             attacker_seqs.len(),
-            3,
+            TWO_WAVES as usize,
             "the attacker must actually be in the lace at every round — else there is nothing to refuse"
         );
 
@@ -440,6 +488,39 @@ mod tests {
             "no ENROLLED participant's block was admitted — the gate is refusing everyone, so its \
              refusal of the attacker carries no information about identity"
         );
+        // ── LOAD-BEARING. The attacker's wave-0 blocks lie inside the closure of a block the gate
+        //    FINALIZED: the wave-1 anchor references the attacker's seq-2 block. So the anchor's
+        //    order covers them, and only the identity filter can keep them out. On a three-round
+        //    lace the only finalized block is the predecessor-free wave-0 anchor, and the refusal
+        //    below held for every creator, enrolled or not — it said nothing about identity.
+        let anchor_creator = dregg_blocklace::ordering::wave_leader(1, &participants);
+        assert!(
+            vf.admits(&anchor_creator, 3),
+            "the wave-1 anchor must be finalized — it is what orders the attacker's wave-0 blocks"
+        );
+        let attacker_seq2 = lace
+            .iter()
+            .find(|(_, b)| b.creator == attacker_hybrid && b.seq == 2)
+            .map(|(id, _)| *id)
+            .expect("the attacker has a seq-2 block");
+        let anchor = lace
+            .iter()
+            .find(|(_, b)| b.creator == anchor_creator && b.seq == 3)
+            .map(|(_, b)| b)
+            .expect("the wave-1 anchor is in the lace");
+        assert!(
+            anchor.predecessors.contains(&attacker_seq2),
+            "the finalized wave-1 anchor must reference the attacker's seq-2 block — else the \
+             attacker's blocks are outside every finalized closure and their refusal is free"
+        );
+        for seq in 0u64..3 {
+            for p in &participants {
+                assert!(
+                    vf.admits(p, seq),
+                    "honest wave-0 block (seq {seq}) beside the attacker's must be finalized"
+                );
+            }
+        }
 
         // ── THE REFUSAL. The attacker IS interned (build_wire's next_extra gives it an AuthorId and
         //    puts its blocks on the wire), so this is the verified rule declining to finalize an
@@ -496,7 +577,7 @@ mod tests {
             "substituting the ML-DSA half must change the hybrid id (the commitment binds both halves)"
         );
 
-        let lace = cross_linked_lace(&keys);
+        let lace = cross_linked_lace(&keys, TWO_WAVES, 3);
         let vf = VerifiedFinality::compute(&lace, &participants)
             .expect("verified gate ran (archive present + wire non-ERR)");
 
@@ -525,8 +606,9 @@ mod tests {
 
     /// THE LIVE-GATE DIFFERENTIAL — `VerifiedFinality::compute` (the verified Lean rule
     /// `BlocklaceFinality.tauOrder` via the `dregg_blocklace_finalize` FFI export) AGREES with the
-    /// Rust `dregg_blocklace::ordering::tau` on a real 3-node / 3-round lace, at the `(creator, seq)`
-    /// coordinate. This is the runtime face of the consensus-pillar differential
+    /// Rust `dregg_blocklace::ordering::tau` on a real 3-node lace, at the `(creator, seq)`
+    /// coordinate — at three rounds (`trace3`: the wave-0 anchor alone) and at six (`trace6`: the
+    /// nine wave-0 blocks plus the wave-1 anchor that orders them). This is the runtime face of the consensus-pillar differential
     /// (`blocklace::ordering::tests::test_tau_differential_against_lean_model`): the SAME verified
     /// rule that gates `poll_finalized_blocks` reproduces the order the Rust `tau` finalizes — so
     /// gating the live commit on it is transparent for honest traces and only bites on divergence.
@@ -543,62 +625,33 @@ mod tests {
             return;
         }
 
-        // Three nodes, three fully-connected rounds (the shape of the Lean `trace3`). Each node's
-        // round-(r+1) block references all of round r; payloads are Turns (actionable).
         let keys = [key(1), key(2), key(3)];
         let participants: Vec<[u8; 32]> = keys.iter().map(Block::hybrid_id).collect();
+        let cid = |c: &[u8; 32]| participants.iter().position(|p| p == c).unwrap() as u64;
 
-        let mut lace = Blocklace::new(keys[0].clone(), 3);
-
-        let mut r1_ids = Vec::new();
-        for (i, k) in keys.iter().enumerate() {
-            let b = Block::new(k, 0, Payload::Turn(vec![i as u8]), vec![]);
-            r1_ids.push(b.id());
-            lace.receive_block(b).expect("genesis insert");
-        }
-        let mut round_prev: Vec<BlockId> = r1_ids;
-        for round in 1u64..=2 {
-            let mut this_round = Vec::new();
-            for (i, k) in keys.iter().enumerate() {
-                let b = Block::new(
-                    k,
-                    round,
-                    Payload::Turn(vec![(round * 10) as u8 + i as u8]),
-                    round_prev.clone(),
-                );
-                this_round.push(b.id());
-                lace.receive_block(b).expect("round insert");
-            }
-            round_prev = this_round;
-        }
-
-        // RUST tau over the same lace, projected to (creator_id, seq).
-        let mut ordering_lace = dregg_blocklace::Blocklace::new();
-        let mut fin_to_ord: HashMap<BlockId, dregg_blocklace::BlockId> = HashMap::new();
-        let mut blocks: Vec<_> = lace.iter().collect();
-        blocks.sort_by(|(_, a), (_, b)| a.seq.cmp(&b.seq).then_with(|| a.creator.cmp(&b.creator)));
-        let mut ord_to_cs: HashMap<dregg_blocklace::BlockId, ([u8; 32], u64)> = HashMap::new();
-        for (fin_id, b) in &blocks {
-            let preds: Vec<dregg_blocklace::BlockId> = b
-                .predecessors
-                .iter()
-                .filter_map(|p| fin_to_ord.get(p).copied())
-                .collect();
-            let ob = dregg_blocklace::Block::new(b.creator, b.seq, preds, vec![]);
-            let oid = ob.id();
-            ordering_lace.insert_unverified(ob).ok();
-            fin_to_ord.insert(**fin_id, oid);
-            ord_to_cs.insert(oid, (b.creator, b.seq));
-        }
-        let rust_order = dregg_blocklace::ordering::tau(&ordering_lace, &participants);
-        let rust_finalized: std::collections::HashSet<(u64, u64)> = rust_order
+        // THREE ROUNDS — `trace3`. Wave 0's anchor super-ratifies but orders only its own closure,
+        // which is itself. A rule that orders the RATIFIERS' pasts (pre-`d182d10fc`) gives nine here.
+        let short = cross_linked_lace(&keys, 3, 3);
+        let short_vf = VerifiedFinality::compute(&short, &participants)
+            .expect("verified gate ran (archive present + wire non-ERR)");
+        let short_rust: std::collections::HashSet<(u64, u64)> = rust_tau_order(&short, &participants)
             .iter()
-            .filter_map(|oid| ord_to_cs.get(oid))
-            .map(|(creator, seq)| {
-                let cid = participants.iter().position(|p| p == creator).unwrap() as u64;
-                (cid, *seq)
-            })
+            .map(|(c, s)| (cid(c), *s))
             .collect();
+        assert_eq!(short_vf.finalized, short_rust, "trace3: verified gate must agree with Rust tau");
+        assert_eq!(
+            short_vf.finalized,
+            [(0u64, 0u64)].into_iter().collect(),
+            "trace3: a three-round lace finalizes exactly the wave-0 anchor (CM Def. 6)"
+        );
+
+        // SIX ROUNDS — `trace6`.
+        let lace = cross_linked_lace(&keys, TWO_WAVES, 3);
+        let rust_finalized: std::collections::HashSet<(u64, u64)> =
+            rust_tau_order(&lace, &participants)
+                .iter()
+                .map(|(c, s)| (cid(c), *s))
+                .collect();
 
         // VERIFIED gate over the same lace, via the real node gate type.
         let vf = VerifiedFinality::compute(&lace, &participants)
@@ -609,10 +662,19 @@ mod tests {
             verified, rust_finalized,
             "verified finality gate must agree with Rust tau on the (creator, seq) finalized set"
         );
+        let wave0: std::collections::HashSet<(u64, u64)> =
+            (0u64..3).flat_map(|c| (0u64..3).map(move |s| (c, s))).collect();
+        assert!(
+            wave0.is_subset(&verified),
+            "3-node lace finalizes all nine wave-0 (creator, seq) blocks; got {verified:?}"
+        );
+        let golden: std::collections::HashSet<(u64, u64)> = two_wave_finalized(&participants)
+            .iter()
+            .map(|(c, s)| (cid(c), *s))
+            .collect();
         assert_eq!(
-            verified.len(),
-            9,
-            "3-node lace finalizes all nine (creator, seq) blocks"
+            verified, golden,
+            "trace6: the nine wave-0 blocks plus the wave-1 anchor, and nothing else"
         );
 
         // The gate ADMITS each finalized block by its (pubkey, seq), exactly as
@@ -629,7 +691,8 @@ mod tests {
     /// THE RAW-ORDER GATE DIFFERENTIAL — `VerifiedFinality::compute_order` (the verified Lean
     /// `BlocklaceFinality.tauOrder` via the NEW `dregg_tau_order` export, proved order-faithfully
     /// equal to `tauOrder` by `tau_order_export_eq`) returns the FULL finalized TOTAL ORDER as node
-    /// `BlockId`s. On the 3-node lace this is the nine-block order whose `(creator, seq)` projection
+    /// `BlockId`s. On the 3-node `trace6` lace this is the ten-block order (the nine wave-0 blocks,
+    /// seq-major, then the wave-1 anchor that orders them) whose `(creator, seq)` projection
     /// is exactly the projection gate's finalized SET — so the raw-order export and the projection
     /// export agree, and the order is a permutation-free superset relationship: every block the
     /// projection finalizes appears in the raw order, IN the verified sequence.
@@ -647,37 +710,33 @@ mod tests {
 
         let keys = [key(1), key(2), key(3)];
         let participants: Vec<[u8; 32]> = keys.iter().map(Block::hybrid_id).collect();
-        let mut lace = Blocklace::new(keys[0].clone(), 3);
-
-        let mut r1_ids = Vec::new();
-        for (i, k) in keys.iter().enumerate() {
-            let b = Block::new(k, 0, Payload::Turn(vec![i as u8]), vec![]);
-            r1_ids.push(b.id());
-            lace.receive_block(b).expect("genesis insert");
-        }
-        let mut round_prev: Vec<BlockId> = r1_ids;
-        for round in 1u64..=2 {
-            let mut this_round = Vec::new();
-            for (i, k) in keys.iter().enumerate() {
-                let b = Block::new(
-                    k,
-                    round,
-                    Payload::Turn(vec![(round * 10) as u8 + i as u8]),
-                    round_prev.clone(),
-                );
-                this_round.push(b.id());
-                lace.receive_block(b).expect("round insert");
-            }
-            round_prev = this_round;
-        }
+        let lace = cross_linked_lace(&keys, TWO_WAVES, 3);
 
         // The verified RAW total order (node BlockIds), via the new export.
         let order = VerifiedFinality::compute_order(&lace, &participants)
             .expect("raw-order gate ran (archive present + wire non-ERR)");
+        let order_blocks: Vec<&Block> = order
+            .iter()
+            .map(|id| lace.get(id).expect("ordered id is present"))
+            .collect();
+        // `trace6`'s golden shape: seq-major over wave 0, then the wave-1 anchor.
         assert_eq!(
-            order.len(),
-            9,
-            "3-node lace finalizes a nine-block total order"
+            order_blocks.iter().map(|b| b.seq).collect::<Vec<_>>(),
+            vec![0, 0, 0, 1, 1, 1, 2, 2, 2, 3],
+            "3-node lace finalizes the nine wave-0 blocks seq-major, then the wave-1 anchor"
+        );
+        assert_eq!(
+            order_blocks[9].creator,
+            dregg_blocklace::ordering::wave_leader(1, &participants),
+            "the order ends with the wave-1 anchor that orders wave 0"
+        );
+        assert_eq!(
+            order_blocks
+                .iter()
+                .map(|b| (b.creator, b.seq))
+                .collect::<std::collections::HashSet<_>>(),
+            two_wave_finalized(&participants),
+            "the raw order covers exactly trace6's golden set"
         );
 
         // Its (creator, seq) projection must EQUAL the projection gate's finalized set — the two
@@ -719,8 +778,11 @@ mod tests {
     ///
     /// A finalized turn block = the consensus precondition `execute_finalized_turn` fires on (height
     /// 0 -> 1). The DAG is wavelength-3, rounds 1..3 = wave 0; the wave-0 leader is `participants[0]`
-    /// at round 1, super-ratified once a supermajority (4 of 5) of round-3 blocks ratify it. Every
-    /// block carries a `Turn` payload, so a non-empty finalized order == "a turn super-ratified".
+    /// at round 1, super-ratified once a supermajority (4 of 5) of round-3 blocks ratify it. Under
+    /// CM Def. 6 that anchor orders only its own closure (itself), so the rest of wave 0 — the full
+    /// coverage this test pins — is ordered by the wave-1 anchor `participants[1]` at round 4, which
+    /// needs the second wave (rounds 4..6). Every block carries a `Turn` payload, so a non-empty
+    /// finalized order == "a turn super-ratified".
     ///
     /// EXPECTED (and the finding to report): the two finalizers run the SAME rule (the Lean port is
     /// proved order-faithful to the Rust `tau`), so on a CLEAN round-synchronous DAG BOTH super-ratify
@@ -742,8 +804,7 @@ mod tests {
         }
 
         // n=5, threshold 4 (== supermajority_threshold(5)). The C3 shape: a fully cross-linked,
-        // round-synchronous DAG. Three rounds = wave 0 (wavelength 3), the minimal shape that can
-        // super-ratify a wave-0 leader. Every block carries a Turn payload.
+        // round-synchronous DAG, two waves (wavelength 3). Every block carries a Turn payload.
         let keys: Vec<SigningKey> = (1u8..=5).map(key).collect();
         let participants: Vec<[u8; 32]> = keys.iter().map(Block::hybrid_id).collect();
         assert_eq!(
@@ -751,53 +812,11 @@ mod tests {
             4,
             "n=5 supermajority threshold is 4 (the C3 quorum)"
         );
-        let mut lace = Blocklace::new(keys[0].clone(), 4);
-
-        let mut r1_ids = Vec::new();
-        for (i, k) in keys.iter().enumerate() {
-            let b = Block::new(k, 0, Payload::Turn(vec![i as u8]), vec![]);
-            r1_ids.push(b.id());
-            lace.receive_block(b).expect("genesis insert");
-        }
-        let mut round_prev: Vec<BlockId> = r1_ids;
-        for round in 1u64..=2 {
-            let mut this_round = Vec::new();
-            for (i, k) in keys.iter().enumerate() {
-                let b = Block::new(
-                    k,
-                    round,
-                    Payload::Turn(vec![(round * 10) as u8 + i as u8]),
-                    round_prev.clone(),
-                );
-                this_round.push(b.id());
-                lace.receive_block(b).expect("round insert");
-            }
-            round_prev = this_round;
-        }
+        let lace = cross_linked_lace(&keys, TWO_WAVES, 4);
 
         // ── gate-OFF: the Rust `ordering::tau` over the same lace, projected to (creator, seq). ──
-        let mut ordering_lace = dregg_blocklace::Blocklace::new();
-        let mut fin_to_ord: HashMap<BlockId, dregg_blocklace::BlockId> = HashMap::new();
-        let mut blocks: Vec<_> = lace.iter().collect();
-        blocks.sort_by(|(_, a), (_, b)| a.seq.cmp(&b.seq).then_with(|| a.creator.cmp(&b.creator)));
-        let mut ord_to_cs: HashMap<dregg_blocklace::BlockId, ([u8; 32], u64)> = HashMap::new();
-        for (fin_id, b) in &blocks {
-            let preds: Vec<dregg_blocklace::BlockId> = b
-                .predecessors
-                .iter()
-                .filter_map(|p| fin_to_ord.get(p).copied())
-                .collect();
-            let ob = dregg_blocklace::Block::new(b.creator, b.seq, preds, vec![]);
-            let oid = ob.id();
-            ordering_lace.insert_unverified(ob).ok();
-            fin_to_ord.insert(**fin_id, oid);
-            ord_to_cs.insert(oid, (b.creator, b.seq));
-        }
-        let rust_order = dregg_blocklace::ordering::tau(&ordering_lace, &participants);
-        let gate_off_cs: std::collections::HashSet<([u8; 32], u64)> = rust_order
-            .iter()
-            .filter_map(|oid| ord_to_cs.get(oid).copied())
-            .collect();
+        let gate_off_cs: std::collections::HashSet<([u8; 32], u64)> =
+            rust_tau_order(&lace, &participants).into_iter().collect();
 
         // ── gate-ON: the REAL node path — verified Lean `tauOrderFast` via the FFI export. ──
         let gate_on_order = VerifiedFinality::compute_order(&lace, &participants)
@@ -841,10 +860,15 @@ mod tests {
                 .any(|(c, s)| *c == participants[0] && *s == 0),
             "the super-ratified wave-0 leader's genesis turn must be finalized under gate-ON"
         );
+        let golden = two_wave_finalized(&participants);
         assert_eq!(
-            gate_on_cs.len(),
+            gate_on_cs.iter().filter(|(_, s)| *s < 3).count(),
             15,
-            "the n=5 / 3-round clean DAG finalizes all 15 turn-blocks (wave-0 coverage)"
+            "the n=5 clean DAG finalizes all 15 wave-0 turn-blocks (wave-0 coverage)"
+        );
+        assert_eq!(
+            gate_on_cs, golden,
+            "the n=5 / two-wave clean DAG finalizes the 15 wave-0 turn-blocks plus the wave-1 anchor"
         );
     }
 
@@ -874,29 +898,7 @@ mod tests {
         // round (the dense cross-linking that explodes an un-memoized causal-past traversal).
         let keys: Vec<SigningKey> = (1u8..=5).map(key).collect();
         let participants: Vec<[u8; 32]> = keys.iter().map(Block::hybrid_id).collect();
-        let mut lace = Blocklace::new(keys[0].clone(), 3);
-
-        let mut r1_ids = Vec::new();
-        for (i, k) in keys.iter().enumerate() {
-            let b = Block::new(k, 0, Payload::Turn(vec![i as u8]), vec![]);
-            r1_ids.push(b.id());
-            lace.receive_block(b).expect("genesis insert");
-        }
-        let mut round_prev: Vec<BlockId> = r1_ids;
-        for round in 1u64..=5 {
-            let mut this_round = Vec::new();
-            for (i, k) in keys.iter().enumerate() {
-                let b = Block::new(
-                    k,
-                    round,
-                    Payload::Turn(vec![(round * 10) as u8 + i as u8]),
-                    round_prev.clone(),
-                );
-                this_round.push(b.id());
-                lace.receive_block(b).expect("round insert");
-            }
-            round_prev = this_round;
-        }
+        let lace = cross_linked_lace(&keys, TWO_WAVES, 3);
 
         // Run the VERIFIED Lean tau-order (the live `dregg_tau_order` FFI = `tauOrderFast`), timed.
         let t0 = std::time::Instant::now();
@@ -921,28 +923,8 @@ mod tests {
 
         // DIFFERENTIAL: the verified Lean order AGREES with the memoized Rust `ordering::tau` on the
         // (creator, seq) set — the same path the live node cross-checks.
-        let mut ordering_lace = dregg_blocklace::Blocklace::new();
-        let mut fin_to_ord: HashMap<BlockId, dregg_blocklace::BlockId> = HashMap::new();
-        let mut blocks: Vec<_> = lace.iter().collect();
-        blocks.sort_by(|(_, a), (_, b)| a.seq.cmp(&b.seq).then_with(|| a.creator.cmp(&b.creator)));
-        let mut ord_to_cs: HashMap<dregg_blocklace::BlockId, ([u8; 32], u64)> = HashMap::new();
-        for (fin_id, b) in &blocks {
-            let preds: Vec<dregg_blocklace::BlockId> = b
-                .predecessors
-                .iter()
-                .filter_map(|p| fin_to_ord.get(p).copied())
-                .collect();
-            let ob = dregg_blocklace::Block::new(b.creator, b.seq, preds, vec![]);
-            let oid = ob.id();
-            ordering_lace.insert_unverified(ob).ok();
-            fin_to_ord.insert(**fin_id, oid);
-            ord_to_cs.insert(oid, (b.creator, b.seq));
-        }
-        let rust_order = dregg_blocklace::ordering::tau(&ordering_lace, &participants);
-        let rust_cs: std::collections::HashSet<([u8; 32], u64)> = rust_order
-            .iter()
-            .filter_map(|oid| ord_to_cs.get(oid).copied())
-            .collect();
+        let rust_cs: std::collections::HashSet<([u8; 32], u64)> =
+            rust_tau_order(&lace, &participants).into_iter().collect();
         let lean_cs: std::collections::HashSet<([u8; 32], u64)> = order
             .iter()
             .filter_map(|id| lace.get(id).map(|b| (b.creator, b.seq)))
@@ -951,6 +933,11 @@ mod tests {
             lean_cs, rust_cs,
             "verified Lean tau-order and memoized Rust tau must agree on the (creator, seq) set on \
              the n=5 cross-linked DAG"
+        );
+        assert_eq!(
+            lean_cs,
+            two_wave_finalized(&participants),
+            "the n=5 two-wave lace finalizes wave 0 plus the wave-1 anchor"
         );
     }
 }

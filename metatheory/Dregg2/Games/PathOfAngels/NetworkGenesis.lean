@@ -393,11 +393,15 @@ preimages, not read back out of `sha256Wire?` or out of Rust:
 * `FIXTURE_DEPLOYMENT_DIGEST` is `sha256(DEPLOYMENT_IDENTITY_DOMAIN ‖ 0 ‖ id ‖ 0 ‖
   manifest ‖ 0 ‖ policy)`, and `deploymentBindingChecks` recomputes it here.
 
-⚠ The CONTENT half of this fixture (`FIXTURE_MANIFEST_SHA256`, content root, activation
-digest, source/signal digests, curator key, epoch counter) is still content epoch 1
-counter 2 and the PRE-re-emit POAG1 manifest.  It was deliberately NOT moved in this
-pass: POAG1 was being re-emitted and counter 7 signed at the same time, and pinning a
-value mid-signature would have been a guess.  It needs its own pass.
+⚑ RE-POINTED 2026-10-01: the CONTENT half (`FIXTURE_MANIFEST_SHA256`, content root,
+activation digest, source/signal digests, curator key, activation counter) is the signed
+POAG1 bundle at content epoch 1 counter 12 (`1af7a2617`,
+`poa/artifacts/poag1/manifest.sig.json`).  It had sat at counter 2 since 2026-08-04 while
+the bundle moved to 12, so the frozen `dregg-lean-ffi` genesis input stopped matching what
+the node's ceremony encoder builds from the checked-in deployment, and
+`poa_signal_genesis`'s fixture-evaluator tests refused it.  Every value was read from that
+encoder's output (the tuple the linked Lean evaluator accepts), and `fixtureInputBytes` was
+checked to render byte-identical to `poa-network-genesis-input-v1.json`.
 
 ⚑ **THE PINS NO LONGER EVALUATE IN THIS MODULE (2026-08-08).** This module is in the
 `Dregg2.FFI` closure — the crypto archive's build root — and the thirty-five
@@ -425,17 +429,17 @@ abbrev FIXTURE_DEPLOYMENT_MANIFEST_SHA256 : String :=
   "85c5f58a8237333c6935374b5c8f40f479cb4e50bcbd91a4c4e8eb7a534dc7bb"
 abbrev FIXTURE_DEPLOYMENT_POLICY_SHA256 : String := PRODUCTION_POLICY_ZERO_ISSUANCE_SHA256
 abbrev FIXTURE_MANIFEST_SHA256 : String :=
-  "c4f34a6ef639c532965ee5c05ec9bbbd7ac722ad7350f1825915bf67f0b69d2b"
+  "d14e79e806af45834ffbf8e73fcaa01727454d7b886f4b66c21b1392e13c51c2"
 abbrev FIXTURE_CONTENT_ROOT : String :=
-  "679706a06ae8546a96b369a70dd7c5ee1c93fe47c789368087ab167c7b7dcebc"
+  "fd22397fedd8ee0703e0548c349d194980f92ea0a40a1a32c9b830506b773e16"
 abbrev FIXTURE_ACTIVATION_DIGEST : String :=
-  "a7434b7a3cf936a09aa571ce2dab1b0b4d7856d079d6df5b05e1d05d425abcad"
+  "511837ba023f5636997368b0c6c698cb555eca3594d4c997076a10b2bbc62d9c"
 abbrev FIXTURE_SOURCE_DIGEST : String :=
-  "53bef5c67f9b73fcf9595a9547046f17ea6789a6876c44c85f01d3385129b42f"
+  "c2c82697e87c1b49338238cece11a3c9dc8b07eb3acc504746f78c87f766ad61"
 abbrev FIXTURE_SIGNAL_DIGEST : String :=
-  "c3a9603f84f1e5918c6a46f30c507a39b6c9d5fd57c9f3edec3b03597eec49bf"
+  "b89d72fa3af6e64ac127f3ca6efe5ff3da0e0494ae843b05110798783614e5a2"
 abbrev FIXTURE_CURATOR_KEY : String :=
-  "a3e630900af50a8701387c9ab528e3db23a5650c3e1ff3b4b3ee09aa42c65e23"
+  "3c757bafe5b819ea7a5d7059630b5fce3725f624fc1d560ff25dfd5059ac7b34"
 /-- ⚠ RE-PINNED TWICE on 2026-08-05.  First when `Emit.signalMission` took its run seed
 as a PARAMETER and the template began carrying `Emit.UNBOUND_RUN_SEED` (the hidden-instance
 split); then again when the deployment was re-pointed at the live solo federation, because
@@ -456,11 +460,16 @@ the recomputation below changed only what the namespace actually touched.
 
 Recomputed over the exact UTF-8 bytes Lean emits, by `python3 hashlib` and by Node
 `crypto.createHash("sha256")` independently — agreeing, and neither of them
-`sha256Wire?`. -/
+`sha256Wire?`.
+
+⚠ RE-PINNED A FOURTH TIME on 2026-10-01, BOTH hashes, with the content half above: the
+config carries the content root and activation digest and the canon carries the content
+binding, so both move with the counter-12 bundle.  Recomputed by `python3 hashlib` over the
+`config_json` / `canon_json` strings the linked Lean evaluator emitted, not `sha256Wire?`. -/
 abbrev FIXTURE_CONFIG_SHA256 : String :=
-  "522cb2c079ec217acc778011c1a7d89a4e5ec2a2f4ea305846c6d20eaadeefd1"
+  "cd76188f330310a1c9e3eb94e8c83526b458e4fe692ab8eb6fdcb115941ca18a"
 abbrev FIXTURE_CANON_SHA256 : String :=
-  "f770d6bd6fd3fe09ec7c2fe882b74aa655c4ce6687f1a01e02e4faa468ba6181"
+  "9b2a9e91caffeef4d68d7a6e7d22cf829ae9f9f75d1157bac7198102881d90f1"
 
 def fixtureDeploymentId := digestOrZero FIXTURE_DEPLOYMENT_ID
 def fixtureDeploymentDigest := digestOrZero FIXTURE_DEPLOYMENT_DIGEST
@@ -504,7 +513,7 @@ def fixtureInput : GenesisInputWire := {
     signalContentDigest := fixtureSignalDigest
     curatorKey := fixtureCuratorKey
     contentEpoch := 1
-    activationCounter := 2
+    activationCounter := 12
   }
   config := .signal fixtureSignalConfigWire
   initial := emptyInitialState
