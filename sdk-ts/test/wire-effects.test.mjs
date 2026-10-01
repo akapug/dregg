@@ -1,7 +1,6 @@
 // Per-variant Effect wire differential — the drift killer for the FULL enum.
 //
-// For EVERY newly modeled `Effect` kind (Rust declaration indexes 7..=33 plus
-// a smoke re-check of 0..=6), this builds a turn in TS carrying that effect,
+// For EVERY modeled `Effect` kind (Rust declaration indexes 0..=37), this builds a turn in TS carrying that effect,
 // hands the SAME turn (serde-JSON form) to the repo's own dregg-wasm build
 // (the actual Rust `dregg-turn` code), and asserts:
 //
@@ -18,12 +17,11 @@
 // wire layout + hash preimages. The signing differentials live in
 // `wire.test.mjs` (unchanged).
 //
-// ⚠ ORACLE FRESHNESS: `loadWasmOracle` fails loud when `wasm/pkg` is absent.
-// These tests were validated against the pkg built 2026-07-16 15:49; the
-// wire-relevant sources (turn/, types/, cell wire structs) had NO shape
-// changes between that build and the tree these tests landed in (verified by
-// git log over the specific files). Rebuild via `npm run build:oracle` when
-// in doubt — a stale oracle proves nothing about NEW Rust variants.
+// ⚠ ORACLE FRESHNESS: `loadWasmOracle` fails loud when `wasm/pkg-oracle` is
+// absent, and `npm test`'s `pretest` rebuilds it from source every run. (From
+// 09-18 to 09-30 the oracle did not BUILD, and this file sat red behind that:
+// the shielded payload had changed shape on 08-07 and four variants had been
+// appended, and nothing saw it.)
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -34,6 +32,8 @@ const b32 = (n) => Uint8Array.from({ length: 32 }, () => n & 0xff);
 const b64 = (n) => Uint8Array.from({ length: 64 }, () => n & 0xff);
 const blob = (n, len) => Uint8Array.from({ length: len }, (_, i) => (n + i) & 0xff);
 const arr = (b) => Array.from(b);
+/** Sixteen distinct u32 lanes starting at `base` (the `[u32; 16]` wide carrier). */
+const wideLanes = (base) => Array.from({ length: 16 }, (_, k) => (base + k * 0x01010101) >>> 0);
 
 // ─── serde-JSON forms (externally tagged Rust enums, snake_case fields) ─────
 
@@ -244,6 +244,11 @@ function conditionProofToJson(p) {
     default:
       throw new Error(`no JSON for ConditionProof ${p.kind}`);
   }
+}
+
+/** serde-JSON of `ShieldedInputPayload` (`spend_wide_binding` is `[u32; 16]`). */
+function shieldedInputToJson(i) {
+  return { nullifier: i.nullifier, spend_wide_binding: [...i.spendWideBinding], spend_proof: arr(i.spendProof) };
 }
 
 function effectToJson(e) {
@@ -468,27 +473,53 @@ function effectToJson(e) {
       return {
         ShieldedTransfer: {
           payload: {
-            merkle_root: e.payload.merkleRoot,
-            inputs: e.payload.inputs.map((i) => ({
-              nullifier: i.nullifier,
-              value_binding: i.valueBinding,
-              proof: arr(i.proof),
-            })),
-            input_legs: e.payload.inputLegs.map((l) => ({
-              asset_type: Number(l.assetType),
-              commitment_bytes: arr(l.commitmentBytes),
-            })),
-            output_legs: e.payload.outputLegs.map((l) => ({
-              asset_type: Number(l.assetType),
-              commitment_bytes: arr(l.commitmentBytes),
-            })),
-            output_range_proofs: e.payload.outputRangeProofs.map(arr),
-            conservation: {
-              excess_commitment: arr(e.payload.conservation.excessCommitment),
-              nonce_commitment: arr(e.payload.conservation.nonceCommitment),
-              response: arr(e.payload.conservation.response),
-            },
+            inputs: e.payload.inputs.map(shieldedInputToJson),
+            outputs: e.payload.outputs.map((o) => ({ note_commitment: arr(o.noteCommitment) })),
+            link_proof: arr(e.payload.linkProof),
           },
+        },
+      };
+    case "createHybridCell":
+      return {
+        CreateHybridCell: {
+          public_key: arr(e.publicKey),
+          token_id: arr(e.tokenId),
+          balance: Number(e.balance),
+          ml_dsa_public_key: arr(e.mlDsaPublicKey),
+          pq_possession_signature: arr(e.pqPossessionSignature),
+        },
+      };
+    case "rotatePqIdentity":
+      return {
+        RotatePqIdentity: {
+          cell: arr(e.cell),
+          expected_epoch: Number(e.expectedEpoch),
+          new_ml_dsa_public_key: arr(e.newMlDsaPublicKey),
+          new_key_possession_signature: arr(e.newKeyPossessionSignature),
+        },
+      };
+    case "shield":
+      return {
+        Shield: {
+          value: Number(e.value),
+          asset_type: Number(e.assetType),
+          note_commitment: arr(e.noteCommitment),
+          encrypted_note: arr(e.encryptedNote),
+          shield_proof: arr(e.shieldProof),
+          nullifier: arr(e.nullifier),
+          note_tree_root: arr(e.noteTreeRoot),
+          spending_proof: arr(e.spendingProof),
+        },
+      };
+    case "deshield":
+      return {
+        Deshield: {
+          value: Number(e.value),
+          asset_type: Number(e.assetType),
+          note_commitment: arr(e.noteCommitment),
+          encrypted_note: arr(e.encryptedNote),
+          input: shieldedInputToJson(e.input),
+          link_proof: arr(e.linkProof),
         },
       };
     case "custom":
@@ -926,24 +957,74 @@ function fixtures(rawMod, agent, programMod) {
     mint: [{ kind: "mint", target: agent, slot: 0, amount: 777n }],
     shieldedTransfer: [
       {
+        // Two inputs, two outputs (a split with change) — every lane distinct and
+        // above 2^7, so a dropped, reordered or fixed-width-encoded lane moves bytes.
         kind: "shieldedTransfer",
         payload: {
-          merkleRoot: 123456,
           inputs: [
-            { nullifier: 11, valueBinding: 12, proof: blob(0xe1, 9) },
-            { nullifier: 13, valueBinding: 14, proof: blob(0xe2, 5) },
+            { nullifier: 0x11223344, spendWideBinding: wideLanes(0x1000), spendProof: blob(0xe1, 9) },
+            { nullifier: 13, spendWideBinding: wideLanes(0x7f000000), spendProof: blob(0xe2, 5) },
           ],
-          inputLegs: [
-            { assetType: 1n, commitmentBytes: b32(0xe3) },
-            { assetType: 1n, commitmentBytes: b32(0xe4) },
-          ],
-          outputLegs: [{ assetType: 1n, commitmentBytes: b32(0xe5) }],
-          outputRangeProofs: [blob(0xe6, 7)],
-          conservation: { excessCommitment: b32(0xe7), nonceCommitment: b32(0xe8), response: b32(0xe9) },
+          outputs: [{ noteCommitment: b32(0xe5) }, { noteCommitment: b32(0xe6) }],
+          linkProof: blob(0xe7, 7),
+        },
+      },
+      {
+        kind: "shieldedTransfer",
+        payload: {
+          inputs: [{ nullifier: 1, spendWideBinding: wideLanes(0), spendProof: new Uint8Array(0) }],
+          outputs: [{ noteCommitment: b32(0xe8) }],
+          linkProof: new Uint8Array(0),
         },
       },
     ],
     custom: [{ kind: "custom", cell: agent, programVkHash: b32(0xf1), proofCommitment: b32(0xf2) }],
+    createHybridCell: [
+      {
+        kind: "createHybridCell",
+        publicKey: b32(0xa1),
+        tokenId: b32(0xa2),
+        balance: 900n,
+        // Real FIPS 204 lengths (1952-byte key, 3309-byte signature): the codec
+        // treats both as opaque Vec<u8>, and multi-byte varint length prefixes are
+        // exactly where a mis-encoded length would hide.
+        mlDsaPublicKey: blob(0xa3, 1952),
+        pqPossessionSignature: blob(0xa4, 3309),
+      },
+    ],
+    rotatePqIdentity: [
+      {
+        kind: "rotatePqIdentity",
+        cell: agent,
+        expectedEpoch: 300n,
+        newMlDsaPublicKey: blob(0xa5, 1952),
+        newKeyPossessionSignature: blob(0xa6, 3309),
+      },
+    ],
+    shield: [
+      {
+        kind: "shield",
+        value: 1_000_000n,
+        assetType: 3n,
+        noteCommitment: b32(0xb1),
+        encryptedNote: blob(0xb2, 12),
+        shieldProof: blob(0xb3, 200),
+        nullifier: b32(0xb4),
+        noteTreeRoot: b32(0xb5),
+        spendingProof: blob(0xb6, 17),
+      },
+    ],
+    deshield: [
+      {
+        kind: "deshield",
+        value: 4242n,
+        assetType: 0n,
+        noteCommitment: b32(0xc1),
+        encryptedNote: blob(0xc2, 5),
+        input: { nullifier: 0xfffffff0, spendWideBinding: wideLanes(0x80), spendProof: blob(0xc3, 130) },
+        linkProof: blob(0xc4, 9),
+      },
+    ],
   };
 }
 
@@ -984,12 +1065,12 @@ function differential(wasm, rawMod, agent, effects, label) {
   );
 }
 
-test("EFFECT_KIND_COUNT is 34 and the fixture map covers every kind", async () => {
+test("EFFECT_KIND_COUNT is 38 and the fixture map covers every kind", async () => {
   const { rawMod, program, agent } = await ctx();
-  assert.equal(rawMod.EFFECT_KIND_COUNT, 34, "modeled-kind count must match the Rust enum (34 variants)");
+  assert.equal(rawMod.EFFECT_KIND_COUNT, 38, "modeled-kind count must match the Rust enum (38 variants)");
   const fx = fixtures(rawMod, agent, program);
   const kinds = Object.keys(fx);
-  assert.equal(kinds.length, 34, `fixture map covers ${kinds.length}/34 kinds`);
+  assert.equal(kinds.length, 38, `fixture map covers ${kinds.length}/38 kinds`);
   // Every fixture kind field agrees with its map key (no mislabeled fixture).
   for (const [k, effects] of Object.entries(fx)) {
     for (const e of effects) assert.equal(e.kind, k === "grantCapability" ? "grantCapability" : e.kind);
@@ -1006,7 +1087,7 @@ test("differential: every Effect kind, TS postcard + Turn::hash == Rust (per-kin
   }
 });
 
-test("differential: one mega-turn carrying all 34 kinds at once", async () => {
+test("differential: one mega-turn carrying all 38 kinds at once", async () => {
   const { wasm, rawMod, program, agent } = await ctx();
   const fx = fixtures(rawMod, agent, program);
   const all = Object.values(fx).flat();

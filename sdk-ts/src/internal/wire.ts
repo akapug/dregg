@@ -15,8 +15,8 @@
  *   - `types/src/lib.rs`     — `CellId::derive_raw` (`dregg-cell-id-v1`)
  *   - `sdk/src/cipherclerk.rs` — `SignedTurn` envelope (postcard)
  *
- * Effects modeled: ALL 34 variants of the Rust `Effect` enum
- * (`turn/src/action.rs`, declaration indexes 0..=33 — count verified against
+ * Effects modeled: ALL 38 variants of the Rust `Effect` enum
+ * (`turn/src/action.rs`, declaration indexes 0..=37 — count verified against
  * the enum body, NOT a comment). The postcard variant indexes here are the
  * Rust declaration indexes, which are append-only by contract (`Mint` and
  * later variants carry explicit APPENDED-LAST notes in action.rs).
@@ -310,38 +310,41 @@ export type ConditionProof =
       airName: string;
     };
 
-/** `dregg_turn::action::ShieldedLeg`. */
-export interface ShieldedLeg {
-  assetType: number | bigint;
-  commitmentBytes: Bytes32;
-}
+/** Lanes in a shielded input's wide carrier (`[u32; 16]`, PI 9..25 of its complete-spend proof). */
+export const SHIELDED_WIDE_BINDING_LANES = 16;
 
-/** `dregg_turn::action::ShieldedInputPayload` (u32 felts + proof blob). */
+/**
+ * `dregg_turn::action::ShieldedInputPayload` — one spent input: the revealed
+ * nullifier (a canonical BabyBear `u32`), the sixteen-lane wide carrier its
+ * complete-spend proof PI-pins (`spend_wide_binding: [u32; 16]`, a FIXED array:
+ * sixteen varints, no length prefix), and that proof's postcard bytes.
+ */
 export interface ShieldedInputPayload {
   nullifier: number;
-  valueBinding: number;
-  proof: Uint8Array;
+  spendWideBinding: readonly number[];
+  spendProof: Uint8Array;
 }
 
-/** `dregg_cell_crypto::ConservationProof` (3 × 32 bytes). */
-export interface ConservationProof {
-  excessCommitment: Bytes32;
-  nonceCommitment: Bytes32;
-  response: Bytes32;
-}
-
-/** `dregg_turn::action::ShieldedTransferPayload`. */
-export interface ShieldedTransferPayload {
-  merkleRoot: number;
-  inputs: ShieldedInputPayload[];
-  inputLegs: ShieldedLeg[];
-  outputLegs: ShieldedLeg[];
-  outputRangeProofs: Uint8Array[];
-  conservation: ConservationProof;
+/** `dregg_turn::action::ShieldedOutputPayload` — a minted note's commitment. */
+export interface ShieldedOutputPayload {
+  noteCommitment: Bytes32;
 }
 
 /**
- * ALL 34 `Effect` variants (Rust declaration indexes in comments — these are
+ * `dregg_turn::action::ShieldedTransferPayload` — the inputs, the minted
+ * outputs, and ONE value-link proof for the whole transfer. (The Pedersen
+ * legs, range proofs, conservation proof and prover-chosen `merkle_root` were
+ * DELETED on the Rust side on 2026-08-07; a payload in that shape does not
+ * decode on a node.)
+ */
+export interface ShieldedTransferPayload {
+  inputs: ShieldedInputPayload[];
+  outputs: ShieldedOutputPayload[];
+  linkProof: Uint8Array;
+}
+
+/**
+ * ALL 38 `Effect` variants (Rust declaration indexes in comments — these are
  * the postcard variant indexes; field order matches the Rust declaration
  * exactly, camel-cased per this file's convention).
  */
@@ -448,11 +451,48 @@ export type Effect =
     }
   | { kind: "mint"; target: CellId; slot: number; amount: number | bigint } // 31
   | { kind: "shieldedTransfer"; payload: ShieldedTransferPayload } // 32
-  | { kind: "custom"; cell: CellId; programVkHash: Bytes32; proofCommitment: Bytes32 }; // 33
+  | { kind: "custom"; cell: CellId; programVkHash: Bytes32; proofCommitment: Bytes32 } // 33
+  | {
+      kind: "createHybridCell"; // 34
+      publicKey: Bytes32;
+      tokenId: Bytes32;
+      balance: number | bigint;
+      mlDsaPublicKey: Uint8Array;
+      /** By the new ML-DSA key over `dregg_turn::pq::cell_pq_creation_message`. */
+      pqPossessionSignature: Uint8Array;
+    }
+  | {
+      kind: "rotatePqIdentity"; // 35
+      cell: CellId;
+      expectedEpoch: number | bigint;
+      newMlDsaPublicKey: Uint8Array;
+      /** By the new key over `dregg_turn::pq::cell_pq_rotation_message`. */
+      newKeyPossessionSignature: Uint8Array;
+    }
+  | {
+      kind: "shield"; // 36
+      value: number | bigint;
+      assetType: number | bigint;
+      noteCommitment: Bytes32;
+      encryptedNote: Uint8Array;
+      shieldProof: Uint8Array;
+      nullifier: Bytes32;
+      noteTreeRoot: Bytes32;
+      spendingProof: Uint8Array;
+    }
+  | {
+      kind: "deshield"; // 37
+      value: number | bigint;
+      assetType: number | bigint;
+      noteCommitment: Bytes32;
+      encryptedNote: Uint8Array;
+      input: ShieldedInputPayload;
+      linkProof: Uint8Array;
+    };
 
 /** The modeled Effect-kind count, asserted by the wire tests against the Rust
- * enum's variant count (34) so the header can never silently understate. */
-export const EFFECT_KIND_COUNT = 34;
+ * enum's variant count (38) so the header can never silently understate. */
+export const EFFECT_KIND_COUNT = 38;
 
 /** `dregg_turn::Authorization` (the variants the authorized flow emits). */
 export type Authorization =
@@ -847,21 +887,31 @@ function writeConditionProof(w: Writer, p: ConditionProof): void {
   }
 }
 
+function wideBinding(input: ShieldedInputPayload): readonly number[] {
+  const lanes = input.spendWideBinding;
+  if (lanes.length !== SHIELDED_WIDE_BINDING_LANES) {
+    throw new Error(
+      `spendWideBinding must be exactly ${SHIELDED_WIDE_BINDING_LANES} lanes, got ${lanes.length}`,
+    );
+  }
+  for (const lane of lanes) {
+    if (!Number.isInteger(lane) || lane < 0 || lane > 0xffffffff) {
+      throw new Error(`spendWideBinding lane ${lane} is not a u32`);
+    }
+  }
+  return lanes;
+}
+
+function writeShieldedInput(w: Writer, i: ShieldedInputPayload): void {
+  w.varint(i.nullifier);
+  for (const lane of wideBinding(i)) w.varint(lane); // `[u32; 16]`: fixed array, no length
+  w.byteSeq(i.spendProof);
+}
+
 function writeShieldedPayload(w: Writer, p: ShieldedTransferPayload): void {
-  w.varint(p.merkleRoot);
-  w.seq(p.inputs, (i) => {
-    w.varint(i.nullifier).varint(i.valueBinding).byteSeq(i.proof);
-  });
-  w.seq(p.inputLegs, (l) => {
-    w.varint(l.assetType).bytes(exactBytes(l.commitmentBytes, 32, "input leg commitment"));
-  });
-  w.seq(p.outputLegs, (l) => {
-    w.varint(l.assetType).bytes(exactBytes(l.commitmentBytes, 32, "output leg commitment"));
-  });
-  w.seq(p.outputRangeProofs, (rp) => w.byteSeq(rp));
-  w.bytes(exactBytes(p.conservation.excessCommitment, 32, "excessCommitment"));
-  w.bytes(exactBytes(p.conservation.nonceCommitment, 32, "nonceCommitment"));
-  w.bytes(exactBytes(p.conservation.response, 32, "conservation response"));
+  w.seq(p.inputs, (i) => writeShieldedInput(w, i));
+  w.seq(p.outputs, (o) => w.bytes(exactBytes(o.noteCommitment, 32, "output noteCommitment")));
+  w.byteSeq(p.linkProof);
 }
 
 function writeEffect(w: Writer, e: Effect): void {
@@ -1026,6 +1076,41 @@ function writeEffect(w: Writer, e: Effect): void {
         .bytes(exactBytes(e.cell, 32, "cell"))
         .bytes(exactBytes(e.programVkHash, 32, "programVkHash"))
         .bytes(exactBytes(e.proofCommitment, 32, "proofCommitment"));
+      break;
+    case "createHybridCell":
+      w.varint(34)
+        .bytes(exactBytes(e.publicKey, 32, "publicKey"))
+        .bytes(exactBytes(e.tokenId, 32, "tokenId"))
+        .varint(e.balance)
+        .byteSeq(e.mlDsaPublicKey)
+        .byteSeq(e.pqPossessionSignature);
+      break;
+    case "rotatePqIdentity":
+      w.varint(35)
+        .bytes(exactBytes(e.cell, 32, "cell"))
+        .varint(e.expectedEpoch)
+        .byteSeq(e.newMlDsaPublicKey)
+        .byteSeq(e.newKeyPossessionSignature);
+      break;
+    case "shield":
+      w.varint(36)
+        .varint(e.value)
+        .varint(e.assetType)
+        .bytes(exactBytes(e.noteCommitment, 32, "noteCommitment"))
+        .byteSeq(e.encryptedNote)
+        .byteSeq(e.shieldProof)
+        .bytes(exactBytes(e.nullifier, 32, "nullifier"))
+        .bytes(exactBytes(e.noteTreeRoot, 32, "noteTreeRoot"))
+        .byteSeq(e.spendingProof);
+      break;
+    case "deshield":
+      w.varint(37)
+        .varint(e.value)
+        .varint(e.assetType)
+        .bytes(exactBytes(e.noteCommitment, 32, "noteCommitment"))
+        .byteSeq(e.encryptedNote);
+      writeShieldedInput(w, e.input);
+      w.byteSeq(e.linkProof);
       break;
     default:
       throw new UnmodeledWireError(`Effect kind ${String((e as { kind?: string }).kind)}`);
@@ -1201,13 +1286,21 @@ export function archivalCheckpointHash(a: ArchivalAttestation): Bytes32 {
   );
 }
 
+/** The shared spent-input fold `Effect::hash` uses for `ShieldedTransfer` and
+ * `Deshield`: nullifier (u32 LE), the sixteen lanes (u32 LE each), then the
+ * length-prefixed spend proof. */
+function shieldedInputHashUpdate(h: Blake3Hasher, input: ShieldedInputPayload): void {
+  h.update(u32le(input.nullifier));
+  for (const lane of wideBinding(input)) h.update(u32le(lane));
+  h.update(u64le(input.spendProof.length)).update(input.spendProof);
+}
+
 /**
  * `Effect::hash` (turn/src/action.rs). The domain-tag bytes mirror the Rust
  * match EXACTLY — they are hand-assigned there and NOT the postcard variant
- * indexes (e.g. SetProgram=54, MakeSovereign=35). NOTE (faithful mirror of a
- * Rust smell, reported in TESTQALOG 2026-07-17): `Mint` and `ShieldedTransfer`
- * BOTH use tag 63 in the Rust source; we mirror, not fix — the preimage
- * shapes differ in length so no practical collision exists today.
+ * indexes (e.g. SetProgram=54, MakeSovereign=35; `effect_tag::ALL` in
+ * action.rs is the table). `ShieldedTransfer` is 67 — it shared `Mint`'s 63
+ * until the 2026-07-28 flag day.
  */
 export function effectHash(e: Effect): Bytes32 {
   const h = Blake3Hasher.new();
@@ -1383,7 +1476,6 @@ export function effectHash(e: Effect): Bytes32 {
       h.update(Uint8Array.from([51])).update(e.target).update(u32le(e.slot)).update(u64le(e.amount));
       break;
     case "mint":
-      // Tag 63 in Rust (collides with ShieldedTransfer's tag — mirrored, see above).
       h.update(Uint8Array.from([63])).update(e.target).update(u32le(e.slot)).update(u64le(e.amount));
       break;
     case "attenuateCapability":
@@ -1447,36 +1539,59 @@ export function effectHash(e: Effect): Bytes32 {
       break;
     }
     case "shieldedTransfer": {
-      // Tag 63 in Rust (same byte as Mint — mirrored, see above).
+      // Tag 67 (moved off Mint's 63 on 2026-07-28). No merkle root: the
+      // committed root is executor state, not effect content.
       const pl = e.payload;
-      h.update(Uint8Array.from([63])).update(u32le(pl.merkleRoot));
-      h.update(u64le(pl.inputs.length));
-      for (const input of pl.inputs) {
-        h.update(u32le(input.nullifier)).update(u32le(input.valueBinding));
-        h.update(u64le(input.proof.length)).update(input.proof);
-      }
-      const legPairs: Array<[number, ShieldedLeg[]]> = [
-        [0, pl.inputLegs],
-        [1, pl.outputLegs],
-      ];
-      for (const [tag, legs] of legPairs) {
-        h.update(Uint8Array.from([tag])).update(u64le(legs.length));
-        for (const leg of legs) {
-          h.update(u64le(leg.assetType)).update(leg.commitmentBytes);
-        }
-      }
-      h.update(u64le(pl.outputRangeProofs.length));
-      for (const rp of pl.outputRangeProofs) {
-        h.update(u64le(rp.length)).update(rp);
-      }
-      const cons = postcardOf((w) => {
-        w.bytes(exactBytes(pl.conservation.excessCommitment, 32, "excessCommitment"))
-          .bytes(exactBytes(pl.conservation.nonceCommitment, 32, "nonceCommitment"))
-          .bytes(exactBytes(pl.conservation.response, 32, "response"));
-      });
-      h.update(u64le(cons.length)).update(cons);
+      h.update(Uint8Array.from([67])).update(u64le(pl.inputs.length));
+      for (const input of pl.inputs) shieldedInputHashUpdate(h, input);
+      h.update(u64le(pl.outputs.length));
+      for (const o of pl.outputs) h.update(exactBytes(o.noteCommitment, 32, "output noteCommitment"));
+      h.update(u64le(pl.linkProof.length)).update(pl.linkProof);
       break;
     }
+    case "createHybridCell":
+      h.update(Uint8Array.from([65]))
+        .update(e.publicKey)
+        .update(e.tokenId)
+        .update(u64le(e.balance))
+        .update(u64le(e.mlDsaPublicKey.length))
+        .update(e.mlDsaPublicKey)
+        .update(u64le(e.pqPossessionSignature.length))
+        .update(e.pqPossessionSignature);
+      break;
+    case "rotatePqIdentity":
+      h.update(Uint8Array.from([66]))
+        .update(e.cell)
+        .update(u64le(e.expectedEpoch))
+        .update(u64le(e.newMlDsaPublicKey.length))
+        .update(e.newMlDsaPublicKey)
+        .update(u64le(e.newKeyPossessionSignature.length))
+        .update(e.newKeyPossessionSignature);
+      break;
+    case "shield":
+      h.update(Uint8Array.from([68]))
+        .update(u64le(e.value))
+        .update(u64le(e.assetType))
+        .update(e.noteCommitment)
+        .update(u64le(e.encryptedNote.length))
+        .update(e.encryptedNote)
+        .update(u64le(e.shieldProof.length))
+        .update(e.shieldProof)
+        .update(e.nullifier)
+        .update(e.noteTreeRoot)
+        .update(u64le(e.spendingProof.length))
+        .update(e.spendingProof);
+      break;
+    case "deshield":
+      h.update(Uint8Array.from([69]))
+        .update(u64le(e.value))
+        .update(u64le(e.assetType))
+        .update(e.noteCommitment)
+        .update(u64le(e.encryptedNote.length))
+        .update(e.encryptedNote);
+      shieldedInputHashUpdate(h, e.input);
+      h.update(u64le(e.linkProof.length)).update(e.linkProof);
+      break;
     case "custom":
       h.update(Uint8Array.from([64])).update(e.cell).update(e.programVkHash).update(e.proofCommitment);
       break;

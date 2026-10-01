@@ -14,9 +14,9 @@
 // the real Rust codec, rebuilt by the `pretest` hook on every run. That closes
 // mis-encoding for what it compares.
 //
-// It cannot close what it does not compare. Rust's `Effect` has 34 variants;
-// as of 2026-07-17 the TS union models ALL 34 (each driven through the oracle
-// by `wire-effects.test.mjs`). A 35th variant, a renamed field, or a new field
+// It cannot close what it does not compare. Rust's `Effect` has 38 variants;
+// as of 2026-09-30 the TS union models ALL 38 (each driven through the oracle
+// by `wire-effects.test.mjs`). A 39th variant, a renamed field, or a new field
 // on a modeled variant is still INVISIBLE to a byte comparison over hand-built
 // fixtures. That is the remaining silent channel, and this file closes it — the
 // way sdk-py closes it: by reading the protocol's own source at test time and
@@ -138,7 +138,52 @@ const MODELED = [
   { ts: "mint", rust: "Mint", fields: ["target", "slot", "amount"] },
   { ts: "shieldedTransfer", rust: "ShieldedTransfer", fields: ["payload"] },
   { ts: "custom", rust: "Custom", fields: ["cell", "program_vk_hash", "proof_commitment"] },
+  // ── 2026-09-30: the four variants appended after `Custom` (07-21 → 08-07) were
+  //    caught by THIS gate the first time the oracle built again; modeled, each
+  //    driven through the byte+hash differential in wire-effects.test.mjs.
+  {
+    ts: "createHybridCell",
+    rust: "CreateHybridCell",
+    fields: ["public_key", "token_id", "balance", "ml_dsa_public_key", "pq_possession_signature"],
+  },
+  {
+    ts: "rotatePqIdentity",
+    rust: "RotatePqIdentity",
+    fields: ["cell", "expected_epoch", "new_ml_dsa_public_key", "new_key_possession_signature"],
+  },
+  {
+    ts: "shield",
+    rust: "Shield",
+    fields: [
+      "value",
+      "asset_type",
+      "note_commitment",
+      "encrypted_note",
+      "shield_proof",
+      "nullifier",
+      "note_tree_root",
+      "spending_proof",
+    ],
+  },
+  {
+    ts: "deshield",
+    rust: "Deshield",
+    fields: ["value", "asset_type", "note_commitment", "encrypted_note", "input", "link_proof"],
+  },
 ];
+
+/**
+ * The shielded payload structs the codec writes positionally. `ShieldedTransfer`'s
+ * own field set is just `[payload]`, so the variant pin above could not see the
+ * 08-07 flag day that deleted `merkle_root`, the Pedersen legs, the range proofs
+ * and the conservation proof and added `spend_wide_binding`: the TS codec kept
+ * writing the deleted shape for seven weeks. These pins are what would have said so.
+ */
+const SHIELDED_STRUCTS = {
+  ShieldedTransferPayload: ["inputs", "outputs", "link_proof"],
+  ShieldedInputPayload: ["nullifier", "spend_wide_binding", "spend_proof"],
+  ShieldedOutputPayload: ["note_commitment"],
+};
 
 /** The `Event` struct the `emitEvent` case inlines. */
 const EVENT_FIELDS = ["topic", "data"];
@@ -149,10 +194,11 @@ const EVENT_FIELDS = ["topic", "data"];
  * out loud which subset of the protocol it speaks. A variant that is neither here
  * nor in MODELED turns this file RED by name.
  */
-// 2026-07-17: EMPTY — every Effect variant is now modeled (34/34; each proven
+// 2026-07-17: EMPTY — every Effect variant is now modeled (34/34 then, 38/38
+// since 2026-09-30; each proven
 // byte-identical to the Rust postcard AND hash-identical to Effect::hash by
 // the per-variant oracle differential in wire-effects.test.mjs). The gate
-// keeps the empty ledger so a 35th Rust variant still turns this file RED by
+// keeps the empty ledger so a 39th Rust variant still turns this file RED by
 // name until someone models it or declares it here WITH a reason.
 const UNMODELED = {};
 
@@ -329,6 +375,17 @@ test("FIELD PIN: CapabilityRef — the actual M30 site — still has the field s
       "a positional [u8;32] silently dropped here made every cap-carrying turn undecodable while the SDK " +
       "reported byte-faithfulness. Update src/internal/wire.ts's writeCapabilityRef, then this pin.",
   );
+});
+
+test("FIELD PIN: the shielded payload structs the codec writes positionally", () => {
+  for (const [name, fields] of Object.entries(SHIELDED_STRUCTS)) {
+    assert.deepEqual(
+      rustStruct(ACTION_RS, name),
+      fields,
+      `${name}'s field set/order drifted from what writeShieldedPayload / writeShieldedInput encode. ` +
+        `Postcard is positional: update src/internal/wire.ts (writer AND effectHash), then this pin.`,
+    );
+  }
 });
 
 test("FIELD PIN: the Event struct emitEvent inlines", () => {

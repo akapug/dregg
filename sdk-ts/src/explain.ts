@@ -106,7 +106,15 @@ function effectBody(effect: Effect): string {
     case "mint":
       return `MINT ${effect.amount} into slot ${effect.slot} of cell ${hx32(effect.target)} (issuer-well debited; EFFECT_MINT authority required)`;
     case "shieldedTransfer":
-      return `SHIELDED transfer: spend ${effect.payload.inputs.length} hidden note(s), mint ${effect.payload.outputLegs.length} hidden output(s) (values and owners blind; nullifiers revealed)`;
+      return `SHIELDED transfer: spend ${effect.payload.inputs.length} hidden note(s), mint ${effect.payload.outputs.length} hidden output(s) (values and owners blind; nullifiers revealed; value conserved by the in-AIR value link)`;
+    case "createHybridCell":
+      return `create a new cell (owner 0x${hx32(effect.publicKey)}, token 0x${hx32(effect.tokenId)}) with balance ${effect.balance} and a committed ML-DSA identity`;
+    case "rotatePqIdentity":
+      return `rotate the committed ML-DSA identity of cell ${hx32(effect.cell)} from key epoch ${effect.expectedEpoch} to key epoch ${BigInt(effect.expectedEpoch) + 1n}`;
+    case "shield":
+      return `SHIELD (on-ramp): debit a cleartext note (value ${effect.value}, asset ${effect.assetType}; nullifier 0x${hx32(effect.nullifier)}) and mint an equal-value HIDDEN shielded note 0x${hx32(effect.noteCommitment)}`;
+    case "deshield":
+      return `DESHIELD (off-ramp): spend a HIDDEN shielded note (nullifier ${effect.input.nullifier}) and credit an equal-value cleartext note 0x${hx32(effect.noteCommitment)} (value ${effect.value}, asset ${effect.assetType}); the credit is bound to the spent note's value in-AIR`;
     case "custom":
       return `custom-program transition of sovereign cell ${hx32(effect.cell)} under VK 0x${hx32(effect.programVkHash)} (adjudicated by a registered STARK sub-proof)`;
     default: {
