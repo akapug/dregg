@@ -474,6 +474,31 @@ fn decode_hex(s: &str) -> Option<Vec<u8>> {
 type LeanKeygenCoreReal = fn(wire: &str) -> Option<String>;
 static LEAN_KEYGEN_CORE_REAL: OnceLock<LeanKeygenCoreReal> = OnceLock::new();
 
+/// The ML-DSA direction a seed-derived SIGN ([`MlDsaKey::from_ed25519_seed`] then
+/// [`MlDsaKey::try_sign`]/[`MlDsaKey::try_sign_deterministic`]) would REFUSE in this process, or
+/// `None` when both are answerable — each by its installed Lean-verified core, or by the
+/// unaudited crate under the declared bypass.
+///
+/// For hosts where the refusal's `abort()` is not a usable answer: on wasm32 it traps as a
+/// message-less `RuntimeError: unreachable` and leaves the instance unusable. Such a host asks
+/// first and refuses with a typed error that names the direction. This reads the SAME predicate
+/// the gate does ([`crate::audit::unaudited_pq_bypass_allowed`]) and changes nothing the gate
+/// decides: a caller that skips it and signs anyway still aborts.
+pub fn mldsa_seed_signing_refusal() -> Option<PqSite> {
+    let bypass = crate::audit::unaudited_pq_bypass_allowed(
+        false,
+        crate::audit::unaudited_pq_accepted(),
+        crate::audit::require_verified_lean_gate(),
+    );
+    if LEAN_KEYGEN_CORE_REAL.get().is_none() && !bypass {
+        return Some(PqSite::MlDsaKeygen);
+    }
+    if LEAN_SIGN_CORE_REAL.get().is_none() && !bypass {
+        return Some(PqSite::MlDsaSign);
+    }
+    None
+}
+
 /// Install the extracted, Lean-verified REAL, full-byte ML-DSA-65 keygen core (e.g.
 /// `|w| dregg_lean_ffi::shadow_mldsa_keygen_real(w).ok()`). Once installed, [`MlDsaKey::from_ed25519_seed`]
 /// EXPANDS the seed through it — taking the `fips204` crate OUT of the IDENTITY-KEY keygen TCB. Returns

@@ -58,5 +58,5 @@ pub use mldsa::{
     install_verified_mldsa_sign_core_real, install_verified_mldsa_verify_core,
     lean_keygen_core_real_installed, lean_sign_core_installed, lean_sign_core_real_installed,
     lean_verify_core_real_installed, ml_dsa_public_from_seed, ml_dsa_sign_core,
-    ml_dsa_sign_from_seed, ml_dsa_verify, ml_dsa_verify_core,
+    ml_dsa_sign_from_seed, ml_dsa_verify, ml_dsa_verify_core, mldsa_seed_signing_refusal,
 };

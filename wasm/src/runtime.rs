@@ -1108,7 +1108,7 @@ impl DreggRuntime {
             // `Effect::CreateCell` (the executor's cost table maps both
             // variants to `EFFECT_CREATE_CELL`), so `GENESIS_MINT_FEE`
             // covers either path.
-            match self.execute_turn_for_agent(0, effects, GENESIS_MINT_FEE) {
+            match self.execute_turn_for_agent(0, effects, GENESIS_MINT_FEE)? {
                 TurnResult::Committed { .. } => {}
                 other => {
                     return Err(format!(
@@ -1213,7 +1213,7 @@ impl DreggRuntime {
             });
         }
 
-        match self.execute_turn_for_agent(0, effects, GENESIS_MINT_FEE) {
+        match self.execute_turn_for_agent(0, effects, GENESIS_MINT_FEE)? {
             TurnResult::Committed { .. } => Ok(new_cell_id),
             other => Err(format!(
                 "wasm runtime: mint_cell_from_genesis_with_factory failed: {:?}",
@@ -1291,12 +1291,15 @@ impl DreggRuntime {
     /// with a real Ed25519 signature from the agent's signing key. The
     /// TurnExecutor verifies these signatures against the cell's stored
     /// public key — the same code path real cipherclerks exercise.
+    ///
+    /// `Err` when the forest cannot be signed in this build (see
+    /// [`sign_call_forest`]); nothing was executed.
     pub fn execute_turn_for_agent(
         &mut self,
         agent_idx: usize,
         effects: Vec<Effect>,
         fee: u64,
-    ) -> TurnResult {
+    ) -> Result<TurnResult, String> {
         let cell_id = self.agents[agent_idx].cell_id;
 
         // Get current nonce.
@@ -1332,7 +1335,7 @@ impl DreggRuntime {
         // path native callers exercise via `AgentCipherclerk::sign_action`.
         let federation_id = self.executor.local_federation_id;
         let cclerk = &self.agents[agent_idx].cclerk;
-        sign_call_forest(&mut turn, cclerk, &federation_id);
+        sign_call_forest(&mut turn, cclerk, &federation_id)?;
 
         let result = self.executor.execute(&turn, &mut self.ledger);
 
@@ -1388,7 +1391,7 @@ impl DreggRuntime {
             self.events = self.emitter.snapshot();
         }
 
-        result
+        Ok(result)
     }
 
     /// Create a note for an agent. Randomness derives deterministically from
@@ -1996,7 +1999,7 @@ impl DreggRuntime {
                 turn.call_forest.forest_hash = [0u8; 32];
             }
             let cclerk = &self.agents[agent_idx].cclerk;
-            sign_call_forest(&mut turn, cclerk, &federation_id);
+            sign_call_forest(&mut turn, cclerk, &federation_id)?;
         }
 
         let result = self.executor.execute(&turn, &mut self.ledger);
@@ -2903,11 +2906,36 @@ pub struct ConsensusRoundResult {
 /// from the clerk's local receipt count, and the signature is deliberately
 /// federation-domain-separated: a turn signed for one federation is invalid
 /// in another.
+///
+/// # Refuses — with a reason — when this build cannot produce the ML-DSA half
+///
+/// A hybrid signature needs an ML-DSA-65 identity key and signature, and
+/// `dregg-pq` answers those only from a Lean-verified core or under a declared
+/// unaudited bypass; otherwise its gate `abort()`s. A wasm32 build links no
+/// verified core (it cannot link the archive), so in a shipped bundle every
+/// sign reached that abort, which wasm renders as a bare
+/// `RuntimeError: unreachable` and an unusable instance. This asks
+/// [`dregg_pq::mldsa_seed_signing_refusal`] — the gate's own predicate — before
+/// touching the forest, and returns the refusal naming the direction. A forest
+/// with nothing to sign never asks: a pre-signed turn re-encodes unchanged.
 pub(crate) fn sign_call_forest(
     turn: &mut Turn,
     cclerk: &AgentCipherclerk,
     federation_id: &[u8; 32],
-) {
+) -> Result<(), String> {
+    if turn.call_forest.roots.iter().any(tree_has_unchecked) {
+        // The SDK's one named installer (a no-op where nothing is linked), so a
+        // native host that CAN install a verified core is asked after it did.
+        dregg_sdk::install_verified_pq_cores();
+        if let Some(site) = dregg_pq::mldsa_seed_signing_refusal() {
+            return Err(format!(
+                "hybrid signing refused: no Lean-verified ML-DSA-65 core is installed in this \
+                 build for `{}` and the unaudited fips204 fallback is not declared (a wasm32 \
+                 bundle cannot link the verified archive). Nothing was signed.",
+                site.label()
+            ));
+        }
+    }
     let turn_nonce = turn.nonce;
     for tree in &mut turn.call_forest.roots {
         sign_call_tree(tree, cclerk, federation_id, turn_nonce);
@@ -2915,6 +2943,12 @@ pub(crate) fn sign_call_forest(
     // Mutating actions invalidates any cached forest hash; clear so the
     // executor recomputes from the now-signed actions.
     turn.call_forest.forest_hash = [0u8; 32];
+    Ok(())
+}
+
+fn tree_has_unchecked(tree: &CallTree) -> bool {
+    matches!(tree.action.authorization, Authorization::Unchecked)
+        || tree.children.iter().any(tree_has_unchecked)
 }
 
 fn sign_call_tree(
@@ -2972,7 +3006,7 @@ mod poa_signal_signing_tests {
             claim,
         );
         let federation = [0x4E; 32];
-        sign_call_forest(&mut turn, &clerk, &federation);
+        sign_call_forest(&mut turn, &clerk, &federation).expect("signing is answerable here");
         assert_eq!(
             dregg_sdk::poa_signal::claim_from_exact_signal_turn(&turn),
             Ok(claim)

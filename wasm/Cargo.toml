@@ -256,6 +256,17 @@ wasm-bindgen-test = "0.3"
 # shipped cdylib has no reason to name it.
 dregg-bridge = { path = "../bridge" }
 
+[features]
+# ⚑ TEST ORACLE ONLY — never in a shipped bundle. This build has no Lean-verified ML-DSA core (wasm32
+# cannot link the archive), so every hybrid sign (`sign_turn_v3`, the in-tab world's
+# `sign_call_forest`) REFUSES: `dregg_pq::mldsa_seed_signing_refusal` names the direction and the
+# binding returns a typed error. sdk-ts's byte differential needs the Rust DEFAULT signer's bytes
+# anyway, so its `build:oracle` script builds THIS feature, which forwards dregg-pq's declared
+# wasm32 bypass (the build-time spelling of `DREGG_ALLOW_UNAUDITED_PQ=1`, the same declaration
+# `sdk-ts/test/rust-verifier` makes at run time). It builds into `wasm/pkg-oracle`; the portal and
+# deploy scripts stage `wasm/pkg`, which this feature never touches.
+unaudited-pq-test-oracle = ["dregg-pq/wasm-unaudited-pq-test-oracle"]
+
 # standalone (excluded from the root workspace — see root Cargo.toml)
 [workspace]
 

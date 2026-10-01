@@ -2316,8 +2316,10 @@ pub fn sign_turn_v3(
 
     let cclerk = AgentCipherclerk::from_key_bytes(Zeroizing::new(seed));
 
-    // Canonical signing path — identical to execute_turn_for_agent.
-    crate::runtime::sign_call_forest(&mut turn, &cclerk, &fed_id);
+    // Canonical signing path — identical to execute_turn_for_agent. A build that
+    // cannot produce the ML-DSA half refuses here with the direction named, rather
+    // than trapping inside dregg-pq's abort as a message-less `unreachable`.
+    crate::runtime::sign_call_forest(&mut turn, &cclerk, &fed_id).map_err(|e| JsError::new(&e))?;
 
     let signed_postcard = postcard::to_allocvec(&turn)
         .map_err(|e| JsError::new(&format!("postcard re-encode failed: {e}")))?;

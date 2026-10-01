@@ -86,6 +86,9 @@ dregg-pq	test:unaudited_refusal	sign_without_core_aborts_loudly	twin#13 the SIGN
 dregg-pq	test:unaudited_refusal	encaps_without_core_aborts_loudly	twin#13 the ML-KEM encaps arm of the same gate
 dregg-pq	test:unaudited_refusal	decaps_without_core_aborts_loudly	twin#13 the ML-KEM decaps arm (the other direction that can FAIL, so the one besides verify where a fall-open is a verdict)
 dregg-pq	test:unaudited_refusal	explicit_opt_in_permits_and_announces	twin#13 the DECLARED bypass still works and still ANNOUNCES itself — an archive-less build (wasm / zkVM guest / dev box) must not be bricked
+dregg-pq	test:seed_signing_refusal	no_core_no_opt_in_refuses_at_keygen	twin#13 mldsa_seed_signing_refusal (what a wasm host asks so it can refuse TYPED instead of trapping in the abort) names MlDsaKeygen with no core and no opt-in, AND the sign it predicts then aborts at the gate — predicate and gate agree
+dregg-pq	test:seed_signing_refusal	require_lean_revokes_the_opt_in_and_the_predicate_says_so	twin#13 the predicate honours DREGG_REQUIRE_LEAN's revocation exactly as the gate does
+dregg-pq	test:seed_signing_refusal	declared_bypass_answers_and_the_sign_completes	twin#13 the other pole: under the declared bypass the predicate says answerable and the sign completes with a 3309-byte signature (a predicate that always refuses would brick the sdk-ts oracle)
 
 # ── twin#7b the NODE-LEVEL STRAND-ADMISSION escape + twin#12 the BEARER-AUTHORITY LEG ──────────
 dregg-node	lib	strand_admission_fails_closed_when_no_rule_decided_the_set	twin#7b POLE A with candidates present and NO F-4 admission rule having decided them the site REFUSES the raw candidate list (StrandAdmissionGateUnavailable) instead of handing tau an un-gated set; pins the vacuity short-circuit, the ONE declared bypass, that DREGG_REQUIRE_LEAN=1 revokes it, and strand_admission_bypass_allowed's own quadrants (the mutation invariant 6 cannot see)

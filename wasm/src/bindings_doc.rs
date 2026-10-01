@@ -435,7 +435,7 @@ fn publish_doc_graph(
         },
         Effect::IncrementNonce { cell: cell_id },
     ];
-    match rt.execute_turn_for_agent(agent_idx, effects, PUBLISH_FEE) {
+    match rt.execute_turn_for_agent(agent_idx, effects, PUBLISH_FEE)? {
         TurnResult::Committed { .. } => Ok(()),
         TurnResult::Rejected { reason, at_action } => Err(format!(
             "publish turn rejected: {reason} (at {at_action:?})"

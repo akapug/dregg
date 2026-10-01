@@ -220,18 +220,24 @@ The package's core (`Identity` / turns / receipts / events / organs / program)
 is **pure TypeScript** — no runtime wasm dependency. But the legacy
 `@dregg/sdk/wasm` and `@dregg/sdk/browser` entry points, and the
 differential-test oracle, import the repo's own `dregg-wasm` build
-(`file:../wasm/pkg`, a dev/peer dependency). So a fresh clone must build that
+(`file:../wasm/pkg-oracle`, a dev/peer dependency). So a fresh clone must build that
 package first, or the `.d.ts` emit step of `npm run build` fails with
 `Cannot find module 'dregg-wasm'`:
 
 ```bash
-# from the repo root — build the wasm package the SDK differentials against
-(cd wasm && wasm-pack build --target web --out-dir pkg)
-# then, in this package
-cd sdk-ts && npm ci && npm run build
+cd sdk-ts && npm run build:oracle && npm ci && npm run build
 ```
 
-In Docker, mount the **repo root** (not just `sdk-ts/`) so the `../wasm/pkg`
+`build:oracle` builds `dregg-wasm` with its `unaudited-pq-test-oracle` feature into
+`wasm/pkg-oracle` — never `wasm/pkg`, which the portal stages. A wasm32 build links no
+Lean-verified ML-DSA core, so a shipped bundle REFUSES every hybrid sign (`sign_turn_v3`
+returns `hybrid signing refused: … ml_dsa_keygen …`). The oracle must produce the Rust
+default signer's bytes for the differential, so it declares `dregg-pq`'s unaudited fips204
+fallback at build time — the wasm32 spelling of `DREGG_ALLOW_UNAUDITED_PQ=1`, the same
+declaration `test/rust-verifier` makes at run time. The feature is a compile error on any
+non-wasm32 target.
+
+In Docker, mount the **repo root** (not just `sdk-ts/`) so the `../wasm/pkg-oracle`
 path dependency resolves:
 
 ```bash
@@ -242,7 +248,7 @@ docker run --rm -v "$PWD":/repo -w /repo/sdk-ts node:22 \
 ## Tests
 
 ```bash
-npm test   # build + node --test  (needs ../wasm/pkg — see above)
+npm test   # build:oracle (pretest) + build + node --test
 ```
 
 - **Differential**: TS-built signed turns are byte-identical (postcard

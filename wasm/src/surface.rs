@@ -357,7 +357,7 @@ impl DreggRuntime {
         // path every wasm turn uses (no hand-rolled crypto).
         let federation_id = self.executor.local_federation_id;
         let cclerk = &self.agents[from_agent_idx].cclerk;
-        crate::runtime::sign_call_forest(&mut turn, cclerk, &federation_id);
+        crate::runtime::sign_call_forest(&mut turn, cclerk, &federation_id)?;
 
         match self.executor.execute(&turn, &mut self.ledger) {
             TurnResult::Committed { .. } => Ok(SurfaceOutcome::committed(format!(

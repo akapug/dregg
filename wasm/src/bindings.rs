@@ -466,7 +466,7 @@ pub fn execute_turn(
         let agent_cell_id = rt.agents[agent_index].cell_id;
         let effects = parse_effects(&raw_actions, &agent_cell_id)?;
 
-        let result = rt.execute_turn_for_agent(agent_index, effects, fee);
+        let result = rt.execute_turn_for_agent(agent_index, effects, fee)?;
         serialize_turn_result(&result)
     })
 }
@@ -504,7 +504,7 @@ pub fn execute_turn_step_by_step(
             });
         }
 
-        let result = rt.execute_turn_for_agent(agent_index, effects, fee);
+        let result = rt.execute_turn_for_agent(agent_index, effects, fee)?;
 
         // Update trace with result.
         match &result {

@@ -29,6 +29,18 @@ getrandom = { workspace = true }
 # The rand_core 0.6 CryptoRngCore that ml-kem / x25519-dalek consume.
 rand_core = "0.6"
 
+[features]
+# ⚑ A DECLARED, BUILD-TIME acceptance of the unaudited `fips204`/`ml-kem` fallback, for a
+# wasm32 TEST ORACLE ONLY. It is the wasm spelling of `DREGG_ALLOW_UNAUDITED_PQ=1`: wasm32 has
+# no process environment, so the operator's opt-in cannot be expressed there at run time, and
+# without one every ML-DSA keygen/sign in a wasm build reaches the refusal (`abort()`, which
+# wasm renders as a message-less `RuntimeError: unreachable`). A compile_error forbids it on
+# any non-wasm32 target, where the env var is the one channel. No shipped artifact enables it:
+# the only enabler is `dregg-wasm`'s `unaudited-pq-test-oracle` feature, built by sdk-ts's
+# `build:oracle` into `wasm/pkg-oracle` (never `wasm/pkg`, which the portal stages).
+# `DREGG_REQUIRE_LEAN` still revokes it, exactly as it revokes the env opt-in.
+wasm-unaudited-pq-test-oracle = []
+
 [dev-dependencies]
 # BRICK 8 gate (`tests/mldsa_lean_verify.rs`): install the leanc-native, Lean-verified REAL ML-DSA verify
 # core so `ml_dsa_verify` is routed through it and the `fips204` crate leaves the verify TCB. A dev-dep

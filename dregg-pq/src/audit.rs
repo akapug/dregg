@@ -137,7 +137,24 @@ pub(crate) fn require_verified_lean_gate() -> bool {
 /// disposition structurally different from the shipped one. Now the override is an INPUT to
 /// the same predicate production takes (the shape `coord/src/atomic.rs` was corrected to).
 pub(crate) fn unaudited_pq_accepted() -> bool {
-    unaudited_fallback_permitted() || test_override_active()
+    unaudited_fallback_permitted() || test_override_active() || wasm_test_oracle_declared()
+}
+
+#[cfg(all(feature = "wasm-unaudited-pq-test-oracle", not(target_arch = "wasm32")))]
+compile_error!(
+    "dregg-pq's `wasm-unaudited-pq-test-oracle` feature is a wasm32 TEST-ORACLE declaration and \
+     is refused on every other target: a native process declares the unaudited bypass with \
+     DREGG_ALLOW_UNAUDITED_PQ=1 (or installs the verified cores), never at build time."
+);
+
+/// The wasm32 TEST ORACLE's build-time declaration of the unaudited bypass (the
+/// `wasm-unaudited-pq-test-oracle` feature; see `Cargo.toml`). wasm32 has no environment, so
+/// [`unaudited_fallback_permitted`] is always `false` there and a wasm build that must sign
+/// (the sdk-ts differential oracle) has no other channel. `false` in every build without the
+/// feature, and the feature cannot be enabled off wasm32.
+#[inline]
+fn wasm_test_oracle_declared() -> bool {
+    cfg!(feature = "wasm-unaudited-pq-test-oracle")
 }
 
 /// FAIL-CLOSED CLASS (twin#13, the PQ sibling of `belt_gate_bypass_allowed` /
@@ -345,6 +362,9 @@ pub(crate) fn note_unaudited_answer(
         // reader is most likely to be checking what the gate does.
         let permitted_by = if unaudited_fallback_permitted() {
             "the operator set DREGG_ALLOW_UNAUDITED_PQ=1"
+        } else if wasm_test_oracle_declared() {
+            "this wasm32 build was compiled with dregg-pq's `wasm-unaudited-pq-test-oracle` \
+             feature (a test oracle; wasm32 has no environment to carry the opt-in)"
         } else {
             "dregg-pq's own #[cfg(test)] override is active (this is a dregg-pq unit-test binary, \
              which cannot link the archive at all)"

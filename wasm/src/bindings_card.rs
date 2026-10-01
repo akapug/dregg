@@ -223,7 +223,7 @@ impl CardWorld {
             },
             Effect::IncrementNonce { cell: cell_id },
         ];
-        match self.rt.execute_turn_for_agent(0, effects, 10_000) {
+        match self.rt.execute_turn_for_agent(0, effects, 10_000)? {
             TurnResult::Committed { .. } => Ok(()),
             TurnResult::Rejected { reason, at_action } => {
                 Err(format!("turn rejected: {reason} (at {at_action:?})"))
@@ -474,7 +474,7 @@ impl InspectorWorld {
             },
             Effect::IncrementNonce { cell: cell_id },
         ];
-        match self.rt.execute_turn_for_agent(0, effects, 10_000) {
+        match self.rt.execute_turn_for_agent(0, effects, 10_000)? {
             TurnResult::Committed { .. } => Ok(()),
             TurnResult::Rejected { reason, at_action } => {
                 Err(format!("turn rejected: {reason} (at {at_action:?})"))
@@ -729,7 +729,7 @@ impl TallyWorld {
             },
             Effect::IncrementNonce { cell: cell_id },
         ];
-        match self.rt.execute_turn_for_agent(0, effects, 10_000) {
+        match self.rt.execute_turn_for_agent(0, effects, 10_000)? {
             TurnResult::Committed { .. } => Ok(()),
             TurnResult::Rejected { reason, at_action } => {
                 Err(format!("turn rejected: {reason} (at {at_action:?})"))
