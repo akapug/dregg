@@ -590,25 +590,71 @@ mod tests {
             .expect("authored Galley policy")
     }
 
+    /// The authored manifest's own `scope` object.
+    fn authored_scope(manifest: &[u8]) -> serde_json::Value {
+        let parsed: serde_json::Value =
+            serde_json::from_slice(manifest).expect("authored manifest is JSON");
+        parsed["scope"].clone()
+    }
+
     fn authored_world(manifest: &[u8]) -> PoaWorldIdentityV2 {
-        // `content_session` and `federation_id` must be the manifest's own scope
-        // or Lean refuses; the activation digest is only required to be nonzero.
+        // `content_session`, `federation_id` and `content_epoch` must be the manifest's own
+        // scope or Lean refuses (`Manifest.matchesWorldB`); the activation digest is only
+        // required to be nonzero.
+        //
+        // ⚑ READ FROM THE ARTIFACT, never typed beside it. This spelled the federation as the
+        // literal `4ea83e8e…` — the DEAD three-validator federation — from its birth commit
+        // (`fff0e8df7`, 08-05), the same commit that scoped the authored manifest to the live
+        // solo federation `70b7fa4c…`. So `authored_content_opens_the_galley_organ` was red from
+        // the day it landed ("manifest was rejected by Lean": `matchesWorldB` false), and it read
+        // as a Lean/artifact drift. That the scope is the RIGHT federation is asserted separately
+        // (`authored_manifest_is_scoped_to_the_shipped_deployment`), not assumed here.
+        let scope = authored_scope(manifest);
         PoaWorldIdentityV2::new(
             parse_hex32(
-                "4ea83e8ebf4f590eace11c9ffd6d6607a4afb15e5a00cd7b9e04890dab6bfc5a",
+                scope["federation_id"].as_str().expect("scope.federation_id"),
                 "federation",
             )
             .unwrap(),
             sha256(manifest),
             [0xa1; 32],
             parse_hex32(
-                "504f412d47414c4c45592d310000000000000000000000000000000000000000",
+                scope["content_session"].as_str().expect("scope.content_session"),
                 "session",
             )
             .unwrap(),
-            1,
+            scope["content_epoch"].as_u64().expect("scope.content_epoch"),
         )
         .expect("authored Galley world")
+    }
+
+    /// The authored content is scoped to the deployment it ships in: the manifest's federation is
+    /// `poa/deployments/epoch-1/poa-devnet.json`'s, its session is the `POA-GALLEY-1` tag, and the
+    /// embedded policy names the same deployment and federation. Re-pointing the deployment
+    /// without re-emitting `poa/artifacts/galley/epoch-1/` (`scripts/poa-galley-content.py emit`)
+    /// reds here.
+    #[test]
+    fn authored_manifest_is_scoped_to_the_shipped_deployment() {
+        let deployment: serde_json::Value = serde_json::from_slice(
+            &fs::read(repo().join("poa/deployments/epoch-1/poa-devnet.json"))
+                .expect("shipped deployment manifest"),
+        )
+        .expect("deployment manifest is JSON");
+        let manifest = authored_manifest();
+        let scope = authored_scope(&manifest);
+        assert_eq!(
+            scope["federation_id"], deployment["federation_id"],
+            "the Galley manifest must be scoped to the shipped deployment's federation"
+        );
+        assert_eq!(
+            scope["content_session"],
+            "504f412d47414c4c45592d310000000000000000000000000000000000000000",
+            "the Galley content session is the zero-padded ASCII tag `POA-GALLEY-1`"
+        );
+        let policy: serde_json::Value =
+            serde_json::from_slice(&authored_policy()).expect("policy is JSON");
+        assert_eq!(policy["federation_id"], deployment["federation_id"]);
+        assert_eq!(policy["deployment_id"], deployment["deployment_id"]);
     }
 
     #[test]
