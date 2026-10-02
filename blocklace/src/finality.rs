@@ -4,7 +4,7 @@
 //! blocks, where each block contains hash-pointers to its predecessors. Each
 //! participant maintains a local view that grows monotonically via CRDT union-merge.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
@@ -2190,86 +2190,68 @@ impl Blocklace {
             })?;
         }
 
-        // (2)+(3) Insert in topological (closure-respecting) order, rejecting a
-        // dangling predecessor and detecting equivocation as we go. We loop,
-        // admitting every block whose predecessors are all already present, until
-        // either everything is placed or a round makes no progress (⇒ a dangling
-        // predecessor, i.e. a non-closed checkpoint — rejected).
-        let mut remaining = pending;
-        while !remaining.is_empty() {
-            let mut progressed = false;
-            let mut still_pending: Vec<Block> = Vec::with_capacity(remaining.len());
-
-            for block in remaining.into_iter() {
-                let id = block.id();
-                if lace.blocks.contains_key(&id) {
-                    // Duplicate within the checkpoint — idempotent, drop it.
-                    progressed = true;
-                    continue;
-                }
-                let closed = block
-                    .predecessors
-                    .iter()
-                    .all(|pred| lace.blocks.contains_key(pred));
-                if !closed {
-                    still_pending.push(block);
-                    continue;
-                }
-
-                // Closure satisfied: run the same equivocation gate as
-                // receive_block, then insert. First detection pins the pair
-                // (the CM Alg. 1:5 evidence floor), mirroring `insert_checked`
-                // — so a restart re-derives a carried-evidence frontier, not a
-                // starved one. Which pair gets pinned may differ across
-                // re-derivations (map iteration order); any pair satisfies the
-                // existential exclusion predicate identically.
-                if let Some(proof) = lace.detect_equivocation(&block) {
-                    if lace.equivocators.insert(block.creator) {
-                        lace.tips
-                            .insert(block.creator, CreatorTips::pair(proof.block_a.id(), id));
-                    }
-                    lace.blocks.insert(id, block);
-                } else {
-                    if !lace.equivocators.contains(&block.creator) {
-                        let should_update_tip = match lace.tips.get(&block.creator) {
-                            Some(current) => lace.blocks[&current.primary()].seq < block.seq,
-                            None => true,
-                        };
-                        if should_update_tip {
-                            lace.tips.insert(block.creator, CreatorTips::One(id));
-                        }
-                    }
-                    if block.payload == Payload::Ack {
-                        for pred in &block.predecessors {
-                            lace.finality.record_ack(*pred, block.creator);
-                        }
-                    }
-                    lace.blocks.insert(id, block);
-                }
-                progressed = true;
+        // (2)+(3) Consume only indexed ready rows, ordered by the exact
+        // (legacy scan round, original index) at which the old loop would
+        // encounter them. A duplicate is eligible as soon as its ID was
+        // actually inserted, even if that duplicate's parents are unresolved.
+        let mut frontier = CheckpointPlacementFrontier::new(
+            pending.iter().map(|block| (block.id(), block.predecessors.as_slice())),
+        );
+        let mut remaining: Vec<Option<Block>> = pending.into_iter().map(Some).collect();
+        while let Some((round, index)) = frontier.pop() {
+            let block = remaining[index].take().expect("ready row was not consumed");
+            let id = block.id();
+            if lace.blocks.contains_key(&id) {
+                // Duplicate within the checkpoint — idempotent, drop it.
+                continue;
             }
+            debug_assert!(block.predecessors.iter().all(|pred| lace.blocks.contains_key(pred)));
 
-            if !progressed {
-                // No block in this round could be placed ⇒ at least one has a
-                // predecessor that exists nowhere in the checkpoint: a dangling
-                // predecessor / non-closed view. Reject the whole checkpoint
-                // (the live receive path returns MissingPredecessor here).
-                let example = still_pending
-                    .first()
-                    .map(|b| {
-                        format!(
-                            "creator={:02x}{:02x}.., seq={}",
-                            b.creator[0], b.creator[1], b.seq
-                        )
-                    })
-                    .unwrap_or_default();
-                return Err(format!(
-                    "checkpoint is not causally closed: {} block(s) have a dangling \
-                     predecessor (first: {example})",
-                    still_pending.len()
-                ));
+            // Closure satisfied: run the same equivocation gate as
+            // receive_block, then insert. First detection pins the pair
+            // (the CM Alg. 1:5 evidence floor), mirroring `insert_checked`
+            // — so a restart re-derives a carried-evidence frontier, not a
+            // starved one. Which pair gets pinned may differ across
+            // re-derivations (map iteration order); any pair satisfies the
+            // existential exclusion predicate identically.
+            if let Some(proof) = lace.detect_equivocation(&block) {
+                if lace.equivocators.insert(block.creator) {
+                    lace.tips
+                        .insert(block.creator, CreatorTips::pair(proof.block_a.id(), id));
+                }
+                lace.blocks.insert(id, block);
+            } else {
+                if !lace.equivocators.contains(&block.creator) {
+                    let should_update_tip = match lace.tips.get(&block.creator) {
+                        Some(current) => lace.blocks[&current.primary()].seq < block.seq,
+                        None => true,
+                    };
+                    if should_update_tip {
+                        lace.tips.insert(block.creator, CreatorTips::One(id));
+                    }
+                }
+                if block.payload == Payload::Ack {
+                    for pred in &block.predecessors {
+                        lace.finality.record_ack(*pred, block.creator);
+                    }
+                }
+                lace.blocks.insert(id, block);
             }
-            remaining = still_pending;
+            frontier.admitted(round, index);
+        }
+        if let Some(index) = frontier.first_residual() {
+            // The old loop would make no progress in its next round. Keep
+            // its first residual row, count and exact refusal wording.
+            let block = remaining[index].as_ref().expect("residual row retained");
+            let example = format!(
+                "creator={:02x}{:02x}.., seq={}",
+                block.creator[0], block.creator[1], block.seq
+            );
+            return Err(format!(
+                "checkpoint is not causally closed: {} block(s) have a dangling \
+                 predecessor (first: {example})",
+                frontier.left
+            ));
         }
 
         // Fold the checkpoint's self-asserted equivocators in as a LOWER bound:
@@ -2375,6 +2357,112 @@ pub struct CheckpointData {
     pub ordered_block_ids: Vec<BlockId>,
     /// Block IDs that have been attested by quorum.
     pub attested_block_ids: Vec<BlockId>,
+}
+
+/// Index the old checkpoint scan without changing its admission order. A ready
+/// row is keyed by the round and original position at which the old scan would
+/// first encounter it. No row is discarded or trusted on account of this index.
+struct CheckpointPlacementFrontier<Id> {
+    ids: Vec<Id>,
+    unresolved: Vec<usize>,
+    waiters: HashMap<Id, Vec<usize>>,
+    duplicates: HashMap<Id, Vec<usize>>,
+    ready_after: Vec<usize>,
+    queued: Vec<Option<(usize, usize)>>,
+    ready: BTreeSet<(usize, usize)>,
+    consumed: Vec<bool>,
+    left: usize,
+}
+
+impl<Id: Copy + Eq + std::hash::Hash> CheckpointPlacementFrontier<Id> {
+    fn new<'a>(rows: impl Iterator<Item = (Id, &'a [Id])>) -> Self
+    where
+        Id: 'a,
+    {
+        let mut ids = Vec::new();
+        let mut unresolved = Vec::new();
+        let mut waiters: HashMap<Id, Vec<usize>> = HashMap::new();
+        let mut duplicates: HashMap<Id, Vec<usize>> = HashMap::new();
+        let mut ready = BTreeSet::new();
+        for (index, (id, predecessors)) in rows.enumerate() {
+            ids.push(id);
+            duplicates.entry(id).or_default().push(index);
+            let unique: HashSet<Id> = predecessors.iter().copied().collect();
+            unresolved.push(unique.len());
+            if unique.is_empty() {
+                ready.insert((0, index));
+            }
+            for predecessor in unique {
+                waiters.entry(predecessor).or_default().push(index);
+            }
+        }
+        let left = ids.len();
+        let queued = unresolved
+            .iter()
+            .enumerate()
+            .map(|(index, count)| (*count == 0).then_some((0, index)))
+            .collect();
+        Self {
+            ids,
+            unresolved,
+            waiters,
+            duplicates,
+            ready_after: vec![0; left],
+            queued,
+            ready,
+            consumed: vec![false; left],
+            left,
+        }
+    }
+
+    fn schedule(&mut self, index: usize, round: usize) {
+        if self.consumed[index] {
+            return;
+        }
+        let candidate = (round, index);
+        if let Some(previous) = self.queued[index] {
+            if previous <= candidate {
+                return;
+            }
+            self.ready.remove(&previous);
+        }
+        self.queued[index] = Some(candidate);
+        self.ready.insert(candidate);
+    }
+
+    fn pop(&mut self) -> Option<(usize, usize)> {
+        let (round, index) = self.ready.pop_first()?;
+        self.queued[index] = None;
+        self.consumed[index] = true;
+        self.left -= 1;
+        Some((round, index))
+    }
+
+    /// Wake closure waiters only after actual insertion. A same-ID row is
+    /// idempotent even if its own parents are unresolved, just as in the old
+    /// scan; its duplicate queue can therefore advance ahead of closure.
+    fn admitted(&mut self, round: usize, index: usize) {
+        let id = self.ids[index];
+        if let Some(waiters) = self.waiters.remove(&id) {
+            for dependent in waiters {
+                let first_round = round + usize::from(dependent <= index);
+                self.ready_after[dependent] = self.ready_after[dependent].max(first_round);
+                self.unresolved[dependent] -= 1;
+                if self.unresolved[dependent] == 0 {
+                    self.schedule(dependent, self.ready_after[dependent]);
+                }
+            }
+        }
+        if let Some(duplicates) = self.duplicates.remove(&id) {
+            for duplicate in duplicates {
+                self.schedule(duplicate, round + usize::from(duplicate <= index));
+            }
+        }
+    }
+
+    fn first_residual(&self) -> Option<usize> {
+        self.consumed.iter().position(|consumed| !consumed)
+    }
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -2819,6 +2907,306 @@ mod signer_memo_tests {
         assert!(
             std::sync::Arc::ptr_eq(&handle, test_committee::signer(41).pq_handle()),
             "the disseminator's identity was re-derived"
+        );
+    }
+}
+
+#[cfg(test)]
+mod checkpoint_frontier_tests {
+    use super::*;
+
+    fn key(seed: u8) -> SigningKey {
+        SigningKey::from_bytes(&[seed; 32])
+    }
+
+    // Classical signature only: from_checkpoint authenticates Ed25519 exactly
+    // as before; no synthetic signature or PQ backend is substituted.
+    fn signed(key: &SigningKey, seq: u64, payload: Payload, predecessors: Vec<BlockId>) -> Block {
+        let creator = key.verifying_key().to_bytes();
+        let signature = key
+            .sign(&Block::signing_content(&creator, seq, &payload, &predecessors))
+            .to_bytes();
+        Block {
+            creator,
+            ed25519: creator,
+            seq,
+            payload,
+            predecessors,
+            signature,
+            pq_signature: Vec::new(),
+        }
+    }
+
+    fn checkpoint(blocks: &[Block]) -> CheckpointData {
+        CheckpointData {
+            blocks: blocks.iter().map(Block::to_bytes).collect(),
+            tips: HashMap::new(),
+            equivocators: Vec::new(),
+            ordered_block_ids: Vec::new(),
+            attested_block_ids: Vec::new(),
+        }
+    }
+
+    // Frozen test-only reference for the original full-scan admission order.
+    // Return the trace and the actual number of row visits (including blocked
+    // rows) as well as the final DAG; never use this on the production path.
+    fn legacy(checkpoint: &CheckpointData, self_key: SigningKey) -> Result<(Blocklace, Vec<usize>, usize), String> {
+        let mut lace = Blocklace::new(self_key, 2);
+        let mut pending = Vec::new();
+        for (index, bytes) in checkpoint.blocks.iter().enumerate() {
+            let block = Block::from_bytes(bytes)
+                .ok_or_else(|| "failed to deserialize block from checkpoint".to_string())?;
+            pending.push((index, block));
+        }
+        for (_, block) in &pending {
+            block.verify_signature().map_err(|error| {
+                format!(
+                    "checkpoint block failed signature authentication: {error:?} \
+                     (creator={:02x}{:02x}.., seq={})",
+                    block.creator[0], block.creator[1], block.seq
+                )
+            })?;
+        }
+        let mut trace = Vec::new();
+        let mut visits = 0;
+        while !pending.is_empty() {
+            let mut progressed = false;
+            let mut next = Vec::new();
+            for (index, block) in pending {
+                visits += 1;
+                let id = block.id();
+                if lace.blocks.contains_key(&id) {
+                    trace.push(index);
+                    progressed = true;
+                    continue;
+                }
+                if !block.predecessors.iter().all(|pred| lace.blocks.contains_key(pred)) {
+                    next.push((index, block));
+                    continue;
+                }
+                trace.push(index);
+                if let Some(proof) = lace.detect_equivocation(&block) {
+                    if lace.equivocators.insert(block.creator) {
+                        lace.tips.insert(block.creator, CreatorTips::pair(proof.block_a.id(), id));
+                    }
+                    lace.blocks.insert(id, block);
+                } else {
+                    if !lace.equivocators.contains(&block.creator) {
+                        let should_update_tip = match lace.tips.get(&block.creator) {
+                            Some(current) => lace.blocks[&current.primary()].seq < block.seq,
+                            None => true,
+                        };
+                        if should_update_tip {
+                            lace.tips.insert(block.creator, CreatorTips::One(id));
+                        }
+                    }
+                    if block.payload == Payload::Ack {
+                        for pred in &block.predecessors {
+                            lace.finality.record_ack(*pred, block.creator);
+                        }
+                    }
+                    lace.blocks.insert(id, block);
+                }
+                progressed = true;
+            }
+            if !progressed {
+                let first = &next[0].1;
+                return Err(format!(
+                    "checkpoint is not causally closed: {} block(s) have a dangling \
+                     predecessor (first: creator={:02x}{:02x}.., seq={})",
+                    next.len(), first.creator[0], first.creator[1], first.seq
+                ));
+            }
+            pending = next;
+        }
+        for creator in &checkpoint.equivocators {
+            if lace.equivocators.insert(*creator)
+                && !matches!(lace.tips.get(creator), Some(CreatorTips::Pair(_, _)))
+            {
+                lace.tips.remove(creator);
+            }
+        }
+        lace.finality.ordering.ordered = checkpoint.ordered_block_ids.clone();
+        lace.finality.ordering.attested = checkpoint.attested_block_ids.iter().copied().collect();
+        let self_creator = lace.self_creator();
+        if let Some(id) = lace.tips.get(&self_creator).map(CreatorTips::primary)
+            && let Some(block) = lace.blocks.get(&id)
+        {
+            lace.self_seq = block.seq;
+        }
+        Ok((lace, trace, visits))
+    }
+
+    fn indexed_trace(blocks: &[Block]) -> (Vec<usize>, usize) {
+        let mut frontier = CheckpointPlacementFrontier::new(
+            blocks.iter().map(|block| (block.id(), block.predecessors.as_slice())),
+        );
+        let mut seen = HashSet::new();
+        let mut trace = Vec::new();
+        while let Some((round, index)) = frontier.pop() {
+            trace.push(index);
+            if seen.insert(blocks[index].id()) {
+                frontier.admitted(round, index);
+            }
+        }
+        (trace, frontier.left)
+    }
+
+    fn same_state(actual: &Blocklace, legacy: &Blocklace) {
+        assert_eq!(actual.blocks, legacy.blocks);
+        assert_eq!(actual.tips, legacy.tips);
+        assert_eq!(actual.equivocators, legacy.equivocators);
+        assert_eq!(actual.finality.ack_counts, legacy.finality.ack_counts);
+        assert_eq!(actual.finality.ordering.bilateral, legacy.finality.ordering.bilateral);
+        assert_eq!(actual.finality.ordering.attested, legacy.finality.ordering.attested);
+        assert_eq!(actual.finality.ordering.ordered, legacy.finality.ordering.ordered);
+        assert_eq!(actual.self_seq, legacy.self_seq);
+        assert_eq!(actual.consensus_time_frontier_v1, legacy.consensus_time_frontier_v1);
+    }
+
+    #[test]
+    fn reverse_chain_preserves_legacy_trace_and_state_without_triangular_visits() {
+        let signer = key(3);
+        let self_key = key(9);
+        let mut chain = Vec::new();
+        let mut predecessor = Vec::new();
+        for seq in 1..=12 {
+            let block = signed(&signer, seq, Payload::Data(vec![seq as u8]), predecessor);
+            predecessor = vec![block.id()];
+            chain.push(block);
+        }
+        chain.reverse();
+        let checkpoint = checkpoint(&chain);
+        let (old, trace, visits) = legacy(&checkpoint, self_key.clone()).unwrap();
+        let (indexed, residual) = indexed_trace(&chain);
+        let restored = Blocklace::from_checkpoint(&checkpoint, self_key, 2).unwrap();
+        assert_eq!(trace, indexed);
+        assert_eq!(trace, (0..chain.len()).rev().collect::<Vec<_>>());
+        assert_eq!(visits, chain.len() * (chain.len() + 1) / 2);
+        assert_eq!(indexed.len(), chain.len());
+        assert_eq!(residual, 0);
+        same_state(&restored, &old);
+    }
+
+    #[test]
+    fn interleaving_duplicate_ack_forks_and_metadata_keep_legacy_order() {
+        let a = key(4);
+        let b = key(5);
+        let self_key = key(9);
+        let root = signed(&a, 1, Payload::Data(vec![1]), Vec::new());
+        let fork = signed(&a, 1, Payload::Data(vec![2]), Vec::new());
+        let ack = signed(&b, 1, Payload::Ack, vec![root.id(), fork.id()]);
+        let child = signed(&a, 2, Payload::Data(vec![3]), vec![ack.id()]);
+        // Child waits past its old index; the late root unlocks an earlier
+        // duplicate before the next round and another row in the next round.
+        let rows = vec![child, ack, root.clone(), fork, root];
+        let mut checkpoint = checkpoint(&rows);
+        checkpoint.equivocators.push(b.verifying_key().to_bytes());
+        checkpoint.ordered_block_ids = vec![rows[0].id(), BlockId([42; 32])];
+        checkpoint.attested_block_ids = vec![rows[1].id()];
+        let (old, trace, _) = legacy(&checkpoint, self_key.clone()).unwrap();
+        let (indexed, residual) = indexed_trace(&rows);
+        let restored = Blocklace::from_checkpoint(&checkpoint, self_key, 2).unwrap();
+        assert_eq!(trace, indexed);
+        assert_eq!(trace, vec![2, 3, 4, 1, 0]);
+        assert_eq!(residual, 0);
+        same_state(&restored, &old);
+        assert!(restored.is_equivocator(&a.verifying_key().to_bytes()));
+        assert_eq!(restored.finality.ack_counts[&rows[2].id()].len(), 1);
+    }
+
+    #[test]
+    fn forward_ready_rows_keep_current_round_while_backward_waits_next_round() {
+        let signer = key(11);
+        let root_a = signed(&signer, 1, Payload::Data(vec![1]), Vec::new());
+        let root_b = signed(&signer, 1, Payload::Data(vec![2]), Vec::new());
+        let backward = signed(&signer, 2, Payload::Ack, vec![root_b.id()]);
+        let forward = signed(&signer, 3, Payload::Data(vec![3]), vec![root_a.id()]);
+        let rows = vec![root_a, backward, forward, root_b];
+        let checkpoint = checkpoint(&rows);
+        let self_key = key(9);
+        let (old, trace, _) = legacy(&checkpoint, self_key.clone()).unwrap();
+        let (indexed, residual) = indexed_trace(&rows);
+        let restored = Blocklace::from_checkpoint(&checkpoint, self_key, 2).unwrap();
+        assert_eq!(trace, vec![0, 2, 3, 1]);
+        assert_eq!(trace, indexed);
+        assert_eq!(residual, 0);
+        same_state(&restored, &old);
+    }
+
+    #[test]
+    fn valid_prefix_then_dangling_refuses_with_exact_legacy_first_and_count() {
+        let signer = key(6);
+        let self_key = key(9);
+        let root = signed(&signer, 1, Payload::Data(vec![1]), Vec::new());
+        let dangling = signed(&signer, 2, Payload::Ack, vec![BlockId([99; 32])]);
+        let later = signed(&signer, 3, Payload::Data(vec![3]), vec![dangling.id()]);
+        let rows = vec![later, root, dangling];
+        let checkpoint = checkpoint(&rows);
+        let old = legacy(&checkpoint, self_key.clone()).err().expect("legacy refusal");
+        let actual = Blocklace::from_checkpoint(&checkpoint, self_key, 2)
+            .err()
+            .expect("indexed refusal");
+        assert_eq!(old, actual);
+        assert_eq!(indexed_trace(&rows).1, 2);
+    }
+
+    #[test]
+    fn cycle_and_blocked_scheduler_model_never_early_refuses_or_fabricates_signatures() {
+        let a = BlockId([1; 32]);
+        let b = BlockId([2; 32]);
+        let c = BlockId([3; 32]);
+        // A signed cryptographic ID cannot straightforwardly self-reference.
+        // This is a scheduler-only graph model, not a fabricated signed cycle.
+        let rows = [(a, vec![b]), (b, vec![a]), (c, vec![])];
+        let mut frontier = CheckpointPlacementFrontier::new(
+            rows.iter().map(|(id, predecessors)| (*id, predecessors.as_slice())),
+        );
+        assert_eq!(frontier.pop(), Some((0, 2)));
+        frontier.admitted(0, 2);
+        assert_eq!(frontier.pop(), None);
+        assert_eq!(frontier.first_residual(), Some(0));
+        assert_eq!(frontier.left, 2);
+
+        // A duplicate ID becomes droppable after its ID was inserted, even
+        // when the duplicate occurrence still has an unresolved model edge.
+        let rows = [(a, vec![b]), (b, vec![]), (a, vec![c])];
+        let mut frontier = CheckpointPlacementFrontier::new(
+            rows.iter().map(|(id, predecessors)| (*id, predecessors.as_slice())),
+        );
+        assert_eq!(frontier.pop(), Some((0, 1)));
+        frontier.admitted(0, 1);
+        assert_eq!(frontier.pop(), Some((1, 0)));
+        frontier.admitted(1, 0);
+        assert_eq!(frontier.pop(), Some((1, 2)));
+        assert_eq!(frontier.left, 0);
+    }
+
+    #[test]
+    fn malformed_or_bad_signature_refuses_before_any_checkpoint_placement() {
+        let signer = key(7);
+        let self_key = key(9);
+        let valid = signed(&signer, 1, Payload::Data(vec![1]), Vec::new());
+        let mut bad = signed(&signer, 2, Payload::Ack, vec![valid.id()]);
+        bad.signature[0] ^= 1;
+        let signed_checkpoint = checkpoint(&[valid.clone(), bad]);
+        assert_eq!(
+            legacy(&signed_checkpoint, self_key.clone())
+                .err()
+                .expect("legacy signature refusal"),
+            Blocklace::from_checkpoint(&signed_checkpoint, self_key.clone(), 2)
+                .err()
+                .expect("indexed signature refusal")
+        );
+        let mut malformed = checkpoint(&[valid]);
+        malformed.blocks.push(vec![0xFF]);
+        assert_eq!(
+            legacy(&malformed, self_key.clone())
+                .err()
+                .expect("legacy decode refusal"),
+            Blocklace::from_checkpoint(&malformed, self_key, 2)
+                .err()
+                .expect("indexed decode refusal")
         );
     }
 }
