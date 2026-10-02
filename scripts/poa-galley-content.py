@@ -40,8 +40,15 @@ else that could appear here, so this script REFUSES any authored byte outside
 printable ASCII rather than emitting something whose two encoders disagree.
 
 USAGE
-  scripts/poa-galley-content.py emit    # (re)write the three artifacts
-  scripts/poa-galley-content.py check   # recompute and diff; exit 1 on drift
+  scripts/poa-galley-content.py emit       # (re)write the three artifacts
+  scripts/poa-galley-content.py check      # recompute and diff; exit 1 on drift
+  scripts/poa-galley-content.py self-test  # the check can go red: a one-byte edit to each
+                                           # file in a scratch copy must DRIFT, the untouched
+                                           # copy must pass (the real artifacts are not touched)
+
+`check` is a `scripts/local-gates.sh` row (`poa-galley-content`, with `-red` = self-test).
+Until 2026-10-01 its only caller was `scripts/test-poa.sh` via a workflow nobody ran, and
+the artifacts sat drifted (rules_digest) for eight weeks.
 """
 
 from __future__ import annotations
@@ -264,12 +271,66 @@ def assemble() -> dict[str, str]:
     }
 
 
+def drifted(files: dict[str, str], out_dir: str) -> list[str]:
+    """Every artifact whose on-disk bytes are not exactly `files[name]`."""
+    findings = []
+    for name, body in files.items():
+        path = os.path.join(out_dir, name)
+        try:
+            with open(path, "rb") as handle:
+                on_disk = handle.read()
+        except FileNotFoundError:
+            findings.append(f"MISSING {name}")
+            continue
+        if on_disk != body.encode("utf-8"):
+            findings.append(f"DRIFT {name}")
+    return findings
+
+
+def self_test(files: dict[str, str]) -> int:
+    """The headline of `check` is "no drift" -- a negative assertion a broken reader passes
+    just as happily.  Prove both directions on a scratch copy of the emitted bytes."""
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="poa-galley-selftest-") as tmp:
+        for name, body in files.items():
+            with open(os.path.join(tmp, name), "w", encoding="utf-8", newline="") as handle:
+                handle.write(body)
+        control = drifted(files, tmp)
+        if control:
+            print(f"SELF-TEST FAIL: an exact copy reads as drifted: {control}")
+            return 1
+        print("control: exact copy passes")
+        for name, body in files.items():
+            path = os.path.join(tmp, name)
+            raw = bytearray(body.encode("utf-8"))
+            at = next(i for i in range(40, len(raw)) if chr(raw[i]) in "0123456789abcdef")
+            raw[at] = ord("1") if raw[at] != ord("1") else ord("2")
+            with open(path, "wb") as handle:
+                handle.write(bytes(raw))
+            found = drifted(files, tmp)
+            if found != [f"DRIFT {name}"]:
+                print(f"SELF-TEST FAIL: a one-byte edit to {name} reported {found}")
+                return 1
+            print(f"red: one-byte edit to {name} -> DRIFT {name}")
+            with open(path, "w", encoding="utf-8", newline="") as handle:
+                handle.write(body)
+        os.remove(os.path.join(tmp, "policy.json"))
+        if drifted(files, tmp) != ["MISSING policy.json"]:
+            print("SELF-TEST FAIL: a deleted artifact was not reported MISSING")
+            return 1
+        print("red: deleted policy.json -> MISSING")
+    print(f"self-test: control passes, {len(files)}/{len(files)} one-byte edits and a deletion refused")
+    return 0
+
+
 def main() -> int:
     mode = sys.argv[1] if len(sys.argv) > 1 else "emit"
-    if mode not in {"emit", "check"}:
+    if mode not in {"emit", "check", "self-test"}:
         print(__doc__)
         return 2
     files = assemble()
+    if mode == "self-test":
+        return self_test(files)
     if mode == "emit":
         os.makedirs(OUT_DIR, exist_ok=True)
         for name, body in files.items():
@@ -280,20 +341,10 @@ def main() -> int:
         print(f"content_root  = {sha256_hex(files['manifest.json'].encode('utf-8'))}")
         print(f"component_sha = {sha256_hex(files['policy.json'].encode('utf-8'))}")
         return 0
-    drift = 0
-    for name, body in files.items():
-        path = os.path.join(OUT_DIR, name)
-        try:
-            with open(path, "rb") as handle:
-                on_disk = handle.read()
-        except FileNotFoundError:
-            print(f"MISSING {name}")
-            drift += 1
-            continue
-        if on_disk != body.encode("utf-8"):
-            print(f"DRIFT {name}")
-            drift += 1
-    if drift:
+    findings = drifted(files, OUT_DIR)
+    for line in findings:
+        print(line)
+    if findings:
         print("re-run `scripts/poa-galley-content.py emit`; a signed activation "
               "must be re-issued because content_root changes")
         return 1

@@ -856,7 +856,7 @@ mod tests {
         for wrong in [shipped - 1, shipped + 1] {
             let mut args = args(&deployment);
             args.expected_activation_counter = wrong;
-            let error = initialize_poa_signal_genesis_with(&args, fixture_evaluator)
+            let error = initialize_poa_signal_genesis_with(&args, lean_evaluator)
                 .expect_err("a counter that is not the signed one must REFUSE activation");
             assert!(
                 error.contains(&format!("counter {shipped} != expected {wrong}")),
@@ -865,21 +865,19 @@ mod tests {
             );
         }
 
-        // ...and the SHIPPED counter gets past this leg, so the assertions above are a
-        // discrimination and not a gate that refuses everything.
+        // ...and the SHIPPED counter INSTALLS, so the assertions above are a discrimination and
+        // not a gate that refuses everything.
         //
-        // ⚠ Deliberately "does not fail ON THE COUNTER" rather than "installs". The fixture
-        // evaluator below is byte-pinned to one historical deployment/content tuple, while this
-        // leg deliberately reads the currently shipped signed envelope. Coupling the anti-rollback
-        // tooth to a fixture regeneration would take it red for an unrelated reason and make the
-        // discrimination above harder to read.
-        let shipped_run = initialize_poa_signal_genesis_with(&args(&deployment), fixture_evaluator);
-        if let Err(error) = &shipped_run {
-            assert!(
-                !error.contains("!= expected"),
-                "the SHIPPED counter must pass the anti-rollback comparison — if it does not, the \
-                 two refusals above prove nothing about the counter. Got: {error}"
-            );
+        // (This used to accept "does not fail ON THE COUNTER" rather than "installs", because the
+        // evaluator here was a byte-pinned stand-in for one historical tuple. It is the linked
+        // Lean evaluator now — see `lean_evaluator` — so the shipped envelope must go all the way.)
+        let shipped_run = initialize_poa_signal_genesis_with(&args(&deployment), lean_evaluator);
+        match &shipped_run {
+            Ok(report) => assert_eq!(report.outcome, PoaSignalGenesisInitOutcome::Installed),
+            Err(error) => panic!(
+                "the SHIPPED counter must install — if it does not, the two refusals above prove \
+                 nothing about the counter. Got: {error}"
+            ),
         }
     }
 
@@ -921,25 +919,51 @@ mod tests {
         assert!(error.contains("public target is the answer"), "{error}");
     }
 
-    fn fixture_evaluator(wire: &str) -> Result<String, String> {
-        let expected =
-            include_str!("../../dregg-lean-ffi/tests/fixtures/poa-network-genesis-input-v1.json")
-                .trim_end();
-        if wire != expected {
-            return Err("generated ceremony wire differs from frozen Lean input".into());
+    /// The evaluator these ceremony tests hand `initialize_poa_signal_genesis_with`: the LINKED
+    /// Lean export, demanded (it panics naming the capability when absent, never prints `ok`).
+    ///
+    /// ⚑ THIS WAS A FROZEN LOOKUP TABLE until 2026-10-01: `wire == include_str!(…input-v1.json)`
+    /// ⇒ `include_str!(…output-v1.json)`. The wire is built from the LIVE deployment
+    /// (`poa/deployments/epoch-1` + the signed POAG1 bundle) and the table was FROZEN, so every
+    /// curator counter bump re-redded these tests — and they sat red from 08-04 to 10-01 while the
+    /// table said counter 2 and the bundle said 12. A stand-in for Lean that only knows one answer
+    /// is a second source of truth; the frozen fixture is now a Lean RENDER with its own gate
+    /// (`scripts/check-poa-genesis-fixture.sh`), and these tests ask Lean itself. Lean's decoder
+    /// is canonical (re-encode-equal, trailing byte / unknown field / uppercase digest refused),
+    /// so "the node encoder emits Lean's exact bytes" is still what an accept here means.
+    fn lean_evaluator(wire: &str) -> Result<String, String> {
+        assert!(
+            dregg_lean_ffi::demand_lean(
+                poa_network_genesis_available(),
+                "the Lean network-genesis export (dregg_poa_network_genesis)",
+            ),
+            "PoA Signal genesis ceremony tests need the linked Lean evaluator"
+        );
+        match evaluate_poa_network_genesis(wire)? {
+            PoaNetworkGenesisVerdict::Emitted(output) => Ok(output),
+            PoaNetworkGenesisVerdict::Rejected => {
+                Err("Lean refused the authenticated PoA Signal genesis tuple".into())
+            }
         }
-        Ok(
-            include_str!("../../dregg-lean-ffi/tests/fixtures/poa-network-genesis-output-v1.json")
-                .trim_end()
-                .to_owned(),
+    }
+
+    /// The live deployment's federation id, read from the manifest the ceremony consumes. The
+    /// genesis authority IS this id (`AuthorizedGenesis.output_authority_exact`).
+    fn deployment_federation(deployment: &PreparedDeployment) -> [u8; 32] {
+        let manifest: Value =
+            serde_json::from_slice(&fs::read(&deployment.manifest).unwrap()).unwrap();
+        parse_hex32(
+            manifest["federation_id"].as_str().unwrap(),
+            "deployment federation",
         )
+        .unwrap()
     }
 
     #[test]
     fn exact_tuple_installs_and_crash_reopens_the_same_head() {
         let deployment = prepare_deployment();
         let report =
-            initialize_poa_signal_genesis_with(&args(&deployment), fixture_evaluator).unwrap();
+            initialize_poa_signal_genesis_with(&args(&deployment), lean_evaluator).unwrap();
         assert_eq!(report.outcome, PoaSignalGenesisInitOutcome::Installed);
 
         let reopened = PersistentStore::open(&deployment.data_dir.join("dregg.redb")).unwrap();
@@ -952,7 +976,7 @@ mod tests {
         drop(reopened);
 
         let retry =
-            initialize_poa_signal_genesis_with(&args(&deployment), fixture_evaluator).unwrap();
+            initialize_poa_signal_genesis_with(&args(&deployment), lean_evaluator).unwrap();
         assert_eq!(retry.outcome, PoaSignalGenesisInitOutcome::AlreadyIdentical);
         assert_eq!(retry.head_digest, report.head_digest);
     }
@@ -1024,25 +1048,25 @@ mod tests {
         drop(store);
 
         let error =
-            initialize_poa_signal_genesis_with(&args(&deployment), fixture_evaluator).unwrap_err();
+            initialize_poa_signal_genesis_with(&args(&deployment), lean_evaluator).unwrap_err();
         assert!(
             error.contains("before the first finalized commit"),
             "{error}"
         );
         let reopened = PersistentStore::open(&deployment.data_dir.join("dregg.redb")).unwrap();
         assert_eq!(reopened.commit_cursor().unwrap(), 1);
+        // ⚑ This asked about `4ea83e8e…` — the DEAD three-validator federation — while the
+        // ceremony's authority has been the live solo federation since `fff0e8df7` (08-05). A head
+        // under an id nothing installs to is absent for any store, so the assertion could not fail.
+        // It now names the authority the ceremony would have installed, and no head at all.
         assert!(
             reopened
-                .load_poa_signal_head(
-                    parse_hex32(
-                        "4ea83e8ebf4f590eace11c9ffd6d6607a4afb15e5a00cd7b9e04890dab6bfc5a",
-                        "fixture authority",
-                    )
-                    .unwrap()
-                )
+                .load_poa_signal_head(deployment_federation(&deployment))
                 .unwrap()
-                .is_none()
+                .is_none(),
+            "a refused genesis must not leave a head under the deployment's authority"
         );
+        assert!(reopened.load_singular_poa_signal_head().unwrap().is_none());
     }
 
     #[test]

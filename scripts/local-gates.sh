@@ -1103,6 +1103,30 @@ GATES=(
   # Lean, no cargo. The named theorems ride `lake build` (both modules are rooted in `Dregg2.lean`);
   # the 159-descriptor arm is under --all below.
   "canonical-encoder-constants|120|bash scripts/check-descriptor-canonical-differential.sh --fast"
+  # ⚑ FROZEN ARTIFACTS THAT STOPPED MATCHING THE LEAN THAT JUDGES THEM (2026-10-01). Eight weeks of
+  # red that no row here could see: `finality_gate`'s verified-gate tests (and the attacker tooth,
+  # VACUOUS) from `d182d10fc` 08-08; `poa_signal_genesis` under a genesis tuple frozen at counter 2
+  # while the signed bundle moved to 12; `poa_galley_genesis` red from its birth commit; and
+  # `linked_archive_freshness` red on every Linux box (deterministic `ar`, no stamps). Each was a
+  # test that only ever ran on a lane someone happened to arm. These rows arm them.
+  # `lean-hard-mode` is CARGO: two FILTERED nextest invocations (never a `-p` suite) under
+  # DREGG_REQUIRE_LEAN=1 DREGG_TEST_REQUIRE_LEAN=1, wrapped in `swarm-build` when present, with
+  # per-module floors + named anchors so a filter that matches nothing is red. Warm target: the
+  # test-binary link + the Lean init per test process; a cold build or a Lean archive rebuild can
+  # exceed the budget, which reports TIMEOUT (not a verdict) — that is the honest answer.
+  "lean-hard-mode|3600|python3 scripts/check-lean-hard-mode.py"
+  "lean-hard-mode-red|60|python3 scripts/check-lean-hard-mode.py --self-test"
+  # The frozen network-genesis fixtures ARE Lean's render of `NetworkGenesis.fixtureInput`
+  # (`NetworkGenesisFixtureEmitMain.lean`, `lake env lean --run`; needs the NetworkGenesisFixtures
+  # olean, BLOCKED otherwise). `-red` plants a one-byte edit in each of the four files in a scratch
+  # copy: all four must refuse by name, the untouched copy must pass.
+  "poa-genesis-fixture|900|bash scripts/check-poa-genesis-fixture.sh"
+  "poa-genesis-fixture-red|1800|bash scripts/check-poa-genesis-fixture.sh --self-test"
+  # The Galley activated-content artifacts (`poa/artifacts/galley/epoch-1/`) re-derive from the
+  # deployment manifest and the runtime source. Its only caller was `test-poa.sh` via a disabled
+  # workflow, and they sat drifted (rules_digest) from 08-09. ~0.1s, no Lean, no cargo.
+  "poa-galley-content|60|python3 scripts/poa-galley-content.py check"
+  "poa-galley-content-red|60|python3 scripts/poa-galley-content.py self-test"
 )
 # Expensive — only under --all, each with the reason it is not in the cheap set.
 GATES_ALL=(

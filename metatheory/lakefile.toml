@@ -584,6 +584,9 @@ globs = [
   "Dregg2.Games.PathOfAngels.GalleyMaintenanceDailyRuntimeFixtures",
   "Dregg2.Games.PathOfAngels.HiddenInstanceFixtures",
   "Dregg2.Games.PathOfAngels.NetworkGenesisFixtures",
+  # The emit/check driver that keeps `dregg-lean-ffi/tests/fixtures/poa-network-genesis-*-v1.json`
+  # Lean's render (`scripts/check-poa-genesis-fixture.sh`, a local-gates row). Compile coverage.
+  "Dregg2.Games.PathOfAngels.NetworkGenesisFixtureEmitMain",
   "Dregg2.Games.PathOfAngels.NetworkJudgeFixtures",
   "Dregg2.Games.PathOfAngels.NetworkJudgeWireFixtures",
   "Dregg2.Games.PathOfAngels.NightWatchCampaignAdmissionFixtures",
