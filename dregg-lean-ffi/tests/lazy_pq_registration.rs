@@ -2,10 +2,8 @@
 //!
 //! This is an isolated test binary so no sibling test can initialize the process-global runtime
 //! before the structural assertions. Registration installs the same six function pointers the SDK
-//! installs from `AgentRuntime::new`; the first actual Lean call then proves the existing one-shot
-//! initializer and known-answer path still run.
-
-#![cfg(feature = "lean-lib")]
+//! installs from `AgentRuntime::new`; native scalar signing first proves the narrow PQ initializer
+//! and known-answer path, then real keygen/sign/verify prove the verified full-byte routes.
 
 use dregg_pq::{
     MlDsaKeygenCoreRealInstall, MlDsaSignCoreRealInstall, MlDsaVerifyCoreInstall,
@@ -18,6 +16,36 @@ fn pq_route_discovery_is_lazy_but_first_real_call_initializes() {
         dregg_lean_ffi::lean_runtime_init_status(),
         None,
         "an isolated process must begin before the default Lean initializer"
+    );
+    assert_eq!(
+        dregg_lean_ffi::lean_initialization_status().runtime_mode,
+        None
+    );
+
+    // The scalar sign export shares the verify module. This isolated binary must actually
+    // invoke its native bridge under narrow PQ initialization before any real-core install
+    // or later full init can conceal a wrong scalar availability/execution boundary.
+    assert!(
+        dregg_lean_ffi::fips204_sign_core_available(),
+        "the linked archive must export the verified scalar sign core"
+    );
+    assert_eq!(
+        dregg_lean_ffi::lean_runtime_init_status(),
+        None,
+        "scalar availability must not initialize the full Lean family"
+    );
+    assert_eq!(
+        dregg_lean_ffi::shadow_fips204_sign("5 1 3 7 40").expect("verified scalar sign KAT"),
+        "1 7 45 0",
+        "scalar signing must execute the native verified core, not just report availability"
+    );
+    let scalar = dregg_lean_ffi::lean_initialization_status();
+    assert!(scalar.pq_ready && scalar.failure.is_none());
+    assert!(!scalar.executor_ready && !scalar.delegated_admission_ready);
+    assert_eq!(
+        dregg_lean_ffi::lean_runtime_init_status(),
+        None,
+        "native scalar signing must not silently run full Lean initialization"
     );
 
     let verify = dregg_pq::install_verified_mldsa_verify_core(
@@ -74,8 +102,9 @@ fn pq_route_discovery_is_lazy_but_first_real_call_initializes() {
         "def581b81977c7f6ff10ebe0ab358bf78b6a86850087ef0b30274086b8ae0c77",
         "installed verified keygen route did not produce NIST ACVP kg26"
     );
-    // THE FIRST REAL CALL STARTS THE NARROW PQ FAMILY, NOT THE FULL INIT. The
-    // default family also runs the game modules, whose initializers take about
+    // SCALAR SIGNING ALREADY STARTED THE NARROW PQ FAMILY; verified real keygen
+    // reuses it without starting full init. The default full family also runs
+    // the game modules, whose initializers take about
     // 144 s of a 146 s full init; a signer or an SDK agent needs none of them.
     let narrow = dregg_lean_ffi::lean_initialization_status();
     assert!(

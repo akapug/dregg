@@ -1975,6 +1975,9 @@ pub fn install_verified_pq_cores() {
         ),
     }
 
+    #[cfg(test)]
+    checkpoint_test_stderr_marker(b"DREGG_CHECKPOINT_NODE_AFTER_REAL_VERIFY_INSTALL_MATCH\n");
+
     // ── ML-DSA SIGN: install the extracted Lean-verified SCALAR sign core behind `ml_dsa_sign_core` ──
     // ⚠ HONEST SCOPE — this is NOT the sign-side twin of the verify install above. The verify install wires
     // BRICK 8's FULL-BYTE `MlDsaVerifyReal.verifyCore` as the authority behind the DEPLOYED byte-level
@@ -2003,6 +2006,9 @@ pub fn install_verified_pq_cores() {
             "the linked Lean archive does NOT export `dregg_fips204_sign`              (`fips204_sign_core_available()` is false), so the SCALAR verified sign object does not              run live and `ml_dsa_sign_core` returns None.",
         ),
     }
+
+    #[cfg(test)]
+    checkpoint_test_stderr_marker(b"DREGG_CHECKPOINT_NODE_AFTER_SCALAR_SIGN_INSTALL_MATCH\n");
 
     // ── ML-DSA SIGN (REAL): install the Lean-verified REAL, FULL-BYTE sign core as `MlDsaKey::sign`'s
     // PRODUCER — the sign-side twin of the verify install above (BRICK 8 SIGN analog). ──

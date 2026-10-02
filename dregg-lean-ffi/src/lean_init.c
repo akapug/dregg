@@ -217,8 +217,10 @@ extern lean_object *dregg_cross_cell_conserves(lean_object *input);
  * `"1"` (accept) / `"0"` (reject). The SECURITY-CRITICAL verify direction as leanc-native code — a forged
  * signature REJECTS. GATED on DREGG_FIPS204_VERIFY (the module is OUTSIDE the FFI closure; build.rs probes
  * + defines it, and dregg_ffi_init runs its initializer). */
-#ifdef DREGG_FIPS204_VERIFY
+#if defined(DREGG_FIPS204_VERIFY) || defined(DREGG_FIPS204_VERIFY_REAL) || defined(DREGG_FIPS204_SIGN)
 extern lean_object *initialize_Dregg2_Dregg2_Crypto_Fips204Verify(uint8_t builtin);
+#endif
+#ifdef DREGG_FIPS204_VERIFY
 extern lean_object *dregg_fips204_verify(lean_object *input);
 #endif
 
@@ -243,8 +245,8 @@ extern lean_object *dregg_fips204_verify_real(lean_object *input);
  *
  * GATED on DREGG_FIPS204_SIGN. The symbol is co-located in the SAME module as the verify core
  * (`Dregg2.Crypto.Fips204Verify`), so its initializer is the SAME
- * `initialize_Dregg2_Dregg2_Crypto_Fips204Verify` already run under DREGG_FIPS204_VERIFY — no separate
- * init is required here (build.rs probes + defines DREGG_FIPS204_SIGN when the symbol is present). */
+ * `initialize_Dregg2_Dregg2_Crypto_Fips204Verify` run when ANY of the scalar verify, real verify,
+ * or scalar sign exports is present (build.rs probes + defines DREGG_FIPS204_SIGN). */
 #ifdef DREGG_FIPS204_SIGN
 extern lean_object *dregg_fips204_sign(lean_object *input);
 #endif
@@ -1247,7 +1249,7 @@ static int dregg_ffi_init_one_pq_module(lean_object *res) {
 
 int dregg_ffi_init_pq_modules(void) {
     int linked = 0;
-#if defined(DREGG_FIPS204_VERIFY) || defined(DREGG_FIPS204_VERIFY_REAL)
+#if defined(DREGG_FIPS204_VERIFY) || defined(DREGG_FIPS204_VERIFY_REAL) || defined(DREGG_FIPS204_SIGN)
     linked = 1;
     if (dregg_ffi_init_one_pq_module(
             DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Crypto_Fips204Verify)) != 0)

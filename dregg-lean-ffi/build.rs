@@ -3447,7 +3447,7 @@ fn main() {
     // `@[export] dregg_fips204_verify_real` symbol — the FULL-BYTE, full-dimension ML-DSA-65 verify
     // (`MlDsaVerifyReal.verifyCore` over the real 1952/3309-byte key/signature, not the `A=id` scalar
     // toy). Co-located in `Dregg2.Crypto.Fips204Verify`, so its initializer is the SAME
-    // `initialize_Dregg2_Dregg2_Crypto_Fips204Verify` already run under DREGG_FIPS204_VERIFY. Present ⇒
+    // `initialize_Dregg2_Dregg2_Crypto_Fips204Verify` runs when any export in that module is present. Present ⇒
     // gate the Rust `extern "C"` block, the C shim string bridge, and the module define. This is the
     // export `dregg-pq::ml_dsa_verify` routes through to take the `fips204` crate OUT of the verify TCB.
     let fips204_verify_real_present = archive_exports(&build_archive, "dregg_fips204_verify_real");
@@ -3461,8 +3461,8 @@ fn main() {
     // symbol (the extracted, Lean-verified ML-DSA sign core — the Fiat–Shamir-with-aborts signer,
     // co-located in `Dregg2.Crypto.Fips204Verify` with the verify core). Present ⇒ gate the Rust
     // `extern "C"` block, the C shim string bridge, and the module define. Its initializer is the SAME
-    // `initialize_Dregg2_Dregg2_Crypto_Fips204Verify` the verify core uses (same module), run under
-    // DREGG_FIPS204_VERIFY, so no separate init is needed.
+    // `initialize_Dregg2_Dregg2_Crypto_Fips204Verify` the verify core uses (same module); the
+    // narrow PQ initializer runs it even when scalar sign is the only linked export.
     let fips204_sign_present = archive_exports(&build_archive, "dregg_fips204_sign");
     if fips204_sign_present {
         println!("cargo:rustc-cfg=dregg_fips204_sign_present");
@@ -4391,7 +4391,7 @@ fn main() {
     }
     // FIPS-204-SIGN-REAL (the brick-8 SIGN analog): its own module `Dregg2.Crypto.MlDsaSignReal`, so
     // DREGG_FIPS204_SIGN_REAL gates BOTH the per-export extern+bridge AND the module initializer (unlike the
-    // co-located `dregg_fips204_sign` which shares the verify module's init).
+    // co-located `dregg_fips204_sign` which shares the verify module's narrow PQ init).
     if fips204_sign_real_present {
         shim.define("DREGG_FIPS204_SIGN_REAL", None);
     }

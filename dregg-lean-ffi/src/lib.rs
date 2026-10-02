@@ -833,7 +833,7 @@ pub fn shadow_fips204_verify_real(wire: &str) -> Result<String, String> {
 /// caller must fall back to the `fips204` crate sign. Distinct from [`lean_available`]: a stale archive
 /// can lack this export.
 pub fn fips204_sign_core_available() -> bool {
-    ffi::fips204_sign_present() && lean_init_once().is_ok()
+    ffi::fips204_sign_present() && ffi::pq_init_once().is_ok()
 }
 
 /// Run the VERIFIED, extracted ML-DSA sign core `@[export] dregg_fips204_sign` (the executable
@@ -857,8 +857,21 @@ pub fn fips204_sign_core_available() -> bool {
 /// signing runs the verified Lean core rather than a trusted primitive. Returns `Err` if the archive
 /// lacks the export.
 pub fn shadow_fips204_sign(wire: &str) -> Result<String, String> {
-    ensure_lean_init()?;
-    ffi::lean_fips204_sign(wire)
+    ffi::with_pq(|| ffi::lean_fips204_sign(wire))
+}
+
+// Always contains a body: with a linked export it exercises verified native signing;
+// with --features no-lean-link it proves the absent-export branch refuses.
+#[cfg(test)]
+#[test]
+fn scalar_sign_presence_and_execution_fail_closed() {
+    if ffi::fips204_sign_present() {
+        assert!(fips204_sign_core_available());
+        assert_eq!(shadow_fips204_sign("5 1 3 7 40").unwrap(), "1 7 45 0");
+    } else {
+        assert!(!fips204_sign_core_available());
+        assert!(shadow_fips204_sign("5 1 3 7 40").is_err());
+    }
 }
 
 /// Whether the linked archive exports the extracted, Lean-verified REAL, FULL-BYTE ML-DSA sign core
@@ -2238,7 +2251,9 @@ mod ffi {
             Self::module_result(unsafe { dregg_ffi_init_executor_module() }, "FFIDirect")
         }
         fn pq_present(&self) -> bool {
-            fips204_verify_real_present()
+            fips204_verify_present()
+                || fips204_verify_real_present()
+                || fips204_sign_present()
                 || fips204_sign_real_present()
                 || mldsa_keygen_real_present()
                 || mlkem_encaps_real_present()
@@ -2334,11 +2349,25 @@ mod ffi {
     mod initialization_failure_tests {
         use super::*;
 
-        #[derive(Default)]
         struct Backend {
             calls: Vec<&'static str>,
             fail: Option<&'static str>,
             unwind: bool,
+            scalar_verify: bool,
+            scalar_sign: bool,
+            real_pq: bool,
+        }
+        impl Default for Backend {
+            fn default() -> Self {
+                Self {
+                    calls: Vec::new(),
+                    fail: None,
+                    unwind: false,
+                    scalar_verify: false,
+                    scalar_sign: false,
+                    real_pq: true,
+                }
+            }
         }
         impl Backend {
             fn step(&mut self, name: &'static str) -> Result<(), String> {
@@ -2371,7 +2400,7 @@ mod ffi {
                 self.step("executor")
             }
             fn pq_present(&self) -> bool {
-                true
+                self.scalar_verify || self.scalar_sign || self.real_pq
             }
             fn init_pq(&mut self) -> Result<(), String> {
                 self.step("pq")
@@ -2425,6 +2454,56 @@ mod ffi {
                 .unwrap();
             assert_eq!(backend.calls, ["runtime", "pq", "deleg", "full", "end"]);
             assert!(state.status.pq_ready);
+        }
+
+        #[test]
+        fn init_lifecycle_scalar_only_pq_and_absent_are_distinct() {
+            for (verify, sign) in [(true, false), (false, true)] {
+                let mut state = InitLifecycle::new();
+                let mut backend = Backend {
+                    scalar_verify: verify,
+                    scalar_sign: sign,
+                    real_pq: false,
+                    ..Default::default()
+                };
+                state.ensure_pq(&mut backend).unwrap();
+                assert_eq!(backend.calls, ["runtime", "pq"]);
+                assert!(state.status.pq_ready);
+                assert_eq!(state.status.default_full, None);
+                state
+                    .ensure_full(LeanRuntimeMode::Default, &mut backend)
+                    .unwrap();
+                assert_eq!(backend.calls, ["runtime", "pq", "deleg", "full", "end"]);
+                assert!(
+                    state.status.pq_ready,
+                    "a scalar-only full init retains PQ readiness"
+                );
+            }
+
+            let mut state = InitLifecycle::new();
+            let mut backend = Backend {
+                real_pq: false,
+                ..Default::default()
+            };
+            assert!(!backend.pq_present());
+            assert_eq!(
+                state.ensure_pq(&mut backend),
+                Err("no verified PQ core export/initializer pair is linked".into())
+            );
+            assert!(
+                backend.calls.is_empty(),
+                "absent exports cannot start the runtime"
+            );
+            assert_eq!(state.status.runtime_mode, None);
+            assert!(!state.status.pq_ready);
+            assert_eq!(state.status.default_full, None);
+            state
+                .ensure_full(LeanRuntimeMode::Default, &mut backend)
+                .unwrap();
+            assert!(
+                !state.status.pq_ready,
+                "absent PQ exports cannot become ready via full init"
+            );
         }
 
         #[test]

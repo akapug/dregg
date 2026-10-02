@@ -97,6 +97,13 @@ required-features = ["lean-lib"]
 name = "marshal_conformance"
 path = "src/marshal_conformance.rs"
 
+# This isolated binary always contains its native assurance test; without the optional Lean
+# bridge it is not selected, rather than compiling an empty #[cfg] test body to a false green.
+[[test]]
+name = "lazy_pq_registration"
+path = "tests/lazy_pq_registration.rs"
+required-features = ["lean-lib"]
+
 [dependencies]
 # Reproduces circuit::air_descriptor::fingerprint (BLAKE3-derive-key) so the
 # decoded-Lean AIR can be fingerprint-bound to the Rust-native AIR.
