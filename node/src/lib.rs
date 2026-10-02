@@ -1959,7 +1959,8 @@ pub fn install_verified_pq_cores() {
     // fails CLOSED on a core fault (see `dregg-pq/src/mldsa.rs`:
     // `matches!(core(&wire).as_deref(), Some("1"))`) — reject every signature. So when the export is
     // absent we keep the `fips204`-crate fallback (a valid FIPS-204 verify) rather than bricking verify.
-    match install_mldsa_verified_verify_core() {
+    let verify_outcome = install_mldsa_verified_verify_core();
+    match verify_outcome {
         MlDsaVerifyCoreInstall::Installed => info!(
             "ML-DSA verify: verified Lean core installed — the extracted full-byte \
              `MlDsaVerifyReal.verifyCore` is now the accept/reject authority; the `fips204` crate is no \
@@ -1990,7 +1991,8 @@ pub fn install_verified_pq_cores() {
     // adding MakeHint + the rejection loop) — is the named follow-up. We wire the scalar core here so the
     // verified sign object runs LIVE in the deployed binary and its sign→verify round-trip is exercised
     // (see `tests/mldsa_live_sign.rs`).
-    match install_mldsa_verified_sign_core() {
+    let scalar_sign_outcome = install_mldsa_verified_sign_core();
+    match scalar_sign_outcome {
         MlDsaSignCoreInstall::Installed => info!(
             "ML-DSA sign: verified Lean SCALAR sign core installed behind `ml_dsa_sign_core` — the \
              extracted `Fips204Verify.signCore` (n=1 model, proved to agree with the spec) now runs live. \
@@ -2020,7 +2022,8 @@ pub fn install_verified_pq_cores() {
     // variant — spec-valid). Gated on `fips204_sign_real_core_available()`: install ONLY when the linked
     // archive actually EXPORTS `dregg_fips204_sign_real`; a stale archive lacking it keeps the hedged
     // `fips204`-crate fallback (a valid FIPS-204 sign) rather than bricking sign.
-    match install_mldsa_verified_sign_core_real() {
+    let real_sign_outcome = install_mldsa_verified_sign_core_real();
+    match real_sign_outcome {
         MlDsaSignCoreRealInstall::Installed => info!(
             "ML-DSA sign: verified Lean REAL sign core installed — the extracted full-byte \
              `MlDsaSignReal.signCore` is now the PRODUCER behind the deployed `MlDsaKey::sign`; the \
@@ -2042,7 +2045,8 @@ pub fn install_verified_pq_cores() {
     // the 32-byte identity seed into the FIPS 204 ML-DSA-65 keypair; it is KAT-anchored byte-exact against
     // NIST ACVP vectors (the byte↔ring refinement forall remains open). Without this install, key generation
     // now refuses unless the operator explicitly accepts the unaudited crate fallback.
-    match install_mldsa_verified_keygen_core_real() {
+    let dsa_keygen_outcome = install_mldsa_verified_keygen_core_real();
+    match dsa_keygen_outcome {
         MlDsaKeygenCoreRealInstall::Installed => info!(
             "ML-DSA keygen: verified Lean core installed — the extracted full-byte keygen is now the \
              identity-key expander; the `fips204` crate is out of the node's keygen TCB"
@@ -2067,7 +2071,8 @@ pub fn install_verified_pq_cores() {
     // Gated on `mlkem_decaps_real_core_available()`: install ONLY when the linked archive actually EXPORTS
     // `dregg_mlkem_decaps_real`. A stale archive lacking it would make `finish` fail CLOSED on every
     // ciphertext, so when the export is absent we keep the `ml-kem`-crate fallback (a valid FIPS-203 decaps).
-    match install_mlkem_verified_decaps_core() {
+    let decaps_outcome = install_mlkem_verified_decaps_core();
+    match decaps_outcome {
         MlKemDecapsCoreInstall::Installed => info!(
             "ML-KEM decaps: verified Lean core installed — the extracted full-byte \
              `MlKemDecaps.mlkemDecaps` is now the shared-secret authority behind `HybridResponder::finish`; \
@@ -2095,7 +2100,8 @@ pub fn install_verified_pq_cores() {
     //
     // Gated on `mlkem_encaps_real_core_available()`: install ONLY when the linked archive actually EXPORTS
     // `dregg_mlkem_encaps_real`. When the export is absent we keep the `ml-kem`-crate fallback (a valid encaps).
-    match install_mlkem_verified_encaps_core() {
+    let encaps_outcome = install_mlkem_verified_encaps_core();
+    match encaps_outcome {
         MlKemEncapsCoreInstall::Installed => info!(
             "ML-KEM encaps: verified Lean core installed — the extracted full-byte \
              `MlKemEncaps.mlkemEncaps` is now the ciphertext+secret authority behind `hybrid_kem::initiate`; \
@@ -2114,7 +2120,8 @@ pub fn install_verified_pq_cores() {
     // ── ML-KEM KEYGEN: install the REAL full-byte core behind hybrid responder offers ──
     // `responder_offer` now routes through the shared bare-keygen authority instead of minting a crate key
     // directly. Installing here therefore covers the actual CaPTP/session handshake as well as bare KEM users.
-    match install_mlkem_verified_keygen_core() {
+    let kem_keygen_outcome = install_mlkem_verified_keygen_core();
+    match kem_keygen_outcome {
         MlKemKeygenCoreInstall::Installed => info!(
             "ML-KEM keygen: verified Lean core installed — hybrid responder keypairs now come from the \
              extracted full-byte keygen; the `ml-kem` crate is out of the node's KEM-keygen TCB"
@@ -2127,6 +2134,20 @@ pub fn install_verified_pq_cores() {
             "the linked Lean archive does NOT export `dregg_mlkem_keygen_real`, so hybrid responder              keypairs are minted with no Lean-verified expander. ⚑ THIS ONE WARNS AND PROCEEDS EVEN              UNDER DREGG_REQUIRE_LEAN=1 (a DECLARED exception, see dregg_pq::audit::             guard_no_verified_core): the key is EPHEMERAL per-session material and refusing bricks              every CaPTP/session handshake on an archive-less process.",
         ),
     }
+
+    // Capture the seven *actual* installer replies in the lib-test constructor only.
+    // Installed, unlike AlreadyInstalled, proves that this call won each OnceLock
+    // with the exact Lean shadow passed by the production wrapper below.
+    #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+    pq_test_bootstrap::record_if_bootstrap(pq_test_bootstrap::InstallOutcomes {
+        verify: verify_outcome,
+        scalar_sign: scalar_sign_outcome,
+        real_sign: real_sign_outcome,
+        dsa_keygen: dsa_keygen_outcome,
+        decaps: decaps_outcome,
+        encaps: encaps_outcome,
+        kem_keygen: kem_keygen_outcome,
+    });
 }
 
 // Bypass libtest's captured print channel so fixed phase markers survive a
@@ -2169,9 +2190,44 @@ fn checkpoint_test_stderr_marker(marker: &'static [u8]) {
 /// themselves (`blocklace_sync.rs`) just see `AlreadyInstalled`.
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod pq_test_bootstrap {
+    use std::sync::{
+        OnceLock,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    use super::{
+        MlDsaKeygenCoreRealInstall, MlDsaSignCoreInstall, MlDsaSignCoreRealInstall,
+        MlDsaVerifyCoreInstall, MlKemDecapsCoreInstall, MlKemEncapsCoreInstall,
+        MlKemKeygenCoreInstall,
+    };
+
+    #[derive(Debug)]
+    pub(super) struct InstallOutcomes {
+        pub(super) verify: MlDsaVerifyCoreInstall,
+        pub(super) scalar_sign: MlDsaSignCoreInstall,
+        pub(super) real_sign: MlDsaSignCoreRealInstall,
+        pub(super) dsa_keygen: MlDsaKeygenCoreRealInstall,
+        pub(super) decaps: MlKemDecapsCoreInstall,
+        pub(super) encaps: MlKemEncapsCoreInstall,
+        pub(super) kem_keygen: MlKemKeygenCoreInstall,
+    }
+
+    static CAPTURING_BOOTSTRAP: AtomicBool = AtomicBool::new(false);
+    static BOOTSTRAP_OUTCOMES: OnceLock<InstallOutcomes> = OnceLock::new();
+
+    pub(super) fn record_if_bootstrap(outcomes: InstallOutcomes) {
+        if CAPTURING_BOOTSTRAP.load(Ordering::Acquire) {
+            BOOTSTRAP_OUTCOMES
+                .set(outcomes)
+                .expect("lib-test PQ bootstrap outcomes recorded twice");
+        }
+    }
+
     extern "C" fn install() {
         super::checkpoint_test_stderr_marker(b"DREGG_CHECKPOINT_NODE_LIBTEST_BOOTSTRAP_BEFORE\n");
+        CAPTURING_BOOTSTRAP.store(true, Ordering::Release);
         super::install_verified_pq_cores();
+        CAPTURING_BOOTSTRAP.store(false, Ordering::Release);
         super::checkpoint_test_stderr_marker(b"DREGG_CHECKPOINT_NODE_LIBTEST_BOOTSTRAP_AFTER\n");
     }
 
@@ -2179,6 +2235,73 @@ mod pq_test_bootstrap {
     #[cfg_attr(target_os = "linux", unsafe(link_section = ".init_array"))]
     #[cfg_attr(target_os = "macos", unsafe(link_section = "__DATA,__mod_init_func"))]
     static INSTALL_VERIFIED_PQ_CORES: extern "C" fn() = install;
+
+    // Explicit selection only: generic, archive-free lib-test bootstrap must
+    // continue to announce missing exports rather than demand all seven.
+    #[test]
+    #[ignore = "requires all seven linked native Lean PQ exports; select explicitly"]
+    fn seven_bootstrap_pq_installers_win_the_verified_core_slots() {
+        let outcomes = BOOTSTRAP_OUTCOMES
+            .get()
+            .expect("node lib-test bootstrap did not record its seven installer replies");
+
+        // AlreadyInstalled is deliberately a failure: the leaf's installed()
+        // booleans alone cannot distinguish an arbitrary earlier custom core.
+        // Each Installed here comes from the production wrapper's exact Lean
+        // shadow function, installed into a non-replaceable process OnceLock.
+        assert_eq!(outcomes.verify, MlDsaVerifyCoreInstall::Installed);
+        assert_eq!(outcomes.scalar_sign, MlDsaSignCoreInstall::Installed);
+        assert_eq!(outcomes.real_sign, MlDsaSignCoreRealInstall::Installed);
+        assert_eq!(outcomes.dsa_keygen, MlDsaKeygenCoreRealInstall::Installed);
+        assert_eq!(outcomes.decaps, MlKemDecapsCoreInstall::Installed);
+        assert_eq!(outcomes.encaps, MlKemEncapsCoreInstall::Installed);
+        assert_eq!(outcomes.kem_keygen, MlKemKeygenCoreInstall::Installed);
+
+        // Recheck both the actual linked export and the installed slot in this
+        // SAME test process. Neither these predicates nor a separate test run
+        // can substitute for the seven fresh-install outcomes above.
+        let sites = [
+            (
+                "ML-DSA real verify",
+                dregg_lean_ffi::fips204_verify_real_core_available(),
+                dregg_pq::lean_verify_core_real_installed(),
+            ),
+            (
+                "ML-DSA scalar sign",
+                dregg_lean_ffi::fips204_sign_core_available(),
+                dregg_pq::lean_sign_core_installed(),
+            ),
+            (
+                "ML-DSA real sign",
+                dregg_lean_ffi::fips204_sign_real_core_available(),
+                dregg_pq::lean_sign_core_real_installed(),
+            ),
+            (
+                "ML-DSA real keygen",
+                dregg_lean_ffi::mldsa_keygen_real_core_available(),
+                dregg_pq::lean_keygen_core_real_installed(),
+            ),
+            (
+                "ML-KEM real decaps",
+                dregg_lean_ffi::mlkem_decaps_real_core_available(),
+                dregg_pq::mlkem_decaps_real_core_installed(),
+            ),
+            (
+                "ML-KEM real encaps",
+                dregg_lean_ffi::mlkem_encaps_real_core_available(),
+                dregg_pq::mlkem_encaps_real_core_installed(),
+            ),
+            (
+                "ML-KEM real keygen",
+                dregg_lean_ffi::mlkem_keygen_real_core_available(),
+                dregg_pq::mlkem_keygen_real_core_installed(),
+            ),
+        ];
+        for (site, export, installed) in sites {
+            assert!(export, "{site}: verified Lean export absent");
+            assert!(installed, "{site}: no registered PQ core");
+        }
+    }
 }
 
 /// Run the node: start HTTP API server and federation sync.
