@@ -62,6 +62,14 @@ pub mod promise_resolutions;
 pub mod snapshot;
 pub mod tables;
 
+// Persist's lib-test binary reaches ML-DSA through dregg-blocklace, which is
+// compiled as a dependency here: its own cfg(test) installer is not active.
+// Install the Lean-verified cores before any parallel test can derive a key.
+// Export-gated testkit installation leaves production and missing-core refusal
+// unchanged; blocklace_store tests assert that the pre-main install succeeded.
+#[cfg(test)]
+dregg_pq_testkit::install_at_process_start!();
+
 #[cfg(test)]
 mod tests;
 

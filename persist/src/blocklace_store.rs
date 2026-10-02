@@ -786,6 +786,18 @@ mod tests {
         ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
     }
 
+    #[test]
+    fn test_binary_installs_verified_mldsa_before_lace_fixture() {
+        let cores = dregg_pq_testkit::installed();
+        assert!(
+            cores.mldsa_complete(),
+            "persist's pre-main test installer must provide verified ML-DSA verify, sign and keygen: {cores:?}"
+        );
+        let store = PersistentStore::open_in_memory().unwrap();
+        let lace = persist_honest_lace(&store, &key(19));
+        assert_eq!(lace.len(), 3, "the guarded PQ lace fixture must execute");
+    }
+
     fn published_heights(store: &PersistentStore) -> Vec<u64> {
         postcard::from_bytes(
             &store
@@ -1319,6 +1331,11 @@ mod tests {
     /// A small honest lace persisted the way the node persists it (blocks
     /// individually + meta blob).
     fn persist_honest_lace(store: &PersistentStore, sk: &ed25519_dalek::SigningKey) -> Blocklace {
+        let cores = dregg_pq_testkit::installed();
+        assert!(
+            cores.mldsa_complete(),
+            "persist lace fixture requires the verified ML-DSA cores installed at process start: {cores:?}"
+        );
         let mut lace = Blocklace::new(sk.clone(), 1);
         lace.add_block(dregg_blocklace::finality::Payload::Ack);
         lace.add_block(dregg_blocklace::finality::Payload::Ack);
