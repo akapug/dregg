@@ -1844,6 +1844,8 @@ mod tests {
             parallel_phases.workers,
             serial_phases.rows,
             parallel_phases.rows,
+            serial_total.as_millis(),
+            parallel_total.as_millis(),
             serial_phases.hybrid_verify.as_millis(),
             parallel_phases.hybrid_verify.as_millis(),
             parallel_phases.decode.as_millis(),
