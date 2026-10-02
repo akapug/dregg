@@ -53,6 +53,9 @@ pub const TOPIC_BLOCKLACE: &str = "dregg/blocklace";
 
 /// Retain recent derived bootstrap pairs. Signed blocks, roots, commit records,
 /// historical proofs and their replay inputs are not part of this cache window.
+/// Archival mode retains every derived pair AND its process-local authority
+/// receipt: its hot proof RAM grows with checkpoints and is not bounded. Reopen
+/// still has no receipt and refuses older pairs until a durable H binding exists.
 const MAX_RETAINED_CHECKPOINTS: usize = 5;
 
 fn blocklace_checkpoint_retention_limit() -> usize {
@@ -20215,11 +20218,15 @@ struct LiveCheckpointProof {
     root: [u8; 32],
     dag_hash: [u8; 32],
     ledger_hash: [u8; 32],
+    archival: bool,
 }
 
 // Keyed by a monotone, process-only store incarnation, not a reusable address
-// or persisted peer-supplied identifier. Five receipts per incarnation, and an
-// absolute process cap prevent unbounded hot RAM even across repeated reopens.
+// or persisted peer-supplied identifier. Default receipts use the same five-
+// height window as derived pairs and a process-wide 256-entry ceiling across
+// reopens. Explicit archival receipts are exempt from BOTH ceilings so every
+// retained derived pair remains servable in this process; archival hot RAM grows
+// with checkpoint history. Neither mode reconstructs proof on reopen.
 static LIVE_CHECKPOINT_PROOFS: std::sync::OnceLock<
     std::sync::Mutex<std::collections::BTreeMap<(u64, u64), LiveCheckpointProof>>,
 > = std::sync::OnceLock::new();
@@ -20235,6 +20242,7 @@ fn record_live_finality_checkpoint(
     dag: &[u8],
     ledger: &[u8],
     root: [u8; 32],
+    retention_limit: usize,
 ) -> Result<(), String> {
     let ordinal = store
         .commit_cursor()
@@ -20257,6 +20265,7 @@ fn record_live_finality_checkpoint(
         root,
         dag_hash: *blake3::hash(dag).as_bytes(),
         ledger_hash: *blake3::hash(ledger).as_bytes(),
+        archival: retention_limit == usize::MAX,
     };
     if hashes != (proof.dag_hash, proof.ledger_hash) {
         return Err("published checkpoint differs from live producer bytes".into());
@@ -20266,17 +20275,25 @@ fn record_live_finality_checkpoint(
         .lock()
         .map_err(|_| "checkpoint proof lock poisoned")?;
     if let Some(previous) = proofs.get(&key)
-        && *previous != proof
+        && (previous.ordinal != proof.ordinal
+            || previous.root != proof.root
+            || previous.dag_hash != proof.dag_hash
+            || previous.ledger_hash != proof.ledger_hash)
     {
         return Err("immutable checkpoint height has a conflicting live proof".into());
     }
     proofs.insert(key, proof);
-    while proofs.keys().filter(|(id, _)| *id == key.0).count() > MAX_RETAINED_CHECKPOINTS {
-        let oldest = *proofs.keys().find(|(id, _)| *id == key.0).unwrap();
-        proofs.remove(&oldest);
-    }
-    while proofs.len() > 256 {
-        proofs.pop_first();
+    if retention_limit != usize::MAX {
+        while proofs.keys().filter(|(id, _)| *id == key.0).count() > retention_limit {
+            let oldest = *proofs.keys().find(|(id, _)| *id == key.0).unwrap();
+            proofs.remove(&oldest);
+        }
+        // Archival proofs never enter this cross-incarnation cap: even a
+        // separate default-mode store cannot silently evict archival service.
+        while proofs.values().filter(|proof| !proof.archival).count() > 256 {
+            let oldest = *proofs.iter().find(|(_, proof)| !proof.archival).unwrap().0;
+            proofs.remove(&oldest);
+        }
     }
     Ok(())
 }
@@ -20416,13 +20433,16 @@ async fn maybe_produce_checkpoint(state: &NodeState, handle: &BlocklaceHandle) {
 
     // Pair, latest pointer, unique index and derived-pair reclamation share one
     // transaction. A failed write cannot announce or serve a half-published pair.
+    // Resolve the policy ONCE: proof eviction must match this publication's
+    // actual derived-pair retention, including the explicit archival mode.
+    let retention_limit = blocklace_checkpoint_retention_limit();
     {
         let s = state.read().await;
         if let Err(e) = s.store.publish_blocklace_checkpoint_pair(
             finalized_height,
             &blocklace_stored,
             &ledger_stored,
-            blocklace_checkpoint_retention_limit(),
+            retention_limit,
         ) {
             warn!(error = %e, height = finalized_height, "failed to publish blocklace checkpoint pair");
             return;
@@ -20435,6 +20455,7 @@ async fn maybe_produce_checkpoint(state: &NodeState, handle: &BlocklaceHandle) {
             &blocklace_stored,
             &ledger_stored,
             ledger_root,
+            retention_limit,
         ) {
             warn!(error = %e, height = finalized_height, "refusing checkpoint without live finalized production proof");
             return;

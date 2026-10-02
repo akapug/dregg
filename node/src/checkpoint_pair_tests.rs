@@ -1,7 +1,47 @@
 use super::*;
 
+// No other test mutates this exact key. Hold this lock across each real
+// producer callback and restore the previous value BEFORE releasing it.
+static ARCHIVAL_CHECKPOINT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+const ARCHIVAL_CHECKPOINT_ENV: &str = "DREGG_ARCHIVAL_BLOCKLACE_CHECKPOINTS";
+
+struct RestoreArchivalCheckpointEnv(Option<std::ffi::OsString>);
+
+impl RestoreArchivalCheckpointEnv {
+    fn set(archival: bool) -> Self {
+        let previous = std::env::var_os(ARCHIVAL_CHECKPOINT_ENV);
+        // SAFETY: the test-local environment mutation is serialized by
+        // ARCHIVAL_CHECKPOINT_ENV_LOCK, held through this guard's Drop.
+        unsafe {
+            if archival {
+                std::env::set_var(ARCHIVAL_CHECKPOINT_ENV, "1");
+            } else {
+                std::env::remove_var(ARCHIVAL_CHECKPOINT_ENV);
+            }
+        }
+        Self(previous)
+    }
+}
+
+impl Drop for RestoreArchivalCheckpointEnv {
+    fn drop(&mut self) {
+        // SAFETY: the same test-local lock remains held until after Drop.
+        unsafe {
+            if let Some(previous) = self.0.take() {
+                std::env::set_var(ARCHIVAL_CHECKPOINT_ENV, previous);
+            } else {
+                std::env::remove_var(ARCHIVAL_CHECKPOINT_ENV);
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn live_finality_producer_mints_exact_height_proof_and_repeated_callback_returns() {
+    let _env_lock = ARCHIVAL_CHECKPOINT_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _env_restore = RestoreArchivalCheckpointEnv::set(false);
     let dir = tempfile::tempdir().unwrap();
     let state = NodeState::new(dir.path(), Vec::new()).unwrap();
     let self_key = { state.read().await.cclerk.public_key().0 };
@@ -35,6 +75,110 @@ async fn live_finality_producer_mints_exact_height_proof_and_repeated_callback_r
         load_blocklace_checkpoint(&s.store, 1).unwrap().ledger,
         original.ledger
     );
+}
+
+async fn produce_six_live_checkpoints(archival: bool) {
+    let dir = tempfile::tempdir().unwrap();
+    let state = NodeState::new(dir.path(), Vec::new()).unwrap();
+    let self_key = { state.read().await.cclerk.public_key().0 };
+    let mut handle = super::tests::test_handle_with_committee(self_key, vec![self_key]).await;
+    handle.checkpoint_interval = 1;
+    let mut predecessor = None;
+    for height in 1u8..=6 {
+        // The callback sees six real, causally linked signed DAG blocks and
+        // six durable finalized-root fixture records, never hand-inserted
+        // provenance. Turn execution itself is outside this producer control.
+        let block = Block::new(
+            &handle.signing_key,
+            u64::from(height - 1),
+            Payload::Turn(vec![height]),
+            predecessor.into_iter().collect(),
+        );
+        let id = block.id();
+        handle.lace.write().await.receive_block(block).unwrap();
+        predecessor = Some(id);
+        {
+            let s = state.read().await;
+            let mut record = empty_checkpoint_test_commit(&s.ledger);
+            record.ordinal = u64::from(height - 1);
+            record.height = u64::from(height);
+            record.block_id = id.0;
+            record.block_executed_up_to = u64::from(height);
+            record.turn_hash = [height; 32];
+            record.receipt_hash = [height.wrapping_add(10); 32];
+            s.store
+                .commit_finalized_turn(record.ordinal, &record)
+                .unwrap();
+        }
+        handle.cursor.write().await.mark_executed(id);
+        maybe_produce_checkpoint(&state, &handle).await;
+        let s = state.read().await;
+        assert_eq!(
+            latest_blocklace_checkpoint_height(&s.store),
+            u64::from(height)
+        );
+        assert!(load_blocklace_checkpoint(&s.store, u64::from(height)).is_some());
+    }
+    let s = state.read().await;
+    assert_eq!(s.store.commit_cursor().unwrap(), 6);
+    let proofs = checkpoint_proofs().lock().unwrap();
+    let for_store = proofs
+        .keys()
+        .filter(|(id, _)| *id == s.store.checkpoint_store_id())
+        .count();
+    drop(proofs);
+    if archival {
+        for height in 1..=6 {
+            assert!(
+                s.store
+                    .published_blocklace_checkpoint_pair(height)
+                    .unwrap()
+                    .is_some(),
+                "archival policy keeps every derived pair's exact bytes"
+            );
+            assert!(
+                load_blocklace_checkpoint(&s.store, height).is_some(),
+                "every archival height remains explicitly servable in this process"
+            );
+        }
+        assert!(
+            load_blocklace_checkpoint(&s.store, 1).is_some(),
+            "archival H1 remains explicitly servable after six real producer callbacks"
+        );
+        assert!(existing_checkpoint_is_authorized(&s.store, 1).unwrap());
+        assert_eq!(for_store, 6);
+    } else {
+        assert!(
+            s.store
+                .published_blocklace_checkpoint_pair(1)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            load_blocklace_checkpoint(&s.store, 1).is_none(),
+            "default pair H1 is evicted and never explicitly served"
+        );
+        assert!(!existing_checkpoint_is_authorized(&s.store, 1).unwrap());
+        assert_eq!(for_store, MAX_RETAINED_CHECKPOINTS);
+    }
+}
+
+#[tokio::test]
+async fn archival_six_live_producer_checkpoints_keep_explicit_height_one() {
+    let _env_lock = ARCHIVAL_CHECKPOINT_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _env_restore = RestoreArchivalCheckpointEnv::set(true);
+    produce_six_live_checkpoints(true).await;
+}
+
+#[tokio::test]
+async fn default_six_live_producer_checkpoints_evict_height_one() {
+    let _env_lock = ARCHIVAL_CHECKPOINT_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _env_restore = RestoreArchivalCheckpointEnv::set(false);
+    produce_six_live_checkpoints(false).await;
 }
 
 #[tokio::test]
@@ -171,7 +315,7 @@ fn fresh_produced_pair_serves_unchanged_wire_but_legacy_pair_refuses() {
         load_blocklace_checkpoint(&fresh, 12).is_none(),
         "generic publication alone cannot mint proof"
     );
-    record_live_finality_checkpoint(&fresh, 12, &dag, &stored, canonical_ledger_root(&ledger))
+    record_live_finality_checkpoint(&fresh, 12, &dag, &stored, canonical_ledger_root(&ledger), 5)
         .unwrap();
     let served = load_blocklace_checkpoint(&fresh, 12).unwrap();
     assert_eq!(served.height, 12);
@@ -262,8 +406,15 @@ fn fresh_retained_pair_keeps_its_ordinal_and_wrong_height_legacy_root_refuses() 
     store
         .publish_blocklace_checkpoint_pair(1, &dag, &original, 5)
         .unwrap();
-    record_live_finality_checkpoint(&store, 1, &dag, &original, canonical_ledger_root(&ledger))
-        .unwrap();
+    record_live_finality_checkpoint(
+        &store,
+        1,
+        &dag,
+        &original,
+        canonical_ledger_root(&ledger),
+        5,
+    )
+    .unwrap();
     let mut changed = ledger;
     changed
         .insert_cell(dregg_cell::Cell::with_balance([0x47; 32], [0; 32], 50))
@@ -404,7 +555,7 @@ fn missing_authority_and_generic_published_pair_cannot_mint_producer_proof() {
     assert!(load_blocklace_checkpoint(&store, 1).is_none());
     assert_eq!(latest_blocklace_checkpoint_height(&store), 0);
     assert!(
-        record_live_finality_checkpoint(&store, 1, b"dag", &bytes, [0x77; 32]).is_err(),
+        record_live_finality_checkpoint(&store, 1, b"dag", &bytes, [0x77; 32], 5).is_err(),
         "a wrong finalized root cannot mint even via the private producer function"
     );
 }
@@ -424,7 +575,7 @@ fn reopened_pair_and_mutated_bytes_or_ordinal_fail_closed() {
         store
             .publish_blocklace_checkpoint_pair(1, &dag, &wire, 5)
             .unwrap();
-        record_live_finality_checkpoint(&store, 1, &dag, &wire, canonical_ledger_root(&ledger))
+        record_live_finality_checkpoint(&store, 1, &dag, &wire, canonical_ledger_root(&ledger), 5)
             .unwrap();
         assert_eq!(latest_blocklace_checkpoint_height(&store), 1);
         store
@@ -487,7 +638,7 @@ fn live_proof_detects_durable_authority_change_and_bounds_retention() {
     for height in 1..=6 {
         let dag = compress_checkpoint_data(vec![height as u8]);
         store
-            .publish_blocklace_checkpoint_pair(height, &dag, &wire, 6)
+            .publish_blocklace_checkpoint_pair(height, &dag, &wire, MAX_RETAINED_CHECKPOINTS)
             .unwrap();
         record_live_finality_checkpoint(
             &store,
@@ -495,12 +646,13 @@ fn live_proof_detects_durable_authority_change_and_bounds_retention() {
             &dag,
             &wire,
             canonical_ledger_root(&ledger),
+            MAX_RETAINED_CHECKPOINTS,
         )
         .unwrap();
     }
     assert!(
-        existing_checkpoint_is_authorized(&store, 1).is_err(),
-        "proof eviction refuses oldest height"
+        !existing_checkpoint_is_authorized(&store, 1).unwrap(),
+        "default derived-pair and matching proof eviction refuse oldest height"
     );
     assert!(existing_checkpoint_is_authorized(&store, 6).unwrap());
     let old_ordinal = {
