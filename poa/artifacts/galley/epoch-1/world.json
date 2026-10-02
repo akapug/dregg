@@ -6,12 +6,12 @@
   "content_session": "504f412d47414c4c45592d310000000000000000000000000000000000000000",
   "content_session_ascii_tag": "POA-GALLEY-1",
   "content_epoch": 1,
-  "content_root": "ce11fe344c9e551c537314d42b3d5d4531dbe73dce3f710aff18895896059798",
+  "content_root": "7931a4194e52a83a6690413f23531a9d3983a3cd7a4ab2c47f76885409051057",
   "component_name": "poa.galley-maintenance-daily.policy.v1",
-  "component_sha256": "b4255e0d2f40d48ce9a399222f8bbcadf87d528a53fc141df083dd86176db808",
+  "component_sha256": "764321469daec663e9e149dc3063ea452e45146755ecc4ad6ea0bb470fe9a9bd",
   "rules_digest": {
     "source": "metatheory/Dregg2/Games/PathOfAngels/GalleyMaintenanceDailyRuntime.lean",
-    "sha256": "6372106d782036c362ac1e84ddfe443101fe97d6102a954075437deb99123270",
+    "sha256": "99fce32dfccbdd32e5601a132eb67498938734012a4fa4f509c0b007a002957e",
     "note": "SHA-256 of the exact shipped-runtime source at authoring time. It is bound into every action-token preimage (\u2026Runtime.lean:793) and is verified against nothing at runtime; editing that file makes this artifact stale and requires re-emitting and a new signed activation."
   },
   "derived_digest_preimages": {
