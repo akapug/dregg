@@ -154,6 +154,45 @@ pub fn install_or_panic() -> Installed {
     got
 }
 
+/// Actual first-install outcomes for the three deployed full-byte ML-DSA cores.
+/// These are installer verdicts, not an archive or executable fingerprint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StrictMlDsaRealInstall {
+    pub verify: dregg_pq::MlDsaVerifyCoreInstall,
+    pub sign: dregg_pq::MlDsaSignCoreRealInstall,
+    pub keygen: dregg_pq::MlDsaKeygenCoreRealInstall,
+}
+
+/// Strict, non-idempotent evidence for a single isolated test process.
+///
+/// Unlike [`install_or_panic`], this refuses a prior occupant of any OnceLock,
+/// even if the core appears installed. Run it before any PQ operation in a fresh
+/// per-test process; do not use it in a shared libtest process or production.
+/// The three actual archive-gated real installers must EACH win their slot.
+pub fn install_mldsa_real_first_or_panic() -> StrictMlDsaRealInstall {
+    let outcomes = StrictMlDsaRealInstall {
+        verify: dregg_pq::install_verified_mldsa_verify_core(
+            dregg_lean_ffi::fips204_verify_real_core_available,
+            |w| dregg_lean_ffi::shadow_fips204_verify_real(w).ok(),
+        ),
+        sign: dregg_pq::install_verified_mldsa_sign_core_real(
+            dregg_lean_ffi::fips204_sign_real_core_available,
+            |w| dregg_lean_ffi::shadow_fips204_sign_real(w).ok(),
+        ),
+        keygen: dregg_pq::install_verified_mldsa_keygen_core_real(
+            dregg_lean_ffi::mldsa_keygen_real_core_available,
+            |w| dregg_lean_ffi::shadow_mldsa_keygen_real(w).ok(),
+        ),
+    };
+    assert!(
+        matches!(outcomes.verify, dregg_pq::MlDsaVerifyCoreInstall::Installed)
+            && matches!(outcomes.sign, dregg_pq::MlDsaSignCoreRealInstall::Installed)
+            && matches!(outcomes.keygen, dregg_pq::MlDsaKeygenCoreRealInstall::Installed),
+        "strict ML-DSA test requires fresh first real installers: {outcomes:?}"
+    );
+    outcomes
+}
+
 /// Run [`install`] at PROCESS START, from one line at the top of a test file.
 ///
 /// # When this, and not a call at the gateway

@@ -1512,7 +1512,9 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires a fresh, qualified per-test process for strict real-core installation"]
     fn measured_hybrid_replay_rejects_tampered_pq_half() {
+        let strict = dregg_pq_testkit::install_mldsa_real_first_or_panic();
         let store = PersistentStore::open_in_memory().unwrap();
         let signer = HybridSigner::new(0x79);
         let (tree, anchor) = empty_anchor();
@@ -1549,6 +1551,19 @@ mod tests {
                 expected,
             )
             .is_err());
+        eprintln!(
+            "strict_mldsa_first_install verify={:?} sign={:?} keygen={:?} \
+             replay_rows={} replay_decode_ms={} hybrid_verify_ms={} \
+             ordered_append_ms={} replay_seal_ms={} tampered_pq_refused=true",
+            strict.verify,
+            strict.sign,
+            strict.keygen,
+            phases.rows,
+            phases.decode.as_millis(),
+            phases.hybrid_verify.as_millis(),
+            phases.structural_append.as_millis(),
+            phases.seal_check.as_millis(),
+        );
     }
 
     #[test]
