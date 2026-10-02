@@ -667,18 +667,8 @@ theorem hostile_substituted_crew_cannot_consume_the_authored_crews_admission :
 theorem callable_entrypoint_emits_the_exact_successful_receipt :
     check_callable_entrypoint_emits_the_exact_successful_receipt = true := by native_decide
 
--- ⚠ Four re-runs need a larger heartbeat budget. `#assert_compiled` re-evaluates each claim, and
--- since the `Bool` statements moved into this module (#86) their `judge` runs elaborate here
--- instead of arriving pre-compiled from an import: measured 183 s and over the 200000 default for
--- `honest_complete_run_emits_one_ordinary_salvage_authorization`. The check is unchanged.
 #assert_compiled fixture_runtime_content_valid
 #assert_compiled fixture_wire_transcripts_decode_back_to_the_kernel_traces
-set_option maxHeartbeats 4000000 in
-#assert_compiled honest_complete_run_emits_one_ordinary_salvage_authorization
-set_option maxHeartbeats 4000000 in
-#assert_compiled deep_run_separates_exchangeable_parts_from_nonmarket_relic_custody
-set_option maxHeartbeats 4000000 in
-#assert_compiled hostile_same_admission_and_run_cannot_replay
 #assert_compiled hostile_cross_activation_command_refused
 #assert_compiled hostile_forged_route_refused
 #assert_compiled hostile_forged_outcome_refused
@@ -698,8 +688,6 @@ set_option maxHeartbeats 4000000 in
 #assert_compiled hostile_authored_seal_cannot_activate_the_substituted_crew
 #assert_compiled cross_crew_state_refused_only_by_the_roster_binding
 #assert_compiled hostile_substituted_crew_cannot_consume_the_authored_crews_admission
-set_option maxHeartbeats 4000000 in
-#assert_compiled callable_entrypoint_emits_the_exact_successful_receipt
 
 -- `rfl` closes this one, but `CrewFieldMission.fixturePolicy` was itself built with
 -- `native_decide`, so the statement inherits that axiom and pins in the compiled tier.
