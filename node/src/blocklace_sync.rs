@@ -20206,45 +20206,123 @@ fn finalized_checkpoint_ledger_wire(
     postcard::to_stdvec(&cells).map_err(|e| e.to_string())
 }
 
-/// Check a stored image against a LOCAL finalized commit root, not its
-/// same-peer content hash. Older retained pairs need not match the current
-/// commit root: locate a durable live or audited compacted root for the whole
-/// decoded ledger. Missing authority, duplicate IDs, or malformed cells refuse.
-fn verified_checkpoint_ledger(
-    store: &dregg_persist::PersistentStore,
-    stored: &[u8],
-) -> Result<(), String> {
-    let raw = stored
-        .strip_prefix(&[0x00])
-        .ok_or("invalid ledger checkpoint wrapper")?;
-    let cells: Vec<(dregg_cell::CellId, dregg_cell::Cell)> =
-        postcard::from_bytes(raw).map_err(|e| format!("invalid ledger checkpoint: {e}"))?;
-    let mut ledger = dregg_cell::Ledger::new();
-    for (id, cell) in cells {
-        if cell.id() != id {
-            return Err("ledger checkpoint cell ID mismatch".into());
-        }
-        ledger
-            .insert_cell(cell)
-            .map_err(|e| format!("invalid checkpoint cell: {e}"))?;
-    }
-    let root = canonical_ledger_root(&ledger);
-    let cursor = store.commit_cursor().map_err(|e| e.to_string())?;
-    if cursor == 0 {
-        return Err("no finalized commit ledger authority for checkpoint".into());
-    }
-    for ordinal in (0..cursor).rev() {
-        let authority = store
-            .finalized_commit_authority_at(ordinal)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("missing finalized authority at commit ordinal {ordinal}"))?;
-        if authority.ledger_root() == root {
-            return Ok(());
-        }
-    }
-    Err("ledger checkpoint has no matching local finalized root".into())
+/// Minted only by the live finality producer below, never by the generic
+/// persistent store publication/import API. In particular, a pre-upgrade pair
+/// with a historically valid ledger root has no proof of its claimed height.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct LiveCheckpointProof {
+    ordinal: u64,
+    root: [u8; 32],
+    dag_hash: [u8; 32],
+    ledger_hash: [u8; 32],
 }
 
+// Keyed by a monotone, process-only store incarnation, not a reusable address
+// or persisted peer-supplied identifier. Five receipts per incarnation, and an
+// absolute process cap prevent unbounded hot RAM even across repeated reopens.
+static LIVE_CHECKPOINT_PROOFS: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::BTreeMap<(u64, u64), LiveCheckpointProof>>,
+> = std::sync::OnceLock::new();
+
+fn checkpoint_proofs()
+-> &'static std::sync::Mutex<std::collections::BTreeMap<(u64, u64), LiveCheckpointProof>> {
+    LIVE_CHECKPOINT_PROOFS.get_or_init(|| std::sync::Mutex::new(std::collections::BTreeMap::new()))
+}
+
+fn record_live_finality_checkpoint(
+    store: &dregg_persist::PersistentStore,
+    height: u64,
+    dag: &[u8],
+    ledger: &[u8],
+    root: [u8; 32],
+) -> Result<(), String> {
+    let ordinal = store
+        .commit_cursor()
+        .map_err(|e| e.to_string())?
+        .checked_sub(1)
+        .ok_or("no finalized checkpoint authority")?;
+    let authority = store
+        .finalized_commit_authority_at(ordinal)
+        .map_err(|e| e.to_string())?
+        .ok_or("missing latest finalized checkpoint authority")?;
+    if authority.ledger_root() != root {
+        return Err("produced checkpoint root differs from latest finalized authority".into());
+    }
+    let hashes = store
+        .published_blocklace_checkpoint_pair_hashes(height)
+        .map_err(|e| e.to_string())?
+        .ok_or("checkpoint pair is not published")?;
+    let proof = LiveCheckpointProof {
+        ordinal,
+        root,
+        dag_hash: *blake3::hash(dag).as_bytes(),
+        ledger_hash: *blake3::hash(ledger).as_bytes(),
+    };
+    if hashes != (proof.dag_hash, proof.ledger_hash) {
+        return Err("published checkpoint differs from live producer bytes".into());
+    }
+    let key = (store.checkpoint_store_id(), height);
+    let mut proofs = checkpoint_proofs()
+        .lock()
+        .map_err(|_| "checkpoint proof lock poisoned")?;
+    if let Some(previous) = proofs.get(&key)
+        && *previous != proof
+    {
+        return Err("immutable checkpoint height has a conflicting live proof".into());
+    }
+    proofs.insert(key, proof);
+    while proofs.keys().filter(|(id, _)| *id == key.0).count() > MAX_RETAINED_CHECKPOINTS {
+        let oldest = *proofs.keys().find(|(id, _)| *id == key.0).unwrap();
+        proofs.remove(&oldest);
+    }
+    while proofs.len() > 256 {
+        proofs.pop_first();
+    }
+    Ok(())
+}
+
+fn live_checkpoint_proof(
+    store: &dregg_persist::PersistentStore,
+    height: u64,
+    served: Option<(&[u8], &[u8])>,
+) -> Result<bool, String> {
+    let proof = {
+        let proofs = checkpoint_proofs()
+            .lock()
+            .map_err(|_| "checkpoint proof lock poisoned")?;
+        let Some(proof) = proofs.get(&(store.checkpoint_store_id(), height)) else {
+            return Ok(false);
+        };
+        *proof
+    };
+    let authority = store
+        .finalized_commit_authority_at(proof.ordinal)
+        .map_err(|e| e.to_string())?
+        .ok_or("recorded checkpoint authority disappeared")?;
+    if authority.ledger_root() != proof.root {
+        return Err("recorded checkpoint authority changed".into());
+    }
+    let hashes = if let Some((dag, ledger)) = served {
+        (
+            *blake3::hash(dag).as_bytes(),
+            *blake3::hash(ledger).as_bytes(),
+        )
+    } else {
+        let Some(hashes) = store
+            .published_blocklace_checkpoint_pair_hashes(height)
+            .map_err(|e| e.to_string())?
+        else {
+            return Ok(false);
+        };
+        hashes
+    };
+    Ok(hashes == (proof.dag_hash, proof.ledger_hash))
+}
+
+/// A persisted pair is not itself evidence of which finalized turn authorized
+/// height H. Only this process's live finality producer can leave a volatile,
+/// exact-byte H/ordinal proof; old and reopened pairs fail closed even if their
+/// ledger matches some OTHER historical finalized root.
 fn existing_checkpoint_is_authorized(
     store: &dregg_persist::PersistentStore,
     height: u64,
@@ -20255,11 +20333,11 @@ fn existing_checkpoint_is_authorized(
     {
         return Ok(false);
     }
-    let bytes = store
-        .published_blocklace_checkpoint_ledger(height)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "published ledger half disappeared".to_string())?;
-    verified_checkpoint_ledger(store, &bytes)?;
+    if !live_checkpoint_proof(store, height, None)? {
+        return Err(format!(
+            "checkpoint height {height} has no live finalized producer proof"
+        ));
+    }
     Ok(true)
 }
 
@@ -20316,10 +20394,10 @@ async fn maybe_produce_checkpoint(state: &NodeState, handle: &BlocklaceHandle) {
     // execution cursor; taking both snapshots under locks alone would still publish
     // that unauthoritative state. The finality executor is the sole turn committer,
     // and cannot advance its cursor while this callback is producing the pair.
-    let ledger_data = {
+    let (ledger_data, ledger_root) = {
         let s = state.read().await;
         match finalized_checkpoint_ledger_wire(&s.store, &s.ledger, finalized_height) {
-            Ok(data) => data,
+            Ok(data) => (data, canonical_ledger_root(&s.ledger)),
             Err(e) => {
                 warn!(error = %e, height = finalized_height, "refusing checkpoint without a matching durable finalized ledger root");
                 return;
@@ -20347,6 +20425,18 @@ async fn maybe_produce_checkpoint(state: &NodeState, handle: &BlocklaceHandle) {
             blocklace_checkpoint_retention_limit(),
         ) {
             warn!(error = %e, height = finalized_height, "failed to publish blocklace checkpoint pair");
+            return;
+        }
+        // Volatile provenance exists ONLY after the live producer's root check
+        // and successful atomic publication. Failure must not gossip or serve.
+        if let Err(e) = record_live_finality_checkpoint(
+            &s.store,
+            finalized_height,
+            &blocklace_stored,
+            &ledger_stored,
+            ledger_root,
+        ) {
+            warn!(error = %e, height = finalized_height, "refusing checkpoint without live finalized production proof");
             return;
         }
     }
@@ -20407,8 +20497,11 @@ pub fn load_blocklace_checkpoint(
 ) -> Option<BlocklaceCheckpointResponse> {
     let (blocklace_data, ledger_data) =
         store.published_blocklace_checkpoint_pair(height).ok()??;
-    if let Err(e) = verified_checkpoint_ledger(store, &ledger_data) {
-        warn!(error = %e, height, "refusing checkpoint without local finalized ledger authority");
+    if !live_checkpoint_proof(store, height, Some((&blocklace_data, &ledger_data))).ok()? {
+        warn!(
+            height,
+            "refusing checkpoint without live height-bound finalized producer proof"
+        );
         return None;
     }
 
@@ -20430,353 +20523,13 @@ pub fn load_blocklace_checkpoint(
 }
 
 #[cfg(test)]
-mod checkpoint_pair_tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn finalized_checkpoint_ledger_refuses_concurrent_unfinalized_mutation() {
-        let store = dregg_persist::PersistentStore::open_in_memory().unwrap();
-        let ledger = std::sync::Arc::new(tokio::sync::RwLock::new(dregg_cell::Ledger::new()));
-        store
-            .commit_finalized_turn(0, &empty_checkpoint_test_commit(&*ledger.read().await))
-            .unwrap();
-        let durable_root = store
-            .finalized_commit_authority_at(0)
-            .unwrap()
-            .unwrap()
-            .ledger_root();
-        let (attempt, started) = tokio::sync::oneshot::channel();
-        let (finished, mut completion) = tokio::sync::oneshot::channel();
-        let guard = ledger.read().await;
-        let writer = ledger.clone();
-        let mutation = tokio::spawn(async move {
-            attempt.send(()).unwrap();
-            let mut ledger = writer.write().await;
-            ledger
-                .insert_cell(dregg_cell::Cell::with_balance([0x31; 32], [0; 32], 7))
-                .unwrap();
-            finished.send(()).unwrap();
-        });
-        started.await.unwrap();
-        assert!(
-            completion.try_recv().is_err(),
-            "mutation cannot pass the snapshot read lock"
-        );
-        assert!(
-            finalized_checkpoint_ledger_wire(&store, &guard, 1).is_ok(),
-            "a committed root and unchanged ledger are publishable before the writer enters"
-        );
-        drop(guard);
-        completion.await.unwrap();
-        mutation.await.unwrap();
-        assert_eq!(
-            store.commit_cursor().unwrap(),
-            1,
-            "local MCP mutation is not a commit"
-        );
-        assert_eq!(
-            store
-                .finalized_commit_authority_at(0)
-                .unwrap()
-                .unwrap()
-                .ledger_root(),
-            durable_root,
-            "local MCP mutation leaves finalized authority unchanged"
-        );
-        assert!(
-            finalized_checkpoint_ledger_wire(&store, &*ledger.read().await, 1)
-                .unwrap_err()
-                .contains("diverges from finalized authority"),
-            "the same height must refuse a local cell inserted after the DAG snapshot"
-        );
-    }
-
-    fn empty_checkpoint_test_commit(ledger: &dregg_cell::Ledger) -> dregg_persist::CommitRecord {
-        dregg_persist::CommitRecord {
-            ordinal: 0,
-            height: 1,
-            block_id: [0x22; 32],
-            block_executed_up_to: 1,
-            turn_hash: [0x23; 32],
-            creator: [0x24; 32],
-            receipt_hash: [0x25; 32],
-            ledger_root: canonical_ledger_root(ledger),
-            touched_cells: vec![],
-            removed: vec![],
-        }
-    }
-
-    #[test]
-    fn finalized_checkpoint_ledger_binds_committed_root_and_refuses_missing_authority() {
-        let store = dregg_persist::PersistentStore::open_in_memory().unwrap();
-        let ledger = dregg_cell::Ledger::new();
-        assert!(finalized_checkpoint_ledger_wire(&store, &ledger, 1).is_err());
-        store
-            .commit_finalized_turn(0, &empty_checkpoint_test_commit(&ledger))
-            .unwrap();
-        assert!(finalized_checkpoint_ledger_wire(&store, &ledger, 1).is_ok());
-        let mut altered = ledger;
-        altered
-            .insert_cell(dregg_cell::Cell::with_balance([0x32; 32], [0; 32], 9))
-            .unwrap();
-        assert!(finalized_checkpoint_ledger_wire(&store, &altered, 1).is_err());
-    }
-
-    #[test]
-    fn checkpoint_serving_keeps_legacy_wire_and_refuses_unpublished_halves() {
-        let store = dregg_persist::PersistentStore::open_in_memory().unwrap();
-        let dag = compress_checkpoint_data(b"full historical DAG".to_vec());
-        let authoritative_ledger = dregg_cell::Ledger::new();
-        store
-            .commit_finalized_turn(0, &empty_checkpoint_test_commit(&authoritative_ledger))
-            .unwrap();
-        let ledger_wire =
-            finalized_checkpoint_ledger_wire(&store, &authoritative_ledger, 12).unwrap();
-        let ledger = compress_checkpoint_data(ledger_wire.clone());
-        store.set_config("blocklace_checkpoint_12", &dag).unwrap();
-        store
-            .set_config("blocklace_checkpoint_latest_height", &12u64.to_le_bytes())
-            .unwrap();
-        assert_eq!(latest_blocklace_checkpoint_height(&store), 0);
-        assert!(
-            load_blocklace_checkpoint(&store, 12).is_none(),
-            "an orphaned DAG is not published"
-        );
-        store
-            .set_config("blocklace_ledger_snapshot_12", &ledger)
-            .unwrap();
-        assert_eq!(latest_blocklace_checkpoint_height(&store), 12);
-        assert_eq!(load_blocklace_checkpoint(&store, 12).unwrap().height, 12);
-        store
-            .publish_blocklace_checkpoint_pair(12, &dag, &ledger, 5)
-            .unwrap();
-        let served = load_blocklace_checkpoint(&store, 12).unwrap();
-        assert_eq!(served.height, 12);
-        assert_eq!(hex_decode_var(&served.blocklace).unwrap(), dag);
-        assert_eq!(hex_decode_var(&served.ledger).unwrap(), ledger);
-        assert_eq!(
-            hex_decode_var(&served.blocklace_hash).unwrap(),
-            blake3::hash(b"full historical DAG").as_bytes().to_vec()
-        );
-        assert_eq!(
-            hex_decode_var(&served.ledger_hash).unwrap(),
-            blake3::hash(&ledger_wire).as_bytes().to_vec()
-        );
-        assert_eq!(latest_blocklace_checkpoint_height(&store), 12);
-        // An older peer's explicit height still resolves while inside the
-        // retention window; no new wire format is required to bootstrap.
-        let later = compress_checkpoint_data(b"later DAG".to_vec());
-        store
-            .publish_blocklace_checkpoint_pair(13, &later, &ledger, 5)
-            .unwrap();
-        assert_eq!(load_blocklace_checkpoint(&store, 12).unwrap().height, 12);
-        assert_eq!(latest_blocklace_checkpoint_height(&store), 13);
-    }
-
-    #[test]
-    fn legacy_pair_requires_local_finalized_whole_cell_authority_on_every_read() {
-        let store = dregg_persist::PersistentStore::open_in_memory().unwrap();
-        let dag = compress_checkpoint_data(b"legacy signed DAG".to_vec());
-        let ledger = dregg_cell::Ledger::new();
-        let good = compress_checkpoint_data(finalized_checkpoint_ledger_wire_for_test(&ledger));
-        store
-            .commit_finalized_turn(0, &empty_checkpoint_test_commit(&ledger))
-            .unwrap();
-        store.set_config("blocklace_checkpoint_12", &dag).unwrap();
-        store
-            .set_config("blocklace_ledger_snapshot_12", &good)
-            .unwrap();
-        store
-            .set_config("blocklace_checkpoint_latest_height", &12u64.to_le_bytes())
-            .unwrap();
-        assert!(
-            existing_checkpoint_is_authorized(&store, 12).unwrap(),
-            "producer early-return control"
-        );
-        assert_eq!(latest_blocklace_checkpoint_height(&store), 12);
-        assert_eq!(load_blocklace_checkpoint(&store, 12).unwrap().height, 12);
-
-        // A locally inserted MCP cell leaves the durable commit root unchanged.
-        let mut mutated = ledger;
-        mutated
-            .insert_cell(dregg_cell::Cell::with_balance([0x45; 32], [0; 32], 100))
-            .unwrap();
-        let bad = compress_checkpoint_data(finalized_checkpoint_ledger_wire_for_test(&mutated));
-        store
-            .set_config("blocklace_ledger_snapshot_12", &bad)
-            .unwrap();
-        assert!(
-            existing_checkpoint_is_authorized(&store, 12).is_err(),
-            "producer cannot bypass verification"
-        );
-        assert_eq!(
-            latest_blocklace_checkpoint_height(&store),
-            0,
-            "do not advertise unfinalized pair"
-        );
-        assert!(
-            load_blocklace_checkpoint(&store, 12).is_none(),
-            "explicit-height API also refuses"
-        );
-        assert!(
-            store
-                .publish_blocklace_checkpoint_pair(12, &dag, &good, 5)
-                .is_err(),
-            "never overwrite complete immutable bad pair"
-        );
-        assert_eq!(
-            store.get_config("blocklace_ledger_snapshot_12").unwrap(),
-            Some(bad)
-        );
-    }
-
-    #[test]
-    fn historical_retained_pair_uses_its_own_durable_root_after_newer_commit() {
-        let store = dregg_persist::PersistentStore::open_in_memory().unwrap();
-        let ledger = dregg_cell::Ledger::new();
-        store
-            .commit_finalized_turn(0, &empty_checkpoint_test_commit(&ledger))
-            .unwrap();
-        let original = compress_checkpoint_data(finalized_checkpoint_ledger_wire_for_test(&ledger));
-        let dag = compress_checkpoint_data(b"old signed DAG".to_vec());
-        store
-            .publish_blocklace_checkpoint_pair(1, &dag, &original, 5)
-            .unwrap();
-        let mut changed = ledger;
-        changed
-            .insert_cell(dregg_cell::Cell::with_balance([0x47; 32], [0; 32], 50))
-            .unwrap();
-        let mut next = empty_checkpoint_test_commit(&changed);
-        next.ordinal = 1;
-        next.height = 2;
-        next.block_executed_up_to = 2;
-        next.block_id = [0x48; 32];
-        next.turn_hash = [0x49; 32];
-        store.commit_finalized_turn(1, &next).unwrap();
-        assert!(existing_checkpoint_is_authorized(&store, 1).unwrap());
-        assert_eq!(load_blocklace_checkpoint(&store, 1).unwrap().height, 1);
-        let later = compress_checkpoint_data(finalized_checkpoint_ledger_wire_for_test(&changed));
-        store
-            .publish_blocklace_checkpoint_pair(2, &dag, &later, 5)
-            .unwrap();
-        assert_eq!(latest_blocklace_checkpoint_height(&store), 2);
-        assert!(
-            load_blocklace_checkpoint(&store, 1).is_some(),
-            "older retained root stays locally verifiable"
-        );
-    }
-
-    #[test]
-    fn tombstoned_duplicate_latest_advertises_only_attested_predecessor() {
-        let store = dregg_persist::PersistentStore::open_in_memory().unwrap();
-        let ledger = dregg_cell::Ledger::new();
-        store
-            .commit_finalized_turn(0, &empty_checkpoint_test_commit(&ledger))
-            .unwrap();
-        let good = compress_checkpoint_data(finalized_checkpoint_ledger_wire_for_test(&ledger));
-        store
-            .set_config(
-                "blocklace_checkpoint_1",
-                &compress_checkpoint_data(b"historical DAG".to_vec()),
-            )
-            .unwrap();
-        store
-            .set_config("blocklace_ledger_snapshot_1", &good)
-            .unwrap();
-        store.set_config("blocklace_checkpoint_2", b"").unwrap();
-        store
-            .set_config("blocklace_ledger_snapshot_2", b"")
-            .unwrap();
-        store
-            .set_config(
-                "blocklace_checkpoint_heights",
-                &postcard::to_stdvec(&vec![1u64, 2, 2]).unwrap(),
-            )
-            .unwrap();
-        store
-            .set_config("blocklace_checkpoint_latest_height", &2u64.to_le_bytes())
-            .unwrap();
-        assert_eq!(latest_blocklace_checkpoint_height(&store), 1);
-        assert_eq!(load_blocklace_checkpoint(&store, 1).unwrap().height, 1);
-        assert!(load_blocklace_checkpoint(&store, 2).is_none());
-        assert!(
-            !existing_checkpoint_is_authorized(&store, 2).unwrap(),
-            "producer must re-publish tombstoned height"
-        );
-    }
-
-    #[test]
-    fn failed_legacy_latest_write_is_served_only_with_complete_pair_and_local_root() {
-        let store = dregg_persist::PersistentStore::open_in_memory().unwrap();
-        let ledger = dregg_cell::Ledger::new();
-        store
-            .commit_finalized_turn(0, &empty_checkpoint_test_commit(&ledger))
-            .unwrap();
-        let bytes = compress_checkpoint_data(finalized_checkpoint_ledger_wire_for_test(&ledger));
-        let dag = compress_checkpoint_data(b"signed historical DAG".to_vec());
-        store.set_config("blocklace_checkpoint_1", &dag).unwrap();
-        store
-            .set_config("blocklace_ledger_snapshot_1", &bytes)
-            .unwrap();
-        store.set_config("blocklace_checkpoint_2", &dag).unwrap();
-        store
-            .set_config("blocklace_checkpoint_latest_height", &1u64.to_le_bytes())
-            .unwrap();
-        store
-            .set_config(
-                "blocklace_checkpoint_heights",
-                &postcard::to_stdvec(&vec![1u64, 2]).unwrap(),
-            )
-            .unwrap();
-        assert_eq!(
-            latest_blocklace_checkpoint_height(&store),
-            0,
-            "torn indexed tail is not an announcement"
-        );
-        assert!(load_blocklace_checkpoint(&store, 2).is_none());
-        store
-            .set_config("blocklace_ledger_snapshot_2", &bytes)
-            .unwrap();
-        assert_eq!(latest_blocklace_checkpoint_height(&store), 2);
-        assert_eq!(load_blocklace_checkpoint(&store, 2).unwrap().height, 2);
-        assert!(existing_checkpoint_is_authorized(&store, 2).unwrap());
-    }
-
-    #[test]
-    fn missing_authority_and_invalid_legacy_cells_refuse() {
-        let store = dregg_persist::PersistentStore::open_in_memory().unwrap();
-        let ledger = dregg_cell::Ledger::new();
-        let bytes = compress_checkpoint_data(finalized_checkpoint_ledger_wire_for_test(&ledger));
-        store
-            .publish_blocklace_checkpoint_pair(1, b"dag", &bytes, 5)
-            .unwrap();
-        assert!(existing_checkpoint_is_authorized(&store, 1).is_err());
-        assert!(load_blocklace_checkpoint(&store, 1).is_none());
-        assert_eq!(latest_blocklace_checkpoint_height(&store), 0);
-        store
-            .commit_finalized_turn(0, &empty_checkpoint_test_commit(&ledger))
-            .unwrap();
-        assert!(existing_checkpoint_is_authorized(&store, 1).unwrap());
-        assert!(verified_checkpoint_ledger(&store, b"invalid wrapper").is_err());
-        let duplicate_cell = dregg_cell::Cell::with_balance([0x46; 32], [0; 32], 1);
-        let duplicate = postcard::to_stdvec(&vec![
-            (duplicate_cell.id(), duplicate_cell.clone()),
-            (duplicate_cell.id(), duplicate_cell),
-        ])
-        .unwrap();
-        assert!(verified_checkpoint_ledger(&store, &compress_checkpoint_data(duplicate)).is_err());
-    }
-
-    fn finalized_checkpoint_ledger_wire_for_test(ledger: &dregg_cell::Ledger) -> Vec<u8> {
-        let cells: Vec<(&dregg_cell::CellId, &dregg_cell::Cell)> = ledger.iter().collect();
-        postcard::to_stdvec(&cells).unwrap()
-    }
-}
+#[path = "checkpoint_pair_tests.rs"]
+mod checkpoint_pair_tests;
 
 pub fn latest_blocklace_checkpoint_height(store: &dregg_persist::PersistentStore) -> u64 {
-    // The original writer could leave one complete indexed tail after a failed
-    // pointer write, or tombstone its own duplicated latest. Only advertise a
-    // structurally complete candidate with a locally finalized whole-cell root.
+    // The original writer could leave a complete index tail or tombstone its
+    // duplicated latest. Structural recovery does NOT imply height authority:
+    // only a fresh live producer can leave the volatile exact-pair receipt.
     let height = match store.latest_blocklace_checkpoint_candidate() {
         Ok(Some(height)) => height,
         Ok(None) => return 0,
@@ -20785,15 +20538,13 @@ pub fn latest_blocklace_checkpoint_height(store: &dregg_persist::PersistentStore
             return 0;
         }
     };
-    let checked = store
-        .published_blocklace_checkpoint_ledger(height)
-        .map_err(|e| e.to_string())
-        .and_then(|bytes| bytes.ok_or_else(|| "published ledger half disappeared".to_string()))
-        .and_then(|bytes| verified_checkpoint_ledger(store, &bytes));
-    match checked {
-        Ok(()) => height,
-        Err(e) => {
-            warn!(error = %e, height, "refusing unauthenticated checkpoint announcement");
+    match existing_checkpoint_is_authorized(store, height) {
+        Ok(true) => height,
+        Ok(false) | Err(_) => {
+            warn!(
+                height,
+                "refusing checkpoint announcement without live height-bound proof"
+            );
             0
         }
     }

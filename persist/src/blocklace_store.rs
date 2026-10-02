@@ -445,27 +445,32 @@ impl PersistentStore {
         }
     }
 
-    /// Read just the ledger half of a complete pair. The producer checks legacy
-    /// images against durable authority without copying the O(history) DAG.
-    pub fn published_blocklace_checkpoint_ledger(&self, height: u64) -> Result<Option<Vec<u8>>> {
+    /// Hash both published halves while borrowing them from one read transaction.
+    /// This is structural data only; the node's private finality receipt binds
+    /// these bytes to H and its durable finalized ordinal.
+    pub fn published_blocklace_checkpoint_pair_hashes(
+        &self,
+        height: u64,
+    ) -> Result<Option<([u8; 32], [u8; 32])>> {
         if !self.has_published_blocklace_checkpoint_pair(height)? {
             return Ok(None);
         }
         let txn = self.db.begin_read()?;
         let table = txn.open_table(tables::METADATA_BYTES)?;
+        let dag = table
+            .get(format!("blocklace_checkpoint_{height}").as_str())?
+            .ok_or_else(|| StoreError::Integrity("checkpoint DAG disappeared".into()))?;
         let ledger = table
             .get(format!("blocklace_ledger_snapshot_{height}").as_str())?
-            .map(|g| g.value().to_vec())
-            .ok_or_else(|| {
-                StoreError::Integrity(format!(
-                    "published checkpoint {height} lost its ledger half"
-                ))
-            })?;
-        Ok(Some(ledger))
+            .ok_or_else(|| StoreError::Integrity("checkpoint ledger disappeared".into()))?;
+        Ok(Some((
+            *blake3::hash(dag.value()).as_bytes(),
+            *blake3::hash(ledger.value()).as_bytes(),
+        )))
     }
 
-    /// Structural candidate only: the node must still check this image's whole-
-    /// cell root against its local finalized commit authority before advertising.
+    /// Structural candidate only: the node must still require a private
+    /// exact-height finalized producer receipt before advertising.
     pub fn latest_blocklace_checkpoint_candidate(&self) -> Result<Option<u64>> {
         if let Some(fault) = self.config_io_fault() {
             return Err(fault);

@@ -67,6 +67,12 @@ mod tests;
 
 use std::path::Path;
 
+// A volatile store incarnation, never recovered from disk. Node-private
+// checkpoint provenance uses this ID rather than an address that could be
+// recycled when a store is closed and reopened in the same process.
+static NEXT_CHECKPOINT_STORE_ID: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(1);
+
 use redb::{Database, ReadableTable, ReadableTableMetadata};
 
 pub use blocklace_store::BlocklaceMeta;
@@ -370,9 +376,16 @@ pub struct PersistentStore {
     /// `success: true`. Always compiled — one relaxed atomic load per config
     /// operation — and NEVER set in production.
     fail_config_io: std::sync::atomic::AtomicBool,
+    /// Volatile incarnation key for node-private checkpoint provenance. New on
+    /// reopen; derived on-disk pairs cannot supply finalized-height authority.
+    checkpoint_store_id: u64,
 }
 
 impl PersistentStore {
+    /// Process-only identity; no disk metadata or peer input can reproduce it.
+    pub fn checkpoint_store_id(&self) -> u64 {
+        self.checkpoint_store_id
+    }
     /// Canonical-state re-genesis epoch installed in [`tables::METADATA`].
     /// Epoch 11 pairs the exact fields-root leaf with ledger-root v3.
     ///
@@ -966,6 +979,8 @@ impl PersistentStore {
             db,
             fail_persist_block: std::sync::atomic::AtomicBool::new(false),
             fail_config_io: std::sync::atomic::AtomicBool::new(false),
+            checkpoint_store_id: NEXT_CHECKPOINT_STORE_ID
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         };
         store.initialize_tables()?;
         store.enforce_canonical_state_schema_epoch()?;
@@ -1008,6 +1023,8 @@ impl PersistentStore {
             db,
             fail_persist_block: std::sync::atomic::AtomicBool::new(false),
             fail_config_io: std::sync::atomic::AtomicBool::new(false),
+            checkpoint_store_id: NEXT_CHECKPOINT_STORE_ID
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         };
         store.initialize_tables()?;
         store.enforce_canonical_state_schema_epoch()?;
@@ -1038,6 +1055,8 @@ impl PersistentStore {
             db,
             fail_persist_block: std::sync::atomic::AtomicBool::new(false),
             fail_config_io: std::sync::atomic::AtomicBool::new(false),
+            checkpoint_store_id: NEXT_CHECKPOINT_STORE_ID
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         };
         store.initialize_tables()?;
         store.enforce_canonical_state_schema_epoch()?;
