@@ -20359,6 +20359,8 @@ mod checkpoint_pair_tests {
         store
             .set_config("blocklace_ledger_snapshot_12", &ledger)
             .unwrap();
+        assert_eq!(latest_blocklace_checkpoint_height(&store), 12);
+        assert_eq!(load_blocklace_checkpoint(&store, 12).unwrap().height, 12);
         store
             .publish_blocklace_checkpoint_pair(12, &dag, &ledger, 5)
             .unwrap();

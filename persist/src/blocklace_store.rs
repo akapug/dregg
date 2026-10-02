@@ -14,6 +14,27 @@ use std::collections::HashMap;
 const BLOCKLACE_CHECKPOINT_HEIGHTS: &str = "blocklace_checkpoint_heights";
 const BLOCKLACE_CHECKPOINT_LATEST: &str = "blocklace_checkpoint_latest_height";
 
+// Before atomic publication, the latest pointer could commit after both halves
+// but before the height index. That last complete pair is recoverable on reads;
+// an unindexed older pair (or one half) is never implicitly published.
+fn checkpoint_height_is_published(
+    index: Option<&[u8]>,
+    latest: Option<&[u8]>,
+    height: u64,
+) -> Result<bool> {
+    let heights: Vec<u64> = index
+        .map(postcard::from_bytes)
+        .transpose()?
+        .unwrap_or_default();
+    if heights.contains(&height) {
+        return Ok(true);
+    }
+    let latest_height = latest
+        .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok())
+        .map(u64::from_le_bytes);
+    Ok(latest_height == Some(height) && heights.iter().all(|h| *h < height))
+}
+
 #[cfg(test)]
 thread_local! {
     // One-shot fault in the real write transaction, after N mutations and before commit.
@@ -224,7 +245,7 @@ impl PersistentStore {
             }
             // Prune only superseded derived pairs, not the authoritative source
             // blocks or ledger checkpoints needed by historical snapshot consumers.
-            while heights.len() > keep_last {
+            while height > latest_height && heights.len() > keep_last {
                 let old = heights.remove(0);
                 table.remove(format!("blocklace_checkpoint_{old}").as_str())?;
                 table.remove(format!("blocklace_ledger_snapshot_{old}").as_str())?;
@@ -257,11 +278,13 @@ impl PersistentStore {
         }
         let txn = self.db.begin_read()?;
         let table = txn.open_table(tables::METADATA_BYTES)?;
-        let Some(index) = table.get(BLOCKLACE_CHECKPOINT_HEIGHTS)? else {
-            return Ok(false);
-        };
-        let heights: Vec<u64> = postcard::from_bytes(index.value())?;
-        if !heights.contains(&height) {
+        let index = table.get(BLOCKLACE_CHECKPOINT_HEIGHTS)?;
+        let latest = table.get(BLOCKLACE_CHECKPOINT_LATEST)?;
+        if !checkpoint_height_is_published(
+            index.as_ref().map(|g| g.value()),
+            latest.as_ref().map(|g| g.value()),
+            height,
+        )? {
             return Ok(false);
         }
         let c = table
@@ -291,11 +314,13 @@ impl PersistentStore {
         }
         let txn = self.db.begin_read()?;
         let table = txn.open_table(tables::METADATA_BYTES)?;
-        let Some(index) = table.get(BLOCKLACE_CHECKPOINT_HEIGHTS)? else {
-            return Ok(None);
-        };
-        let heights: Vec<u64> = postcard::from_bytes(index.value())?;
-        if !heights.contains(&height) {
+        let index = table.get(BLOCKLACE_CHECKPOINT_HEIGHTS)?;
+        let latest = table.get(BLOCKLACE_CHECKPOINT_LATEST)?;
+        if !checkpoint_height_is_published(
+            index.as_ref().map(|g| g.value()),
+            latest.as_ref().map(|g| g.value()),
+            height,
+        )? {
             return Ok(None);
         }
         let checkpoint = table
@@ -658,6 +683,11 @@ mod tests {
                 .publish_blocklace_checkpoint_pair(5, &[5], &[25], 5)
                 .unwrap();
         }
+        assert_eq!(published_heights(&store), vec![1, 2, 3, 4, 5]);
+        // A repeated height does not retroactively shrink an older window.
+        store
+            .publish_blocklace_checkpoint_pair(5, &[5], &[25], 2)
+            .unwrap();
         assert_eq!(published_heights(&store), vec![1, 2, 3, 4, 5]);
         assert!(
             matches!(
