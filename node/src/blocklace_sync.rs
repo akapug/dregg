@@ -51,9 +51,17 @@ use crate::state::{NodeEvent, NodeState};
 /// Gossip topic for blocklace dissemination messages.
 pub const TOPIC_BLOCKLACE: &str = "dregg/blocklace";
 
-/// Maximum number of blocklace checkpoints to retain. Older checkpoints are pruned
-/// to bound storage growth.
+/// Retain recent derived bootstrap pairs. Signed blocks, roots, commit records,
+/// historical proofs and their replay inputs are not part of this cache window.
 const MAX_RETAINED_CHECKPOINTS: usize = 5;
+
+fn blocklace_checkpoint_retention_limit() -> usize {
+    if std::env::var("DREGG_ARCHIVAL_BLOCKLACE_CHECKPOINTS").as_deref() == Ok("1") {
+        usize::MAX
+    } else {
+        MAX_RETAINED_CHECKPOINTS
+    }
+}
 
 /// How many cadence ticks a cast finalization vote is re-emitted before it is
 /// dropped from the pending set (the vote-layer anti-entropy budget). Re-emission
@@ -20181,6 +20189,22 @@ async fn maybe_produce_checkpoint(state: &NodeState, handle: &BlocklaceHandle) {
     }
 
     let finalized_height = executed_count;
+    // The executor can run again at the same count (ack/membership traffic).
+    // Avoid serializing the entire DAG and ledger on every such callback.
+    {
+        let s = state.read().await;
+        match s
+            .store
+            .has_published_blocklace_checkpoint_pair(finalized_height)
+        {
+            Ok(true) => return,
+            Ok(false) => {}
+            Err(e) => {
+                warn!(error = %e, height = finalized_height, "cannot inspect checkpoint pair");
+                return;
+            }
+        }
+    }
 
     info!(height = finalized_height, "producing blocklace checkpoint");
 
@@ -20216,49 +20240,23 @@ async fn maybe_produce_checkpoint(state: &NodeState, handle: &BlocklaceHandle) {
     let blocklace_hash = *blake3::hash(&blocklace_data).as_bytes();
     let ledger_hash = *blake3::hash(&ledger_data).as_bytes();
 
-    // Apply compression wrapper (magic byte prefix for future zstd support).
-    let blocklace_stored = compress_checkpoint_data(&blocklace_data);
-    let ledger_stored = compress_checkpoint_data(&ledger_data);
+    // Move the serialized snapshots into their wire wrappers rather than
+    // retaining a second O(history) DAG allocation until publication completes.
+    let blocklace_stored = compress_checkpoint_data(blocklace_data);
+    let ledger_stored = compress_checkpoint_data(ledger_data);
 
-    // Store the checkpoint locally.
+    // Pair, latest pointer, unique index and derived-pair reclamation share one
+    // transaction. A failed write cannot announce or serve a half-published pair.
     {
         let s = state.read().await;
-        let checkpoint_key = format!("blocklace_checkpoint_{}", finalized_height);
-        let ledger_key = format!("blocklace_ledger_snapshot_{}", finalized_height);
-        if let Err(e) = s.store.set_config(&checkpoint_key, &blocklace_stored) {
-            warn!(error = %e, height = finalized_height, "failed to store blocklace checkpoint");
+        if let Err(e) = s.store.publish_blocklace_checkpoint_pair(
+            finalized_height,
+            &blocklace_stored,
+            &ledger_stored,
+            blocklace_checkpoint_retention_limit(),
+        ) {
+            warn!(error = %e, height = finalized_height, "failed to publish blocklace checkpoint pair");
             return;
-        }
-        if let Err(e) = s.store.set_config(&ledger_key, &ledger_stored) {
-            warn!(error = %e, height = finalized_height, "failed to store ledger snapshot");
-            return;
-        }
-        let height_bytes = finalized_height.to_le_bytes();
-        let _ = s
-            .store
-            .set_config("blocklace_checkpoint_latest_height", &height_bytes);
-
-        let list_key = "blocklace_checkpoint_heights";
-        let mut heights: Vec<u64> = s
-            .store
-            .get_config(list_key)
-            .ok()
-            .flatten()
-            .and_then(|data| postcard::from_bytes(&data).ok())
-            .unwrap_or_default();
-        heights.push(finalized_height);
-
-        while heights.len() > MAX_RETAINED_CHECKPOINTS {
-            let old_height = heights.remove(0);
-            let old_cp_key = format!("blocklace_checkpoint_{}", old_height);
-            let old_ledger_key = format!("blocklace_ledger_snapshot_{}", old_height);
-            let _ = s.store.set_config(&old_cp_key, &[]);
-            let _ = s.store.set_config(&old_ledger_key, &[]);
-            debug!(height = old_height, "pruned old blocklace checkpoint");
-        }
-
-        if let Ok(heights_data) = postcard::to_stdvec(&heights) {
-            let _ = s.store.set_config(list_key, &heights_data);
         }
     }
 
@@ -20283,11 +20281,9 @@ async fn maybe_produce_checkpoint(state: &NodeState, handle: &BlocklaceHandle) {
     );
 }
 
-fn compress_checkpoint_data(data: &[u8]) -> Vec<u8> {
-    let mut result = Vec::with_capacity(1 + data.len());
-    result.push(0x00);
-    result.extend_from_slice(data);
-    result
+fn compress_checkpoint_data(mut data: Vec<u8>) -> Vec<u8> {
+    data.insert(0, 0x00);
+    data
 }
 
 pub fn decompress_checkpoint_data(data: &[u8]) -> Option<Vec<u8>> {
@@ -20318,20 +20314,20 @@ pub fn load_blocklace_checkpoint(
     store: &dregg_persist::PersistentStore,
     height: u64,
 ) -> Option<BlocklaceCheckpointResponse> {
-    let checkpoint_key = format!("blocklace_checkpoint_{}", height);
-    let ledger_key = format!("blocklace_ledger_snapshot_{}", height);
-
-    let blocklace_data = store.get_config(&checkpoint_key).ok()??;
-    let ledger_data = store.get_config(&ledger_key).ok()??;
+    let (blocklace_data, ledger_data) =
+        store.published_blocklace_checkpoint_pair(height).ok()??;
 
     if blocklace_data.is_empty() || ledger_data.is_empty() {
         return None;
     }
 
-    let blocklace_raw = decompress_checkpoint_data(&blocklace_data)?;
-    let ledger_raw = decompress_checkpoint_data(&ledger_data)?;
-    let blocklace_hash = *blake3::hash(&blocklace_raw).as_bytes();
-    let ledger_hash = *blake3::hash(&ledger_raw).as_bytes();
+    // The stored 0x00 wrapper is uncompressed. Hash its borrowed payload: a
+    // bootstrap response already holds both full serialized snapshots and their
+    // hex wire copies, so cloning two more O(history) buffers here is avoidable.
+    let blocklace_raw = blocklace_data.strip_prefix(&[0x00])?;
+    let ledger_raw = ledger_data.strip_prefix(&[0x00])?;
+    let blocklace_hash = *blake3::hash(blocklace_raw).as_bytes();
+    let ledger_hash = *blake3::hash(ledger_raw).as_bytes();
 
     Some(BlocklaceCheckpointResponse {
         height,
@@ -20342,8 +20338,56 @@ pub fn load_blocklace_checkpoint(
     })
 }
 
+#[cfg(test)]
+mod checkpoint_pair_tests {
+    use super::*;
+
+    #[test]
+    fn checkpoint_serving_keeps_legacy_wire_and_refuses_unpublished_halves() {
+        let store = dregg_persist::PersistentStore::open_in_memory().unwrap();
+        let dag = compress_checkpoint_data(b"full historical DAG".to_vec());
+        let ledger = compress_checkpoint_data(b"ledger snapshot".to_vec());
+        store.set_config("blocklace_checkpoint_12", &dag).unwrap();
+        store
+            .set_config("blocklace_checkpoint_latest_height", &12u64.to_le_bytes())
+            .unwrap();
+        assert_eq!(latest_blocklace_checkpoint_height(&store), 0);
+        assert!(
+            load_blocklace_checkpoint(&store, 12).is_none(),
+            "an orphaned DAG is not published"
+        );
+        store
+            .set_config("blocklace_ledger_snapshot_12", &ledger)
+            .unwrap();
+        store
+            .publish_blocklace_checkpoint_pair(12, &dag, &ledger, 5)
+            .unwrap();
+        let served = load_blocklace_checkpoint(&store, 12).unwrap();
+        assert_eq!(served.height, 12);
+        assert_eq!(hex_decode_var(&served.blocklace).unwrap(), dag);
+        assert_eq!(hex_decode_var(&served.ledger).unwrap(), ledger);
+        assert_eq!(
+            hex_decode_var(&served.blocklace_hash).unwrap(),
+            blake3::hash(b"full historical DAG").as_bytes().to_vec()
+        );
+        assert_eq!(
+            hex_decode_var(&served.ledger_hash).unwrap(),
+            blake3::hash(b"ledger snapshot").as_bytes().to_vec()
+        );
+        assert_eq!(latest_blocklace_checkpoint_height(&store), 12);
+        // An older peer's explicit height still resolves while inside the
+        // retention window; no new wire format is required to bootstrap.
+        let later = compress_checkpoint_data(b"later DAG".to_vec());
+        store
+            .publish_blocklace_checkpoint_pair(13, &later, &ledger, 5)
+            .unwrap();
+        assert_eq!(load_blocklace_checkpoint(&store, 12).unwrap().height, 12);
+        assert_eq!(latest_blocklace_checkpoint_height(&store), 13);
+    }
+}
+
 pub fn latest_blocklace_checkpoint_height(store: &dregg_persist::PersistentStore) -> u64 {
-    store
+    let height = store
         .get_config("blocklace_checkpoint_latest_height")
         .ok()
         .flatten()
@@ -20354,7 +20398,18 @@ pub fn latest_blocklace_checkpoint_height(store: &dregg_persist::PersistentStore
                 None
             }
         })
-        .unwrap_or(0)
+        .unwrap_or(0);
+    // The legacy writer could advance this pointer before indexing the pair.
+    // Do not announce an orphan, tombstone or unindexed height to bootstrap peers.
+    if height != 0
+        && store
+            .has_published_blocklace_checkpoint_pair(height)
+            .unwrap_or(false)
+    {
+        height
+    } else {
+        0
+    }
 }
 
 pub async fn bootstrap_from_checkpoint(

@@ -11,6 +11,29 @@
 
 use std::collections::HashMap;
 
+const BLOCKLACE_CHECKPOINT_HEIGHTS: &str = "blocklace_checkpoint_heights";
+const BLOCKLACE_CHECKPOINT_LATEST: &str = "blocklace_checkpoint_latest_height";
+
+#[cfg(test)]
+thread_local! {
+    // One-shot fault in the real write transaction, after N mutations and before commit.
+    static FAIL_CHECKPOINT_PUBLISH_AFTER: std::cell::Cell<Option<usize>> = const {
+        std::cell::Cell::new(None)
+    };
+}
+
+#[cfg(test)]
+fn fail_checkpoint_publish_after(step: usize) -> bool {
+    FAIL_CHECKPOINT_PUBLISH_AFTER.with(|fault| {
+        if fault.get() == Some(step) {
+            fault.set(None);
+            true
+        } else {
+            false
+        }
+    })
+}
+
 use redb::{ReadableTable, ReadableTableMetadata};
 use serde::{Deserialize, Serialize};
 
@@ -41,6 +64,254 @@ pub struct BlocklaceMeta {
 }
 
 impl PersistentStore {
+    /// Publish a fast-sync DAG/ledger pair, its height index, and the latest pointer
+    /// in ONE redb transaction. These are derived bootstrap snapshots, not the signed
+    /// blocks, commit records, attested roots, or historical proof authorities.
+    /// Older pairs leave no tombstones; a height cannot be rebound to different bytes.
+    pub fn publish_blocklace_checkpoint_pair(
+        &self,
+        height: u64,
+        blocklace: &[u8],
+        ledger: &[u8],
+        keep_last: usize,
+    ) -> Result<()> {
+        if let Some(fault) = self.config_io_fault() {
+            return Err(fault);
+        }
+        if keep_last == 0 || blocklace.is_empty() || ledger.is_empty() {
+            return Err(StoreError::Integrity(
+                "empty checkpoint pair or retention window".into(),
+            ));
+        }
+        let checkpoint_key = format!("blocklace_checkpoint_{height}");
+        let ledger_key = format!("blocklace_ledger_snapshot_{height}");
+        let txn = self.db.begin_write()?;
+        {
+            let mut table = txn.open_table(tables::METADATA_BYTES)?;
+            let index = table
+                .get(BLOCKLACE_CHECKPOINT_HEIGHTS)?
+                .map(|g| g.value().to_vec());
+            let latest = table
+                .get(BLOCKLACE_CHECKPOINT_LATEST)?
+                .map(|g| g.value().to_vec());
+            let mut heights: Vec<u64> = match index {
+                Some(bytes) => postcard::from_bytes(&bytes)?,
+                None => Vec::new(),
+            };
+            let latest_height = match latest {
+                Some(bytes) if bytes.len() == 8 => u64::from_le_bytes(bytes.try_into().unwrap()),
+                Some(_) => {
+                    return Err(StoreError::Integrity(
+                        "invalid latest checkpoint height".into(),
+                    ));
+                }
+                None if heights.is_empty() => 0,
+                None => {
+                    return Err(StoreError::Integrity(
+                        "checkpoint height index has no latest pointer".into(),
+                    ));
+                }
+            };
+            // Earlier writers appended a duplicate on every same-height callback
+            // and tombstoned evicted pairs with empty values. Reconcile only that
+            // known legacy shape; never discard a nonempty half of a torn pair.
+            if heights.windows(2).any(|pair| pair[0] > pair[1]) {
+                return Err(StoreError::Integrity(
+                    "checkpoint height index is out of order".into(),
+                ));
+            }
+            heights.dedup();
+            let mut complete = Vec::with_capacity(heights.len());
+            for h in heights {
+                let checkpoint_key = format!("blocklace_checkpoint_{h}");
+                let ledger_key = format!("blocklace_ledger_snapshot_{h}");
+                let c = table
+                    .get(checkpoint_key.as_str())?
+                    .map(|g| !g.value().is_empty())
+                    .unwrap_or(false);
+                let l = table
+                    .get(ledger_key.as_str())?
+                    .map(|g| !g.value().is_empty())
+                    .unwrap_or(false);
+                if c != l {
+                    return Err(StoreError::Integrity(format!(
+                        "checkpoint {h} has only one half"
+                    )));
+                }
+                if c {
+                    complete.push(h);
+                } else {
+                    // The legacy writer left empty values instead of removing
+                    // old derived snapshots. Reclaim their keys in this same
+                    // transaction; an indexed nonempty orphan still refuses.
+                    table.remove(checkpoint_key.as_str())?;
+                    table.remove(ledger_key.as_str())?;
+                }
+            }
+            let mut heights = complete;
+            if heights.last().copied().unwrap_or(0) < latest_height {
+                // Legacy writer published the latest pointer before the index.
+                // Recover only a *complete* last pair; never advertise a torn one.
+                let c = table
+                    .get(format!("blocklace_checkpoint_{latest_height}").as_str())?
+                    .map(|g| !g.value().is_empty())
+                    .unwrap_or(false);
+                let l = table
+                    .get(format!("blocklace_ledger_snapshot_{latest_height}").as_str())?
+                    .map(|g| !g.value().is_empty())
+                    .unwrap_or(false);
+                if !c || !l {
+                    return Err(StoreError::Integrity(format!(
+                        "latest checkpoint {latest_height} is not a complete recoverable pair"
+                    )));
+                }
+                heights.push(latest_height);
+            }
+            if heights.last().copied().unwrap_or(0) != latest_height {
+                return Err(StoreError::Integrity(
+                    "checkpoint height index disagrees with latest pointer".into(),
+                ));
+            }
+            if height < latest_height {
+                return Err(StoreError::Integrity(format!(
+                    "checkpoint height {height} predates {latest_height}"
+                )));
+            }
+            if heights.contains(&height) {
+                let stored_blocklace = table
+                    .get(checkpoint_key.as_str())?
+                    .map(|g| g.value().to_vec());
+                let stored_ledger = table.get(ledger_key.as_str())?.map(|g| g.value().to_vec());
+                if stored_blocklace.as_deref() != Some(blocklace)
+                    || stored_ledger.as_deref() != Some(ledger)
+                {
+                    return Err(StoreError::Integrity(format!(
+                        "checkpoint height {height} is already bound to a different pair"
+                    )));
+                }
+            } else {
+                // A legacy interrupted writer may have stored one or both
+                // halves before it reached the index. Never overwrite existing
+                // nonempty bytes at this height with a different snapshot.
+                for (key, expected) in [
+                    (checkpoint_key.as_str(), blocklace),
+                    (ledger_key.as_str(), ledger),
+                ] {
+                    if let Some(existing) = table.get(key)?
+                        && !existing.value().is_empty()
+                        && existing.value() != expected
+                    {
+                        return Err(StoreError::Integrity(format!(
+                            "unindexed checkpoint height {height} already has different bytes"
+                        )));
+                    }
+                }
+                heights.push(height);
+                table.insert(checkpoint_key.as_str(), blocklace)?;
+                #[cfg(test)]
+                if fail_checkpoint_publish_after(1) {
+                    return Err(StoreError::Database(
+                        "checkpoint pair fault after DAG insert".into(),
+                    ));
+                }
+                table.insert(ledger_key.as_str(), ledger)?;
+                #[cfg(test)]
+                if fail_checkpoint_publish_after(2) {
+                    return Err(StoreError::Database(
+                        "checkpoint pair fault after ledger insert".into(),
+                    ));
+                }
+            }
+            // Prune only superseded derived pairs, not the authoritative source
+            // blocks or ledger checkpoints needed by historical snapshot consumers.
+            while heights.len() > keep_last {
+                let old = heights.remove(0);
+                table.remove(format!("blocklace_checkpoint_{old}").as_str())?;
+                table.remove(format!("blocklace_ledger_snapshot_{old}").as_str())?;
+            }
+            let encoded = postcard::to_stdvec(&heights)?;
+            table.insert(BLOCKLACE_CHECKPOINT_HEIGHTS, encoded.as_slice())?;
+            #[cfg(test)]
+            if fail_checkpoint_publish_after(3) {
+                return Err(StoreError::Database(
+                    "checkpoint pair fault after rollover/index".into(),
+                ));
+            }
+            table.insert(BLOCKLACE_CHECKPOINT_LATEST, height.to_le_bytes().as_slice())?;
+            #[cfg(test)]
+            if fail_checkpoint_publish_after(4) {
+                return Err(StoreError::Database(
+                    "checkpoint pair fault after latest pointer".into(),
+                ));
+            }
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
+    /// Test a published height without copying the potentially enormous DAG and
+    /// ledger snapshots into the executor's hot RAM on every finality callback.
+    pub fn has_published_blocklace_checkpoint_pair(&self, height: u64) -> Result<bool> {
+        if let Some(fault) = self.config_io_fault() {
+            return Err(fault);
+        }
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(tables::METADATA_BYTES)?;
+        let Some(index) = table.get(BLOCKLACE_CHECKPOINT_HEIGHTS)? else {
+            return Ok(false);
+        };
+        let heights: Vec<u64> = postcard::from_bytes(index.value())?;
+        if !heights.contains(&height) {
+            return Ok(false);
+        }
+        let c = table
+            .get(format!("blocklace_checkpoint_{height}").as_str())?
+            .map(|g| !g.value().is_empty())
+            .unwrap_or(false);
+        let l = table
+            .get(format!("blocklace_ledger_snapshot_{height}").as_str())?
+            .map(|g| !g.value().is_empty())
+            .unwrap_or(false);
+        if !c || !l {
+            return Err(StoreError::Integrity(format!(
+                "published checkpoint {height} has no complete pair"
+            )));
+        }
+        Ok(true)
+    }
+
+    /// Read only complete published pairs from one consistent transaction. A
+    /// previous interrupted writer's orphaned half is never served by height.
+    pub fn published_blocklace_checkpoint_pair(
+        &self,
+        height: u64,
+    ) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
+        if let Some(fault) = self.config_io_fault() {
+            return Err(fault);
+        }
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(tables::METADATA_BYTES)?;
+        let Some(index) = table.get(BLOCKLACE_CHECKPOINT_HEIGHTS)? else {
+            return Ok(None);
+        };
+        let heights: Vec<u64> = postcard::from_bytes(index.value())?;
+        if !heights.contains(&height) {
+            return Ok(None);
+        }
+        let checkpoint = table
+            .get(format!("blocklace_checkpoint_{height}").as_str())?
+            .map(|g| g.value().to_vec());
+        let ledger = table
+            .get(format!("blocklace_ledger_snapshot_{height}").as_str())?
+            .map(|g| g.value().to_vec());
+        match (checkpoint, ledger) {
+            (Some(c), Some(l)) if !c.is_empty() && !l.is_empty() => Ok(Some((c, l))),
+            _ => Err(StoreError::Integrity(format!(
+                "published checkpoint {height} has no complete pair"
+            ))),
+        }
+    }
+
     // =========================================================================
     // Blocklace Block Storage
     // =========================================================================
@@ -313,6 +584,313 @@ mod tests {
 
     fn key(seed: u8) -> ed25519_dalek::SigningKey {
         ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
+    }
+
+    fn published_heights(store: &PersistentStore) -> Vec<u64> {
+        postcard::from_bytes(
+            &store
+                .get_config(BLOCKLACE_CHECKPOINT_HEIGHTS)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn checkpoint_pair_rollover_reopen_and_historical_blocks_survive() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("checkpoint.redb");
+        {
+            let store = PersistentStore::open(&path).unwrap();
+            persist_honest_lace(&store, &key(7));
+            for h in 1..=7 {
+                store
+                    .publish_blocklace_checkpoint_pair(h, &[h as u8], &[h as u8 + 20], 5)
+                    .unwrap();
+            }
+            assert_eq!(
+                store.blocklace_block_count().unwrap(),
+                3,
+                "source blocks survive derived-pair rollover"
+            );
+            assert_eq!(published_heights(&store), vec![3, 4, 5, 6, 7]);
+            assert!(
+                store
+                    .published_blocklace_checkpoint_pair(2)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                store
+                    .get_config("blocklace_checkpoint_2")
+                    .unwrap()
+                    .is_none(),
+                "evicted pair is removed, not tombstoned"
+            );
+        }
+        let store = PersistentStore::open(&path).unwrap();
+        assert_eq!(store.blocklace_block_count().unwrap(), 3);
+        let (replayed, _) = store.load_blocklace(key(7), 1).unwrap().unwrap();
+        assert_eq!(
+            replayed.len(),
+            3,
+            "all historical signed blocks authenticate on restart"
+        );
+        assert_eq!(published_heights(&store), vec![3, 4, 5, 6, 7]);
+        for h in 3..=7 {
+            assert_eq!(
+                store.published_blocklace_checkpoint_pair(h).unwrap(),
+                Some((vec![h as u8], vec![h as u8 + 20]))
+            );
+        }
+    }
+
+    #[test]
+    fn same_height_is_exact_and_does_not_evict_or_duplicate() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        for h in 1..=5 {
+            store
+                .publish_blocklace_checkpoint_pair(h, &[h as u8], &[h as u8 + 20], 5)
+                .unwrap();
+        }
+        for _ in 0..8 {
+            store
+                .publish_blocklace_checkpoint_pair(5, &[5], &[25], 5)
+                .unwrap();
+        }
+        assert_eq!(published_heights(&store), vec![1, 2, 3, 4, 5]);
+        assert!(
+            matches!(
+                store.publish_blocklace_checkpoint_pair(5, &[99], &[25], 5),
+                Err(StoreError::Integrity(ref message)) if message.contains("already bound")
+            ),
+            "height is immutable even if only DAG differs"
+        );
+        assert_eq!(
+            store.published_blocklace_checkpoint_pair(5).unwrap(),
+            Some((vec![5], vec![25]))
+        );
+        store
+            .publish_blocklace_checkpoint_pair(6, &[6], &[26], 5)
+            .unwrap();
+        assert_eq!(published_heights(&store), vec![2, 3, 4, 5, 6]);
+        assert!(
+            store
+                .published_blocklace_checkpoint_pair(1)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            matches!(
+                store.publish_blocklace_checkpoint_pair(4, &[4], &[24], 5),
+                Err(StoreError::Integrity(ref message)) if message.contains("predates")
+            ),
+            "out-of-order publication cannot roll latest back"
+        );
+    }
+
+    #[test]
+    fn failed_checkpoint_pair_transaction_leaves_old_served_pair_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("failed-pair.redb");
+        let mut store = PersistentStore::open(&path).unwrap();
+        store
+            .publish_blocklace_checkpoint_pair(1, b"dag", b"ledger", 1)
+            .unwrap();
+        for step in [1, 2, 3, 4] {
+            FAIL_CHECKPOINT_PUBLISH_AFTER.with(|fault| fault.set(Some(step)));
+            let err = store
+                .publish_blocklace_checkpoint_pair(2, b"newdag", b"newledger", 1)
+                .unwrap_err();
+            assert!(format!("{err}").contains("checkpoint pair fault"));
+            drop(store);
+            store = PersistentStore::open(&path).unwrap();
+            assert_eq!(published_heights(&store), vec![1]);
+            assert_eq!(
+                store.get_config(BLOCKLACE_CHECKPOINT_LATEST).unwrap(),
+                Some(1u64.to_le_bytes().to_vec())
+            );
+            assert_eq!(
+                store.published_blocklace_checkpoint_pair(1).unwrap(),
+                Some((b"dag".to_vec(), b"ledger".to_vec()))
+            );
+            assert!(
+                store
+                    .get_config("blocklace_checkpoint_2")
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                store
+                    .get_config("blocklace_ledger_snapshot_2")
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        store.set_fail_config_io(true);
+        assert!(matches!(
+            store.publish_blocklace_checkpoint_pair(2, b"newdag", b"newledger", 1),
+            Err(StoreError::Database(ref message)) if message.contains("config io fault injected")
+        ));
+        store.set_fail_config_io(false);
+        assert_eq!(published_heights(&store), vec![1]);
+        store
+            .publish_blocklace_checkpoint_pair(2, b"newdag", b"newledger", 1)
+            .unwrap();
+        assert_eq!(published_heights(&store), vec![2]);
+        assert_eq!(
+            store.published_blocklace_checkpoint_pair(2).unwrap(),
+            Some((b"newdag".to_vec(), b"newledger".to_vec()))
+        );
+    }
+
+    #[test]
+    fn legacy_duplicate_heights_repair_without_erasing_a_live_pair() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        for h in 1..=3 {
+            store
+                .set_config(&format!("blocklace_checkpoint_{h}"), &[h as u8])
+                .unwrap();
+            store
+                .set_config(&format!("blocklace_ledger_snapshot_{h}"), &[h as u8 + 20])
+                .unwrap();
+        }
+        store
+            .set_config(
+                BLOCKLACE_CHECKPOINT_HEIGHTS,
+                &postcard::to_stdvec(&vec![1u64, 2, 2, 3]).unwrap(),
+            )
+            .unwrap();
+        store
+            .set_config(BLOCKLACE_CHECKPOINT_LATEST, &3u64.to_le_bytes())
+            .unwrap();
+        store
+            .publish_blocklace_checkpoint_pair(4, &[4], &[24], 3)
+            .unwrap();
+        assert_eq!(published_heights(&store), vec![2, 3, 4]);
+        assert!(
+            store
+                .get_config("blocklace_checkpoint_1")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            store.published_blocklace_checkpoint_pair(2).unwrap(),
+            Some((vec![2], vec![22]))
+        );
+    }
+
+    #[test]
+    fn unindexed_orphan_cannot_be_rebound_to_different_bytes() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        store
+            .set_config("blocklace_checkpoint_1", b"original")
+            .unwrap();
+        assert!(matches!(
+            store.publish_blocklace_checkpoint_pair(1, b"replacement", b"ledger", 5),
+            Err(StoreError::Integrity(ref message)) if message.contains("unindexed checkpoint")
+        ));
+        assert_eq!(
+            store.get_config("blocklace_checkpoint_1").unwrap(),
+            Some(b"original".to_vec())
+        );
+        assert_eq!(
+            store.get_config(BLOCKLACE_CHECKPOINT_HEIGHTS).unwrap(),
+            None
+        );
+        store
+            .publish_blocklace_checkpoint_pair(1, b"original", b"ledger", 5)
+            .unwrap();
+        assert_eq!(published_heights(&store), vec![1]);
+    }
+
+    #[test]
+    fn legacy_tombstones_are_reclaimed_without_erasing_live_pairs() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        for h in 1..=3 {
+            store
+                .set_config(
+                    &format!("blocklace_checkpoint_{h}"),
+                    if h == 1 { b"" } else { b"dag" },
+                )
+                .unwrap();
+            store
+                .set_config(
+                    &format!("blocklace_ledger_snapshot_{h}"),
+                    if h == 1 { b"" } else { b"ledger" },
+                )
+                .unwrap();
+        }
+        store
+            .set_config(
+                BLOCKLACE_CHECKPOINT_HEIGHTS,
+                &postcard::to_stdvec(&vec![1u64, 1, 2, 3]).unwrap(),
+            )
+            .unwrap();
+        store
+            .set_config(BLOCKLACE_CHECKPOINT_LATEST, &3u64.to_le_bytes())
+            .unwrap();
+        store
+            .publish_blocklace_checkpoint_pair(4, b"next", b"nextledger", 3)
+            .unwrap();
+        assert_eq!(published_heights(&store), vec![2, 3, 4]);
+        assert_eq!(store.get_config("blocklace_checkpoint_1").unwrap(), None);
+        assert_eq!(
+            store.get_config("blocklace_ledger_snapshot_1").unwrap(),
+            None
+        );
+        assert_eq!(
+            store.published_blocklace_checkpoint_pair(2).unwrap(),
+            Some((b"dag".to_vec(), b"ledger".to_vec()))
+        );
+    }
+
+    #[test]
+    fn legacy_pointer_ahead_of_index_recovers_only_complete_pair() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        store.set_config("blocklace_checkpoint_2", b"dag").unwrap();
+        store
+            .set_config(BLOCKLACE_CHECKPOINT_LATEST, &2u64.to_le_bytes())
+            .unwrap();
+        assert!(matches!(
+            store.publish_blocklace_checkpoint_pair(3, b"next", b"ledger", 5),
+            Err(StoreError::Integrity(ref message)) if message.contains("not a complete recoverable pair")
+        ));
+        assert_eq!(
+            store.get_config(BLOCKLACE_CHECKPOINT_HEIGHTS).unwrap(),
+            None
+        );
+        store
+            .set_config("blocklace_ledger_snapshot_2", b"oldledger")
+            .unwrap();
+        store
+            .publish_blocklace_checkpoint_pair(3, b"next", b"ledger", 5)
+            .unwrap();
+        assert_eq!(published_heights(&store), vec![2, 3]);
+        assert_eq!(
+            store.published_blocklace_checkpoint_pair(2).unwrap(),
+            Some((b"dag".to_vec(), b"oldledger".to_vec()))
+        );
+    }
+
+    #[test]
+    fn archival_pair_retention_keeps_every_historical_bootstrap_height() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        for height in 1..=8 {
+            store
+                .publish_blocklace_checkpoint_pair(
+                    height,
+                    &[height as u8],
+                    &[height as u8 + 20],
+                    usize::MAX,
+                )
+                .unwrap();
+        }
+        assert_eq!(published_heights(&store), (1..=8).collect::<Vec<_>>());
+        assert_eq!(
+            store.published_blocklace_checkpoint_pair(1).unwrap(),
+            Some((vec![1], vec![21]))
+        );
     }
 
     /// A small honest lace persisted the way the node persists it (blocks
