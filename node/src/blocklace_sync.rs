@@ -20381,7 +20381,7 @@ mod checkpoint_pair_tests {
         let store = dregg_persist::PersistentStore::open_in_memory().unwrap();
         let ledger = std::sync::Arc::new(tokio::sync::RwLock::new(dregg_cell::Ledger::new()));
         store
-            .commit_finalized_turn(0, &empty_checkpoint_test_commit(&ledger.read().await))
+            .commit_finalized_turn(0, &empty_checkpoint_test_commit(&*ledger.read().await))
             .unwrap();
         let durable_root = store
             .finalized_commit_authority_at(0)
@@ -20427,7 +20427,7 @@ mod checkpoint_pair_tests {
             "local MCP mutation leaves finalized authority unchanged"
         );
         assert!(
-            finalized_checkpoint_ledger_wire(&store, &ledger.read().await, 1)
+            finalized_checkpoint_ledger_wire(&store, &*ledger.read().await, 1)
                 .unwrap_err()
                 .contains("diverges from finalized authority"),
             "the same height must refuse a local cell inserted after the DAG snapshot"
