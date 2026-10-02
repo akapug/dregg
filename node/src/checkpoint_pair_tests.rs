@@ -77,7 +77,7 @@ async fn live_finality_producer_mints_exact_height_proof_and_repeated_callback_r
     );
 }
 
-async fn produce_six_live_checkpoints(archival: bool) {
+async fn produce_six_live_checkpoints(archival: bool, switch_at_six: bool) {
     let dir = tempfile::tempdir().unwrap();
     let state = NodeState::new(dir.path(), Vec::new()).unwrap();
     let self_key = { state.read().await.cclerk.public_key().0 };
@@ -85,6 +85,37 @@ async fn produce_six_live_checkpoints(archival: bool) {
     handle.checkpoint_interval = 1;
     let mut predecessor = None;
     for height in 1u8..=6 {
+        if height == 6 && switch_at_six {
+            let s = state.read().await;
+            assert_eq!(s.store.commit_cursor().unwrap(), 5);
+            assert!(load_blocklace_checkpoint(&s.store, 1).is_some());
+            let proofs = checkpoint_proofs().lock().unwrap();
+            assert!(
+                !proofs
+                    .get(&(s.store.checkpoint_store_id(), 1))
+                    .unwrap()
+                    .archival
+            );
+            drop(proofs);
+            drop(s);
+            // SAFETY: the caller holds ARCHIVAL_CHECKPOINT_ENV_LOCK throughout
+            // the producer callbacks and restores its original value on Drop.
+            unsafe { std::env::set_var(ARCHIVAL_CHECKPOINT_ENV, "1") };
+            maybe_produce_checkpoint(&state, &handle).await;
+            let s = state.read().await;
+            assert_eq!(s.store.commit_cursor().unwrap(), 5);
+            assert!(load_blocklace_checkpoint(&s.store, 1).is_some());
+            let proofs = checkpoint_proofs().lock().unwrap();
+            assert!(
+                proofs
+                    .get(&(s.store.checkpoint_store_id(), 1))
+                    .unwrap()
+                    .archival,
+                "repeated H5 callback must promote existing H1 before early return"
+            );
+            drop(proofs);
+            drop(s);
+        }
         // The callback sees six real, causally linked signed DAG blocks and
         // six durable finalized-root fixture records, never hand-inserted
         // provenance. Turn execution itself is outside this producer control.
@@ -127,7 +158,7 @@ async fn produce_six_live_checkpoints(archival: bool) {
         .filter(|(id, _)| *id == s.store.checkpoint_store_id())
         .count();
     drop(proofs);
-    if archival {
+    if archival || switch_at_six {
         for height in 1..=6 {
             assert!(
                 s.store
@@ -161,6 +192,94 @@ async fn produce_six_live_checkpoints(archival: bool) {
         assert!(!existing_checkpoint_is_authorized(&s.store, 1).unwrap());
         assert_eq!(for_store, MAX_RETAINED_CHECKPOINTS);
     }
+    if switch_at_six {
+        let target = s.store.checkpoint_store_id();
+        let real = checkpoint_proofs().lock().unwrap();
+        assert_eq!(for_store, 6);
+        assert!(
+            real.get(&(target, 1)).unwrap().archival,
+            "sixth producer must promote EVERY existing verified receipt"
+        );
+        // Internal cap-pressure fixture, NOT 257 producer runs or trusted
+        // authority. Clone genuine target receipts into an isolated map so
+        // parallel tests cannot observe placeholder store IDs. Drive the SAME
+        // eviction function used by producer mint and early-return policy.
+        let mut cap_fixture: std::collections::BTreeMap<_, _> = real
+            .iter()
+            .filter(|((id, _), _)| *id == target)
+            .map(|(key, proof)| (*key, *proof))
+            .collect();
+        let example = *cap_fixture.get(&(target, 1)).unwrap();
+        drop(real);
+        const OTHER_STORE: u64 = u64::MAX - 300;
+        for offset in 0..257 {
+            cap_fixture.insert(
+                (OTHER_STORE + offset, 1),
+                LiveCheckpointProof {
+                    archival: false,
+                    ..example
+                },
+            );
+        }
+        assert!(
+            cap_fixture.values().filter(|p| !p.archival).count() > 256,
+            "fixture MUST exceed the actual global cap, not pass vacuously"
+        );
+        apply_checkpoint_proof_policy(&mut cap_fixture, u64::MAX, MAX_RETAINED_CHECKPOINTS);
+        assert!(
+            cap_fixture.contains_key(&(target, 1)),
+            "other default-incarnation cap must retain archival H1"
+        );
+        assert_eq!(cap_fixture.values().filter(|p| !p.archival).count(), 256);
+        assert!(
+            !cap_fixture.contains_key(&(OTHER_STORE, 1)),
+            "the cap actually evicted the oldest default fixture entry"
+        );
+        assert!(
+            load_blocklace_checkpoint(&s.store, 1).is_some(),
+            "real H1 remains explicitly servable after the cap-pressure witness"
+        );
+        drop(s);
+        let unproved = dregg_persist::PersistentStore::open_in_memory().unwrap();
+        let empty = dregg_cell::Ledger::new();
+        unproved
+            .commit_finalized_turn(0, &empty_checkpoint_test_commit(&empty))
+            .unwrap();
+        let wire = compress_checkpoint_data(finalized_checkpoint_ledger_wire_for_test(&empty));
+        let dag = compress_checkpoint_data(b"generic unproved pair".to_vec());
+        unproved
+            .publish_blocklace_checkpoint_pair(1, &dag, &wire, usize::MAX)
+            .unwrap();
+        assert!(
+            existing_checkpoint_is_authorized(&unproved, 1).is_err(),
+            "an archival policy cannot mint authority for generic publication"
+        );
+        assert!(load_blocklace_checkpoint(&unproved, 1).is_none());
+        // SAFETY: this test still holds ARCHIVAL_CHECKPOINT_ENV_LOCK, and its
+        // RestoreArchivalCheckpointEnv guard restores the original value.
+        unsafe { std::env::remove_var(ARCHIVAL_CHECKPOINT_ENV) };
+        maybe_produce_checkpoint(&state, &handle).await;
+        let s = state.read().await;
+        assert_eq!(latest_blocklace_checkpoint_height(&s.store), 6);
+        assert!(
+            s.store
+                .published_blocklace_checkpoint_pair(1)
+                .unwrap()
+                .is_some(),
+            "early return changes no immutable derived bytes"
+        );
+        assert!(
+            existing_checkpoint_is_authorized(&s.store, 1).is_err(),
+            "default early return must restore bounded proof policy"
+        );
+        assert!(load_blocklace_checkpoint(&s.store, 1).is_none());
+        let proofs = checkpoint_proofs().lock().unwrap();
+        assert_eq!(
+            proofs.keys().filter(|(id, _)| *id == target).count(),
+            MAX_RETAINED_CHECKPOINTS
+        );
+        assert!(proofs.get(&(target, 6)).is_some_and(|p| !p.archival));
+    }
 }
 
 #[tokio::test]
@@ -169,7 +288,7 @@ async fn archival_six_live_producer_checkpoints_keep_explicit_height_one() {
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     let _env_restore = RestoreArchivalCheckpointEnv::set(true);
-    produce_six_live_checkpoints(true).await;
+    produce_six_live_checkpoints(true, false).await;
 }
 
 #[tokio::test]
@@ -178,7 +297,17 @@ async fn default_six_live_producer_checkpoints_evict_height_one() {
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     let _env_restore = RestoreArchivalCheckpointEnv::set(false);
-    produce_six_live_checkpoints(false).await;
+    produce_six_live_checkpoints(false, false).await;
+}
+
+#[tokio::test]
+async fn switching_default_to_archival_promotes_only_existing_receipts_then_early_return_restores_cap()
+ {
+    let _env_lock = ARCHIVAL_CHECKPOINT_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _env_restore = RestoreArchivalCheckpointEnv::set(false);
+    produce_six_live_checkpoints(false, true).await;
 }
 
 #[tokio::test]

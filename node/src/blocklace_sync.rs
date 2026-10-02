@@ -20283,18 +20283,47 @@ fn record_live_finality_checkpoint(
         return Err("immutable checkpoint height has a conflicting live proof".into());
     }
     proofs.insert(key, proof);
-    if retention_limit != usize::MAX {
-        while proofs.keys().filter(|(id, _)| *id == key.0).count() > retention_limit {
-            let oldest = *proofs.keys().find(|(id, _)| *id == key.0).unwrap();
-            proofs.remove(&oldest);
+    apply_checkpoint_proof_policy(&mut proofs, key.0, retention_limit);
+    Ok(())
+}
+
+/// Reclassify ONLY receipts this process already witnessed. Never derive
+/// authority from disk, a peer, or a generic store publication. A producer
+/// callback applies this before the existing-pair early return as well as
+/// after minting, so default→archival protects old H1..H5 from other stores'
+/// default-mode global cap, and archival→default restores both RAM ceilings.
+fn apply_checkpoint_proof_policy(
+    proofs: &mut std::collections::BTreeMap<(u64, u64), LiveCheckpointProof>,
+    store_id: u64,
+    retention_limit: usize,
+) {
+    for ((id, _), proof) in proofs.iter_mut() {
+        if *id == store_id {
+            proof.archival = retention_limit == usize::MAX;
         }
-        // Archival proofs never enter this cross-incarnation cap: even a
-        // separate default-mode store cannot silently evict archival service.
-        while proofs.values().filter(|proof| !proof.archival).count() > 256 {
-            let oldest = *proofs.iter().find(|(_, proof)| !proof.archival).unwrap().0;
+    }
+    if retention_limit != usize::MAX {
+        while proofs.keys().filter(|(id, _)| *id == store_id).count() > retention_limit {
+            let oldest = *proofs.keys().find(|(id, _)| *id == store_id).unwrap();
             proofs.remove(&oldest);
         }
     }
+    // Archival proofs never enter this cross-incarnation cap: another default
+    // store's callback must not break explicit service of an archival pair.
+    while proofs.values().filter(|proof| !proof.archival).count() > 256 {
+        let oldest = *proofs.iter().find(|(_, proof)| !proof.archival).unwrap().0;
+        proofs.remove(&oldest);
+    }
+}
+
+fn align_live_checkpoint_proof_policy(
+    store: &dregg_persist::PersistentStore,
+    retention_limit: usize,
+) -> Result<(), String> {
+    let mut proofs = checkpoint_proofs()
+        .lock()
+        .map_err(|_| "checkpoint proof lock poisoned")?;
+    apply_checkpoint_proof_policy(&mut proofs, store.checkpoint_store_id(), retention_limit);
     Ok(())
 }
 
@@ -20372,10 +20401,18 @@ async fn maybe_produce_checkpoint(state: &NodeState, handle: &BlocklaceHandle) {
     }
 
     let finalized_height = executed_count;
+    // Resolve once for BOTH an existing-pair early return and any new pair.
+    // Reclassify only already-witnessed receipts before early return: switching
+    // policy cannot make an unproved legacy, imported, or reopened pair valid.
+    let retention_limit = blocklace_checkpoint_retention_limit();
     // The executor can run again at the same count (ack/membership traffic).
     // Avoid serializing the entire DAG and ledger on every such callback.
     {
         let s = state.read().await;
+        if let Err(e) = align_live_checkpoint_proof_policy(&s.store, retention_limit) {
+            warn!(error = %e, height = finalized_height, "checkpoint proof policy transition refused");
+            return;
+        }
         match existing_checkpoint_is_authorized(&s.store, finalized_height) {
             Ok(true) => return,
             Ok(false) => {}
@@ -20433,9 +20470,6 @@ async fn maybe_produce_checkpoint(state: &NodeState, handle: &BlocklaceHandle) {
 
     // Pair, latest pointer, unique index and derived-pair reclamation share one
     // transaction. A failed write cannot announce or serve a half-published pair.
-    // Resolve the policy ONCE: proof eviction must match this publication's
-    // actual derived-pair retention, including the explicit archival mode.
-    let retention_limit = blocklace_checkpoint_retention_limit();
     {
         let s = state.read().await;
         if let Err(e) = s.store.publish_blocklace_checkpoint_pair(
