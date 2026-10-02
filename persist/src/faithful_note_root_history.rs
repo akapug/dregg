@@ -20,6 +20,8 @@
 //! authorization are separate cuts: this history authenticates the append-only
 //! commitment frontier; it does not manufacture those proofs.
 
+use std::time::{Duration, Instant};
+
 use redb::{ReadableTable, ReadableTableMetadata};
 use serde::{Deserialize, Serialize};
 
@@ -468,6 +470,17 @@ pub struct FaithfulNoteRootExpectationV1 {
     pub height: u64,
     pub note_count: u64,
     pub root: CanonicalFaithfulRoot,
+}
+
+/// Aggregate monotonic timings from one successful, complete authenticated replay.
+/// A failed replay never returns these measurements as a successful gate.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FaithfulNoteRootReplayPhases {
+    pub rows: u64,
+    pub decode: Duration,
+    pub hybrid_verify: Duration,
+    pub structural_append: Duration,
+    pub seal_check: Duration,
 }
 
 /// Store-minted evidence that one exact historical faithful root is covered by
@@ -934,7 +947,25 @@ impl PersistentStore {
         threshold: usize,
         expected: FaithfulNoteRootExpectationV1,
     ) -> StoreResult<FaithfulNoteRootHistoryV1> {
-        self.load_faithful_note_root_history_with(expected, |envelope| {
+        self.load_faithful_note_root_history_hybrid_measured(
+            committee,
+            ml_dsa_committee,
+            threshold,
+            expected,
+        )
+        .map(|(history, _)| history)
+    }
+
+    /// The unchanged full hybrid gate, with aggregate measurements for boot.
+    /// The verified-core backend, roster checks and replay order are identical.
+    pub fn load_faithful_note_root_history_hybrid_measured(
+        &self,
+        committee: &[PublicKey],
+        ml_dsa_committee: &[MlDsaPublicKey],
+        threshold: usize,
+        expected: FaithfulNoteRootExpectationV1,
+    ) -> StoreResult<(FaithfulNoteRootHistoryV1, FaithfulNoteRootReplayPhases)> {
+        self.load_faithful_note_root_history_with_measured(expected, |envelope| {
             envelope.verify_hybrid(committee, ml_dsa_committee, threshold)
         })
     }
@@ -944,6 +975,16 @@ impl PersistentStore {
         expected: FaithfulNoteRootExpectationV1,
         authenticate: impl Fn(&FaithfulNoteRootEnvelopeV1) -> bool,
     ) -> StoreResult<FaithfulNoteRootHistoryV1> {
+        self.load_faithful_note_root_history_with_measured(expected, authenticate)
+            .map(|(history, _)| history)
+    }
+
+    fn load_faithful_note_root_history_with_measured(
+        &self,
+        expected: FaithfulNoteRootExpectationV1,
+        authenticate: impl Fn(&FaithfulNoteRootEnvelopeV1) -> bool,
+    ) -> StoreResult<(FaithfulNoteRootHistoryV1, FaithfulNoteRootReplayPhases)> {
+        let mut phases = FaithfulNoteRootReplayPhases::default();
         let read = self.db.begin_read()?;
         let table = read.open_table(tables::FAITHFUL_NOTE_ROOT_HISTORY)?;
         let metadata = read.open_table(tables::METADATA_BYTES)?;
@@ -967,26 +1008,35 @@ impl PersistentStore {
         let mut history = FaithfulNoteRootHistoryV1::new(anchor);
         for entry in table.iter()? {
             let (height, bytes) = entry?;
+            let started = Instant::now();
             let envelope = FaithfulNoteRootEnvelopeV1::from_bytes(bytes.value())?;
             if envelope.record.height != height.value() {
                 return Err(integrity(FaithfulNoteRootHistoryError::Malformed(
                     "height key",
                 )));
             }
+            phases.decode = phases.decode.saturating_add(started.elapsed());
+            let started = Instant::now();
             if !authenticate(&envelope) {
                 return Err(integrity(
                     FaithfulNoteRootHistoryError::AuthenticationFailed,
                 ));
             }
+            phases.hybrid_verify = phases.hybrid_verify.saturating_add(started.elapsed());
+            let started = Instant::now();
             history.append_structurally(envelope).map_err(integrity)?;
+            phases.structural_append = phases.structural_append.saturating_add(started.elapsed());
+            phases.rows += 1;
         }
+        let started = Instant::now();
         if history.head() != seal.head {
             return Err(integrity(FaithfulNoteRootHistoryError::SnapshotMismatch(
                 "persisted head seal",
             )));
         }
         history.verify_exact_snapshot(expected).map_err(integrity)?;
-        Ok(history)
+        phases.seal_check = started.elapsed();
+        Ok((history, phases))
     }
 }
 
@@ -1415,6 +1465,148 @@ mod tests {
                 .load_faithful_note_root_history_with(expected, |_| true)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn measured_replay_counts_every_authentication_and_zero_row_history() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        let (mut tree, anchor) = empty_anchor();
+        store.initialize_faithful_note_root_history(&anchor).unwrap();
+        let expected = store.faithful_note_root_expectation().unwrap().unwrap();
+        let calls = std::cell::Cell::new(0);
+        let (empty, phases) = store
+            .load_faithful_note_root_history_with_measured(expected, |_| {
+                calls.set(calls.get() + 1);
+                true
+            })
+            .unwrap();
+        assert_eq!(empty.head(), anchor);
+        assert_eq!(phases.rows, 0);
+        assert_eq!(calls.get(), 0);
+
+        let first = planned(&tree, &anchor, 3, &[[0x81; 32]]);
+        tree.append_blake3_commitment(&[0x81; 32]);
+        let second = planned(&tree, &first.record.to_anchor(), 4, &[[0x82; 32]]);
+        store.append_faithful_note_root_verified(&first).unwrap();
+        store.append_faithful_note_root_verified(&second).unwrap();
+        let expected = store.faithful_note_root_expectation().unwrap().unwrap();
+        let (replayed, phases) = store
+            .load_faithful_note_root_history_with_measured(expected, |_| {
+                calls.set(calls.get() + 1);
+                true
+            })
+            .unwrap();
+        assert_eq!(replayed.head(), second.record.to_anchor());
+        assert_eq!(phases.rows, expected.records);
+        assert_eq!(phases.rows, 2);
+        assert_eq!(calls.get(), 2);
+
+        calls.set(0);
+        assert!(store
+            .load_faithful_note_root_history_with_measured(expected, |_| {
+                calls.set(calls.get() + 1);
+                calls.get() != 2
+            })
+            .is_err());
+        assert_eq!(calls.get(), 2, "a failed verifier still sees the second row");
+    }
+
+    #[test]
+    fn measured_hybrid_replay_rejects_tampered_pq_half() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        let signer = HybridSigner::new(0x79);
+        let (tree, anchor) = empty_anchor();
+        store.initialize_faithful_note_root_history(&anchor).unwrap();
+        let first = signed_planned(&signer, &tree, &anchor, 3, &[[0x81; 32]]);
+        store.append_faithful_note_root_verified(&first).unwrap();
+        let expected = store.faithful_note_root_expectation().unwrap().unwrap();
+        let committee = [signer.ed_pk];
+        let pq_committee = [signer.pq_pk.clone()];
+        let (_, phases) = store
+            .load_faithful_note_root_history_hybrid_measured(
+                &committee,
+                &pq_committee,
+                1,
+                expected,
+            )
+            .unwrap();
+        assert_eq!(phases.rows, 1);
+
+        let mut tampered = first.clone();
+        tampered.hybrid_quorum[0].pq_signature[0] ^= 1;
+        let write = store.db.begin_write().unwrap();
+        {
+            let mut table = write.open_table(tables::FAITHFUL_NOTE_ROOT_HISTORY).unwrap();
+            let bytes = tampered.to_bytes().unwrap();
+            table.insert(first.record.height, bytes.as_slice()).unwrap();
+        }
+        write.commit().unwrap();
+        assert!(store
+            .load_faithful_note_root_history_hybrid_measured(
+                &committee,
+                &pq_committee,
+                1,
+                expected,
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn measured_replay_keeps_structural_and_seal_refusals() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        let (mut tree, anchor) = empty_anchor();
+        store.initialize_faithful_note_root_history(&anchor).unwrap();
+        let first = planned(&tree, &anchor, 3, &[[0x91; 32]]);
+        tree.append_blake3_commitment(&[0x91; 32]);
+        let second = planned(&tree, &first.record.to_anchor(), 4, &[[0x92; 32]]);
+        store.append_faithful_note_root_verified(&first).unwrap();
+        store.append_faithful_note_root_verified(&second).unwrap();
+        let expected = store.faithful_note_root_expectation().unwrap().unwrap();
+
+        let mut wrong = second.clone();
+        wrong.record.predecessor = anchor.root;
+        let write = store.db.begin_write().unwrap();
+        {
+            let mut table = write.open_table(tables::FAITHFUL_NOTE_ROOT_HISTORY).unwrap();
+            let bytes = wrong.to_bytes().unwrap();
+            table.insert(second.record.height, bytes.as_slice()).unwrap();
+        }
+        write.commit().unwrap();
+        let calls = std::cell::Cell::new(0);
+        assert!(store
+            .load_faithful_note_root_history_with_measured(expected, |_| {
+                calls.set(calls.get() + 1);
+                true
+            })
+            .is_err());
+        assert_eq!(calls.get(), 2, "authentication still precedes structural append");
+
+        let write = store.db.begin_write().unwrap();
+        {
+            let mut table = write.open_table(tables::FAITHFUL_NOTE_ROOT_HISTORY).unwrap();
+            let bytes = second.to_bytes().unwrap();
+            table.insert(second.record.height, bytes.as_slice()).unwrap();
+            drop(table);
+            let stale = HeadSealV1 {
+                records: 2,
+                head: first.record.to_anchor(),
+            }
+            .to_bytes();
+            write
+                .open_table(tables::METADATA_BYTES)
+                .unwrap()
+                .insert(tables::META_FAITHFUL_NOTE_ROOT_HEAD, stale.as_slice())
+                .unwrap();
+        }
+        write.commit().unwrap();
+        calls.set(0);
+        assert!(store
+            .load_faithful_note_root_history_with_measured(expected, |_| {
+                calls.set(calls.get() + 1);
+                true
+            })
+            .is_err());
+        assert_eq!(calls.get(), 2, "the complete replay still checks the head seal");
     }
 
     #[test]

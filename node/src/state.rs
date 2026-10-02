@@ -32,6 +32,7 @@ fn restore_and_verify_faithful_note_tree(
     store: &PersistentStore,
     cclerk: &AgentCipherclerk,
 ) -> Result<Poseidon2NoteTree, String> {
+    let leaf_started = Instant::now();
     let durable_note_commitments: Vec<[u8; 32]> = store
         .load_all_note_commitments()
         .map_err(|e| format!("failed to restore faithful note tree: {e}"))?
@@ -39,11 +40,25 @@ fn restore_and_verify_faithful_note_tree(
         .map(|commitment| commitment.0)
         .collect();
     let tree = Poseidon2NoteTree::from_blake3_commitments(&durable_note_commitments, 16);
+    let leaf_rebuild = leaf_started.elapsed();
+    let head_started = Instant::now();
 
     let Some(expected) = store
         .faithful_note_root_expectation()
         .map_err(|e| format!("faithful note-root restart seal refused: {e}"))?
     else {
+        tracing::info!(
+            history_present = false,
+            history_records = 0,
+            leaf_rebuild_ms = leaf_rebuild.as_millis(),
+            head_attestation_ms = head_started.elapsed().as_millis(),
+            replay_total_ms = 0,
+            replay_decode_ms = 0,
+            hybrid_verify_ms = 0,
+            ordered_append_ms = 0,
+            replay_seal_ms = 0,
+            "faithful note-root boot phases complete"
+        );
         return Ok(tree);
     };
     let durable_count = u64::try_from(tree.size())
@@ -66,20 +81,34 @@ fn restore_and_verify_faithful_note_tree(
         );
     }
 
+    let head_attestation = head_started.elapsed();
     // The live history is node-author authenticated: reconstruct that exact
     // local hybrid identity and replay every row, so a checksum-preserving row
     // edit or deleted suffix refuses before the node serves.
+    let replay_started = Instant::now();
     let seed = cclerk.gossip_signing_key().to_bytes();
     let local_ed = cclerk.public_key();
     let (local_pq, _) = dregg_federation::frost::MlDsaSigningKey::from_seed(&seed);
-    store
-        .load_faithful_note_root_history_hybrid(
+    let (_, phases) = store
+        .load_faithful_note_root_history_hybrid_measured(
             std::slice::from_ref(&local_ed),
             std::slice::from_ref(&local_pq),
             1,
             expected,
         )
         .map_err(|e| format!("faithful note-root authenticated replay refused: {e}"))?;
+    tracing::info!(
+        history_present = true,
+        history_records = phases.rows,
+        leaf_rebuild_ms = leaf_rebuild.as_millis(),
+        head_attestation_ms = head_attestation.as_millis(),
+        replay_total_ms = replay_started.elapsed().as_millis(),
+        replay_decode_ms = phases.decode.as_millis(),
+        hybrid_verify_ms = phases.hybrid_verify.as_millis(),
+        ordered_append_ms = phases.structural_append.as_millis(),
+        replay_seal_ms = phases.seal_check.as_millis(),
+        "faithful note-root boot phases complete"
+    );
     Ok(tree)
 }
 
