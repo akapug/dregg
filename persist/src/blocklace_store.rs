@@ -187,12 +187,12 @@ impl PersistentStore {
             }
             let repeated_latest =
                 latest_height.is_some_and(|h| heights.windows(2).any(|p| p[0] == h && p[1] == h));
-            heights.dedup();
-            let indexed_tail = heights.last().copied();
             let indexed_above_pointer = heights
                 .iter()
                 .filter(|h| latest_height.is_some_and(|p| **h > p))
                 .count();
+            heights.dedup();
+            let indexed_tail = heights.last().copied();
             let mut complete = Vec::with_capacity(heights.len());
             for h in heights {
                 let checkpoint_key = format!("blocklace_checkpoint_{h}");
@@ -1253,6 +1253,42 @@ mod tests {
                 Some(b"dag2".to_vec())
             );
         }
+    }
+
+    #[test]
+    fn duplicate_stale_tail_does_not_launder_two_index_writes_into_one() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        for h in [1u64, 2] {
+            store
+                .set_config(&format!("blocklace_checkpoint_{h}"), &[h as u8])
+                .unwrap();
+            store
+                .set_config(&format!("blocklace_ledger_snapshot_{h}"), &[h as u8 + 20])
+                .unwrap();
+        }
+        store
+            .set_config(BLOCKLACE_CHECKPOINT_LATEST, &1u64.to_le_bytes())
+            .unwrap();
+        store
+            .set_config(
+                BLOCKLACE_CHECKPOINT_HEIGHTS,
+                &postcard::to_stdvec(&vec![1u64, 2, 2]).unwrap(),
+            )
+            .unwrap();
+        assert!(store.has_published_blocklace_checkpoint_pair(2).is_err());
+        assert!(
+            store
+                .publish_blocklace_checkpoint_pair(3, b"next", b"nextledger", 5)
+                .is_err()
+        );
+        assert_eq!(
+            store.get_config(BLOCKLACE_CHECKPOINT_LATEST).unwrap(),
+            Some(1u64.to_le_bytes().to_vec())
+        );
+        assert_eq!(
+            store.get_config("blocklace_checkpoint_2").unwrap(),
+            Some(vec![2])
+        );
     }
 
     #[test]
