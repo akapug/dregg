@@ -23,8 +23,8 @@
 //!   * `scripts/check-lean-seed-freshness.sh` compares the pin's `DREGG_CLOSURE_HASH` — a fact
 //!     about a published seed asset, not about the archive this binary linked.
 //! The missing question is per-member and it is the cheap one: **is this object older than the
-//! `.lean` it was compiled from?** `ar` records a member's mtime; `metatheory/` records the
-//! source's. One `ar tv` and a stat answer it in about a second.
+//! `.lean` it was compiled from?** `build.rs`'s member-stamp sidecar records when each object was
+//! compiled; `metatheory/` records the source's mtime. One read and a stat answer it in about a second.
 //!
 //! ── AND THE SEED, WHICH THIS TEST CANNOT REACH ───────────────────────────────────────────────
 //! This test's subject is whatever archive `build.rs` LINKED. That is the right subject for a
@@ -56,32 +56,48 @@
 //! `demand_lean` exactly like every other Lean-gated test in this crate — loud under
 //! `DREGG_TEST_REQUIRE_LEAN=1`, and never printing `ok` for a check that did not run.
 //!
+//! ── WHAT "OLDER THAN ITS SOURCE" MEANS NOW (2026-10-01) ──────────────────────────────────────
+//! CONTENT, not mtime, and not from `ar`. Two measurements on hbox retired the old clock:
+//!   * GNU binutils builds DETERMINISTIC archives by default (`ar`'s `D` modifier: every member
+//!     at the epoch). `ar tv` listed all 346 members as `Dec 31 1969`, the stamp reader could use
+//!     none, and this test was red on every Linux box while measuring nothing.
+//!   * mtime is not what Lake keys on. With honest per-object compile times this test named
+//!     `Dregg2_Games_MultiwayTug.o` stale because `MultiwayTug.lean` had been REWRITTEN WITH
+//!     IDENTICAL BYTES — Lake (content-hashed) correctly rebuilt nothing, so no build could ever
+//!     clear the finding. A gate a correct build cannot turn green is a wall, not a gate.
+//! `build.rs` now writes a provenance table beside the working archive (`DREGG_LEAN_MEMBER_STAMPS`,
+//! `libdregg_lean.dregg2-members.tsv` in `OUT_DIR`): per Dregg2 member, its size and the BLAKE3 of
+//! the `.lean` it was built from, snapshotted BEFORE that build's `lake build` (an edit landing
+//! mid-build is recorded as the older content, so it reads stale, never fresh). This test lists the
+//! archive (names + sizes — every member must have a row of the same size, so the table cannot vouch
+//! for a different object; a member with no row is a FAULT) and refuses every member whose source
+//! on disk now hashes differently from what its object was built from. Edit a `.lean` and do not
+//! rebuild: red, naming it. Rebuild: green. Touch it without changing it: green, correctly.
+//!
 //! Run:  cargo nextest run -p dregg-lean-ffi --features lean-lib --test linked_archive_freshness
 #![cfg(feature = "lean-lib")]
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::SystemTime;
 
 /// A reader that harvests nothing must not read as clean. The `Dregg2.FFI` boundary closure is
-/// ~243 modules and the seed carries 188 of them; a working archive carries 323. Anything under
-/// this means the member listing or the source mapping broke, not that the tree got smaller.
+/// ~243 modules and the seed carries 188 of them; a working archive carries 323–346. Anything
+/// under this means the member listing or the source mapping broke, not that the tree got smaller.
 const MIN_DREGG2_MEMBERS: usize = 100;
-
-/// Clock slack, in seconds. `ar` records member mtimes at ONE-MINUTE resolution (no seconds
-/// field in `ar tv`'s output), so a member written in the same minute as its source rounds down
-/// and would read as stale. Two minutes covers that rounding and nothing else — this is a
-/// rounding allowance, NOT a staleness budget, and it must never be raised to make a real
-/// finding go away.
-const AR_MTIME_RESOLUTION_SLACK_SECS: u64 = 120;
 
 /// The archive `build.rs` emitted a link directive for (the per-`OUT_DIR` working copy, or the
 /// runtime-trim archive when `DREGG_LEAN_FFI_RUNTIME_TRIM=1`). Absent when the Lean link was
 /// skipped entirely.
 const LINKED_ARCHIVE: Option<&str> = option_env!("DREGG_LEAN_LINKED_ARCHIVE");
+/// The member-provenance table `build.rs` writes for a current-source archive (header above).
+const MEMBER_STAMPS: Option<&str> = option_env!("DREGG_LEAN_MEMBER_STAMPS");
 /// The `metatheory/` directory `build.rs` compiled from (honours `DREGG_METATHEORY_DIR`).
 const METATHEORY_DIR: Option<&str> = option_env!("DREGG_LEAN_METATHEORY_DIR");
+
+/// The table's first line; anything else is a format this reader does not know.
+const MEMBER_STAMPS_HEADER: &str =
+    "# dregg2-member-provenance v2\tmember\tbytes\tsource_blake3\tcompiled_unix_seconds.nanos";
 
 /// List an archive's members with `ar tv`, falling back to `llvm-ar` (`build.rs::ar_tool` picks
 /// between the same pair). PROBED BY DOING THE JOB, not by `--version`: Apple's `ar` does not
@@ -105,16 +121,21 @@ fn ar_listing(archive: &Path) -> Result<(&'static str, String), String> {
     Err(tried.join(" · "))
 }
 
-/// One `Dregg2_*.o` member and the epoch-seconds mtime `ar` recorded for it.
-struct Member {
-    name: String,
-    mtime: SystemTime,
+/// One row of the provenance table.
+#[derive(Debug, Clone, PartialEq)]
+struct Provenance {
+    bytes: u64,
+    /// BLAKE3 hex of the `.lean` the object was built from; `None` when build.rs found no source.
+    source: Option<String>,
+    /// `secs.nanos` the cached object was compiled, or `-` (a seed object) — for messages only.
+    compiled: String,
 }
 
-/// Parse `ar tv`'s listing. Each line ends `… <size> <Mon> <D> <HH:MM> <YYYY> <name>`; anything
-/// that does not match that tail is skipped, and the caller's floor turns "skipped everything"
-/// into a failure rather than a pass.
-fn parse_ar_listing(listing: &str) -> Vec<Member> {
+/// Parse `ar tv`'s listing into `(member, size)` for every `Dregg2_*.o`. Each line ends
+/// `… <size> <Mon> <D> <HH:MM> <YYYY> <name>`; the STAMP is deliberately ignored (it is the epoch
+/// in a deterministic archive). A line without that shape, or whose size is not a number, is
+/// skipped, and the caller's floor turns "skipped everything" into a failure.
+fn parse_ar_listing(listing: &str) -> Vec<(String, u64)> {
     let mut out = Vec::new();
     for line in listing.lines() {
         let f: Vec<&str> = line.split_whitespace().collect();
@@ -125,74 +146,78 @@ fn parse_ar_listing(listing: &str) -> Vec<Member> {
         if !name.starts_with("Dregg2_") || !name.ends_with(".o") {
             continue;
         }
-        // `Mon D HH:MM YYYY` — the four fields before the name.
-        let stamp = f[f.len() - 5..f.len() - 1].join(" ");
-        let Some(mtime) = parse_ar_stamp(&stamp) else {
+        let Ok(size) = f[f.len() - 6].parse::<u64>() else {
             continue;
         };
-        out.push(Member {
-            name: name.to_string(),
-            mtime,
-        });
+        out.push((name.to_string(), size));
     }
     out
 }
 
-/// `Mon D HH:MM YYYY` in LOCAL time (what `ar tv` prints) to a `SystemTime`. Deliberately hand-
-/// rolled: pulling `chrono` into this crate's dev-dependencies to read four fields would be a
-/// larger change than the check.
-fn parse_ar_stamp(s: &str) -> Option<SystemTime> {
-    let f: Vec<&str> = s.split_whitespace().collect();
-    if f.len() != 4 {
-        return None;
-    }
-    const MONTHS: [&str; 12] = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ];
-    let month = MONTHS.iter().position(|m| *m == f[0])? as i64 + 1;
-    let day: i64 = f[1].parse().ok()?;
-    let (hh, mm) = f[2].split_once(':')?;
-    let (hh, mm): (i64, i64) = (hh.parse().ok()?, mm.parse().ok()?);
-    let year: i64 = f[3].parse().ok()?;
-
-    // Days since the Unix epoch (civil-from-days, Howard Hinnant's algorithm).
-    let y = if month <= 2 { year - 1 } else { year };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let mp = (month + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe - 719_468;
-
-    // `ar` prints LOCAL time; recover the offset from a same-instant comparison the platform
-    // makes for us. `SystemTime` has no timezone, so we ask the filesystem: `build.rs` writes
-    // the archive, and its own mtime is in the same local frame. Rather than guess an offset,
-    // compare in UTC and let the caller's slack absorb it — see `local_offset_secs`.
-    let utc = days * 86_400 + hh * 3_600 + mm * 60;
-    let secs = utc.checked_sub(local_offset_secs())?;
-    if secs < 0 {
-        return None;
-    }
-    Some(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs as u64))
+fn is_blake3_hex(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-/// Seconds that local time is AHEAD of UTC, recovered from the platform rather than assumed.
-/// `date +%z` is the portable answer on both macOS and Linux; a failure yields 0, which shifts
-/// every member timestamp in the SAFE direction (a member reads OLDER than it is, so the test
-/// can over-report but never under-report).
-fn local_offset_secs() -> i64 {
-    let Ok(out) = Command::new("date").arg("+%z").output() else {
-        return 0;
-    };
-    let s = String::from_utf8_lossy(&out.stdout);
-    let s = s.trim();
-    if s.len() != 5 {
-        return 0;
+/// Parse the table into `member -> Provenance`. Strict: a wrong header, a row that is not exactly
+/// four tab-separated fields, a size that is not a number, a source that is neither `-` nor 64
+/// lowercase hex digits, or a duplicate member is an ERROR — a half-read table under-reports.
+fn parse_member_stamps(text: &str) -> Result<HashMap<String, Provenance>, String> {
+    let mut lines = text.lines();
+    match lines.next() {
+        Some(h) if h == MEMBER_STAMPS_HEADER => {}
+        other => return Err(format!("unknown member-provenance header {other:?}")),
     }
-    let sign = if s.starts_with('-') { -1 } else { 1 };
-    let hh: i64 = s[1..3].parse().unwrap_or(0);
-    let mm: i64 = s[3..5].parse().unwrap_or(0);
-    sign * (hh * 3_600 + mm * 60)
+    let mut out = HashMap::new();
+    for (i, line) in lines.enumerate() {
+        let row = i + 2;
+        let f: Vec<&str> = line.split('\t').collect();
+        let [name, bytes, source, compiled] = f.as_slice() else {
+            return Err(format!("row {row} is not `member\\tbytes\\tsource\\tcompiled`: {line:?}"));
+        };
+        let bytes: u64 = bytes
+            .parse()
+            .map_err(|_| format!("row {row}: bytes {bytes:?} is not a number"))?;
+        let source = match *source {
+            "-" => None,
+            h if is_blake3_hex(h) => Some(h.to_string()),
+            other => return Err(format!("row {row}: source {other:?} is not a BLAKE3 hex digest")),
+        };
+        let p = Provenance {
+            bytes,
+            source,
+            compiled: (*compiled).to_string(),
+        };
+        if out.insert((*name).to_string(), p).is_some() {
+            return Err(format!("row {row}: duplicate member {name}"));
+        }
+    }
+    Ok(out)
+}
+
+/// Pair every listed member with its row. A member with NO row, or whose row records a different
+/// size than the archive holds, is a fault (all of them returned) — the table must describe THIS
+/// archive's objects, not vouch for some other build's.
+fn provenance_of<'a>(
+    listed: &[(String, u64)],
+    table: &'a HashMap<String, Provenance>,
+) -> Result<Vec<(String, &'a Provenance)>, Vec<String>> {
+    let mut members = Vec::new();
+    let mut faults = Vec::new();
+    for (name, size) in listed {
+        match table.get(name) {
+            None => faults.push(format!("  {name} — in the archive, NO provenance row")),
+            Some(p) if p.bytes != *size => faults.push(format!(
+                "  {name} — archive holds {size} bytes, the table recorded {}",
+                p.bytes
+            )),
+            Some(p) => members.push((name.clone(), p)),
+        }
+    }
+    if faults.is_empty() {
+        Ok(members)
+    } else {
+        Err(faults)
+    }
 }
 
 /// Every `Dregg2/**/*.lean` under `metatheory/`, keyed by the FLATTENED object name `build.rs`'s
@@ -226,37 +251,46 @@ fn source_index(meta: &Path) -> HashMap<String, PathBuf> {
     out
 }
 
-/// THE COMPARISON, factored out so the red-proof below can drive the WHOLE assembly — reader,
-/// name mapping and staleness test — instead of only the reader. Returns `(resolved, findings)`:
-/// `resolved` is how many members mapped to a live `.lean` (the floor the caller applies, so a
-/// broken mapping cannot report "nothing stale"), `findings` one line per stale object.
+/// THE COMPARISON, factored out so the red-proof below can drive the WHOLE assembly — table
+/// reader, join, name mapping and the content test. Returns `(resolved, findings)`: `resolved` is
+/// how many members mapped to a live `.lean` (the floor the caller applies, so a broken mapping
+/// cannot report "nothing stale"), `findings` one line per object built from other content than the
+/// source on disk now.
 fn stale_members(
-    members: &[Member],
+    members: &[(String, &Provenance)],
     sources: &HashMap<String, PathBuf>,
     meta: &Path,
 ) -> (usize, Vec<String>) {
-    let slack = std::time::Duration::from_secs(AR_MTIME_RESOLUTION_SLACK_SECS);
     let mut resolved = 0usize;
     let mut stale = Vec::new();
-    for m in members {
+    for (name, p) in members {
         // A member whose module no longer exists in the tree is not a staleness finding — the
         // splice prunes those — and not silently ignored either: the caller's `resolved` floor
         // fails the run if the mapping stops resolving in general.
-        let Some(src) = sources.get(&m.name) else {
+        let Some(src) = sources.get(name) else {
             continue;
         };
         resolved += 1;
-        let Ok(src_mtime) = src.metadata().and_then(|md| md.modified()) else {
-            continue;
+        let rel = src.strip_prefix(meta).unwrap_or(src).display().to_string();
+        let now = match std::fs::read(src) {
+            Ok(bytes) => blake3::hash(&bytes).to_hex().to_string(),
+            Err(e) => {
+                stale.push(format!("  {name} — cannot read its source {rel}: {e}"));
+                continue;
+            }
         };
-        if src_mtime > m.mtime + slack {
-            stale.push(format!(
-                "  {} — member {} < source {} {}",
-                m.name,
-                fmt(m.mtime),
-                src.strip_prefix(meta).unwrap_or(src).display(),
-                fmt(src_mtime),
-            ));
+        match &p.source {
+            Some(built) if *built == now => {}
+            Some(built) => stale.push(format!(
+                "  {name} — built from {rel} @ {}…, the file on disk is now {}… (object compiled \
+                 {})",
+                &built[..12],
+                &now[..12],
+                p.compiled
+            )),
+            None => stale.push(format!(
+                "  {name} — build.rs recorded NO source for it, and {rel} exists now"
+            )),
         }
     }
     (resolved, stale)
@@ -296,6 +330,18 @@ fn the_linked_archive_is_not_older_than_its_lean_sources() {
         meta.display()
     );
 
+    let table_path = PathBuf::from(MEMBER_STAMPS.unwrap_or(""));
+    let table_text = std::fs::read_to_string(&table_path).unwrap_or_else(|e| {
+        panic!(
+            "no member-provenance table at {:?} ({e}). build.rs writes it whenever the archive it \
+             links is current-source, so a linked archive without one was not certified by this \
+             build.rs — this test cannot measure it, which is a FAULT, not a pass.",
+            table_path
+        )
+    });
+    let table = parse_member_stamps(&table_text)
+        .unwrap_or_else(|why| panic!("{} is unreadable: {why}", table_path.display()));
+
     let (_ar, listing) = ar_listing(&archive).unwrap_or_else(|why| {
         panic!(
             "neither `ar` nor `llvm-ar` could list {} — so this test cannot see what shipped, \
@@ -303,14 +349,26 @@ fn the_linked_archive_is_not_older_than_its_lean_sources() {
             archive.display()
         )
     });
-    let members = parse_ar_listing(&listing);
+    let listed = parse_ar_listing(&listing);
     assert!(
-        members.len() >= MIN_DREGG2_MEMBERS,
+        listed.len() >= MIN_DREGG2_MEMBERS,
         "parsed only {} Dregg2_*.o members out of {}. A listing this cannot read is a broken \
          READER, and a broken reader reports zero findings — which is why this floor exists.",
-        members.len(),
+        listed.len(),
         archive.display()
     );
+    let members = provenance_of(&listed, &table).unwrap_or_else(|faults| {
+        panic!(
+            "{} of {} Dregg2 members of {} are not described by {}:\n{}\n\
+             The table must describe THIS archive's objects. Rebuild (`cargo build -p \
+             dregg-lean-ffi --features lean-lib`) — build.rs rewrites both together.",
+            faults.len(),
+            listed.len(),
+            archive.display(),
+            table_path.display(),
+            faults.join("\n")
+        )
+    });
 
     let (resolved, stale) = stale_members(&members, &sources, &meta);
     assert!(
@@ -322,18 +380,17 @@ fn the_linked_archive_is_not_older_than_its_lean_sources() {
 
     assert!(
         stale.is_empty(),
-        "{} of {resolved} Dregg2 objects in the archive this binary LINKED are older than the \
-         .lean they were compiled from:\n{}\n\n\
+        "{} of {resolved} Dregg2 objects in the archive this binary LINKED were built from other \
+         Lean than the source on disk now:\n{}\n\n\
          Every verified-gate test in this crate is deciding against those objects, so a green \
          from one of them is a claim about that older Lean — which is exactly how six \
          `deployed_constraint_probe` assertions reported `ok` for a week (see this file's \
          header).\n\
-         FIX: re-splice — `cargo build -p dregg-lean-ffi --features lean-lib` re-runs build.rs, \
-         which recompiles each changed `.c` and rewrites the working archive. If that does not \
-         clear it, the seed at `dregg-lean-ffi/libdregg_lean.a` is being linked un-refreshed: \
-         `./scripts/bootstrap.sh` or `scripts/fetch-lean-seed.sh` for a HEAD-matching one.\n\
-         Do NOT raise AR_MTIME_RESOLUTION_SLACK_SECS to clear a finding — it is a rounding \
-         allowance for `ar`'s minute-resolution stamps, not a staleness budget.",
+         FIX: rebuild — `cargo build -p dregg-lean-ffi --features lean-lib` re-runs build.rs, \
+         which `lake build`s the closure, recompiles each changed `.c`, re-splices the working \
+         archive and rewrites this table. If that does not clear it, the archive being linked is \
+         not this OUT_DIR's working copy (a seed linked un-refreshed: `./scripts/bootstrap.sh` or \
+         `scripts/fetch-lean-seed.sh` for a HEAD-matching one).",
         stale.len(),
         stale.join("\n"),
     );
@@ -341,178 +398,130 @@ fn the_linked_archive_is_not_older_than_its_lean_sources() {
 
 /// ⚑ THE RED PROOF, and it is not optional: the headline is a NEGATIVE assertion, which passes
 /// just as happily when its own reader is broken. Everything here runs on strings and on a
-/// scratch archive built in this test's own temp dir, so the shared tree is never mutated and no
-/// window exists in which a sibling lane compiles a disarmed guard.
-///
-/// Leg 1 proves the `ar tv` line reader actually extracts a timestamp (a reader that returns
-/// `None` for every line reports zero stale members forever). Leg 2 proves the staleness
-/// comparison fires. Leg 3 proves the slack does not swallow a real finding.
+/// scratch source tree in this test's own temp dir, so the shared tree is never mutated.
 #[test]
 fn the_freshness_reader_can_go_red() {
-    // 1 · THE READER. A real `ar tv` line — the exact shape measured on the seed in this
-    //     checkout, including the `Dregg2_Exec_DeployedConstraint.o` that hid the six reds.
-    let listing =
-        "rw-r--r--     501/20       620280 Jul 25 03:02 2026 Dregg2_Exec_DeployedConstraint.o\n\
-                   rw-r--r--     501/20        11128 Aug  7 09:19 2026 Dregg2_FFI.o\n\
-                   rw-r--r--     501/20         4096 Aug  7 09:19 2026 Mathlib_Order_Basic.o\n";
-    let members = parse_ar_listing(listing);
+    // 1 · THE LISTING READER takes names and sizes from a DETERMINISTIC listing — the exact shape
+    //     measured on hbox (GNU ar, every member at the epoch, owner 0/0). The old reader took
+    //     nothing from these lines; that is the regression this file was rewritten for.
+    let listing = "rw-r--r-- 0/0 620280 Dec 31 19:00 1969 Dregg2_Exec_DeployedConstraint.o\n\
+                   rw-r--r-- 0/0  11128 Dec 31 19:00 1969 Dregg2_FFI.o\n\
+                   rw-r--r-- 0/0   4096 Dec 31 19:00 1969 Mathlib_Order_Basic.o\n";
     assert_eq!(
-        members.len(),
-        2,
-        "the reader must take both Dregg2 members and leave the Mathlib one — it took {:?}",
-        members.iter().map(|m| &m.name).collect::<Vec<_>>()
+        parse_ar_listing(listing),
+        vec![
+            ("Dregg2_Exec_DeployedConstraint.o".to_string(), 620280),
+            ("Dregg2_FFI.o".to_string(), 11128)
+        ],
+        "the reader must take both Dregg2 members (names AND sizes) and leave the Mathlib one"
     );
-    let old = &members[0];
-    let new = &members[1];
-    assert!(
-        new.mtime > old.mtime,
-        "the reader did not order two members thirteen days apart — it is not extracting a \
-         timestamp, and a reader that extracts no timestamp finds nothing stale, forever"
+    // ...a macOS-shaped listing (real stamps, uid/gid 501/20) reads identically...
+    assert_eq!(
+        parse_ar_listing("rw-r--r--     501/20       620280 Jul 25 03:02 2026 Dregg2_A.o\n"),
+        vec![("Dregg2_A.o".to_string(), 620280)]
     );
-    let gap = new
-        .mtime
-        .duration_since(old.mtime)
-        .expect("ordered above")
-        .as_secs();
-    assert!(
-        (12 * 86_400..=14 * 86_400).contains(&gap),
-        "Jul 25 03:02 to Aug 7 09:19 is ~13 days; the reader made it {gap} s"
-    );
+    // ...and an unreadable listing yields nothing, so the caller's floor fails the run.
+    assert!(parse_ar_listing("garbage\nrw-r--r-- 1 2 3 Dregg2_X.o\n").is_empty());
 
-    // 2 · THE COMPARISON. A source NEWER than its member is the finding; the reverse is not.
-    let slack = std::time::Duration::from_secs(AR_MTIME_RESOLUTION_SLACK_SECS);
-    assert!(
-        new.mtime > old.mtime + slack,
-        "a source 13 days newer than its object must be STALE past the rounding slack"
-    );
-    assert!(
-        !(old.mtime > new.mtime + slack),
-        "an object NEWER than its source is the healthy direction and must never be a finding"
-    );
+    // 2 · THE TABLE READER is strict.
+    let h = MEMBER_STAMPS_HEADER;
+    let ha = "a".repeat(64);
+    let table = parse_member_stamps(&format!(
+        "{h}\nDregg2_Exec_DeployedConstraint.o\t620280\t{ha}\t1784948520.000000000\n\
+         Dregg2_FFI.o\t11128\t-\t-\n"
+    ))
+    .expect("a well-formed table parses");
+    assert_eq!(table.len(), 2);
+    assert_eq!(table["Dregg2_Exec_DeployedConstraint.o"].source.as_deref(), Some(ha.as_str()));
+    assert_eq!(table["Dregg2_FFI.o"].source, None);
+    for bad in [
+        format!("# dregg2-member-stamps v1\tmember\tbytes\tcompiled\nDregg2_A.o\t1\t{ha}\t-\n"),
+        format!("{h}\nDregg2_A.o\t1\t{ha}\n"),
+        format!("{h}\nDregg2_A.o\tone\t{ha}\t-\n"),
+        format!("{h}\nDregg2_A.o\t1\t{}\t-\n", "A".repeat(64)),
+        format!("{h}\nDregg2_A.o\t1\tdeadbeef\t-\n"),
+        format!("{h}\nDregg2_A.o\t1\t{ha}\t-\nDregg2_A.o\t1\t{ha}\t-\n"),
+    ] {
+        assert!(parse_member_stamps(&bad).is_err(), "must refuse: {bad:?}");
+    }
 
-    // 3 · THE SLACK IS A ROUNDING ALLOWANCE, NOT A BUDGET. Same-minute is forgiven; an hour
-    //     is not.
-    let same_minute = parse_ar_listing(
-        "rw-r--r--     501/20         4096 Aug  7 09:19 2026 Dregg2_A.o\n\
-         rw-r--r--     501/20         4096 Aug  7 09:19 2026 Dregg2_B.o\n",
-    );
-    assert_eq!(same_minute.len(), 2);
-    assert!(
-        !(same_minute[1].mtime > same_minute[0].mtime + slack),
-        "two members stamped in the SAME minute must not read as stale"
-    );
-    let an_hour = parse_ar_listing(
-        "rw-r--r--     501/20         4096 Aug  7 09:19 2026 Dregg2_A.o\n\
-         rw-r--r--     501/20         4096 Aug  7 10:19 2026 Dregg2_B.o\n",
-    );
-    assert_eq!(an_hour.len(), 2);
-    assert!(
-        an_hour[1].mtime > an_hour[0].mtime + slack,
-        "one hour must NOT be inside the rounding allowance — if it is, the slack has become a \
-         staleness budget and this gate no longer fires on a same-day drift"
-    );
+    // 3 · THE JOIN refuses a table that does not describe this archive: a member with no row, and
+    //     a member whose size differs (the table is vouching for some other object).
+    let faults = provenance_of(
+        &[
+            ("Dregg2_Exec_DeployedConstraint.o".to_string(), 620281),
+            ("Dregg2_Missing.o".to_string(), 1),
+        ],
+        &table,
+    )
+    .err()
+    .expect("a size mismatch and a missing row must both fault");
+    assert_eq!(faults.len(), 2, "{faults:?}");
+    assert!(faults.iter().any(|f| f.contains("NO provenance row")));
+    assert!(faults.iter().any(|f| f.contains("620281") && f.contains("620280")));
 
-    // 4 · A LISTING THE READER CANNOT PARSE MUST YIELD NOTHING, so the caller's floor turns it
-    //     into a FAILURE rather than a clean run.
-    assert!(
-        parse_ar_listing("garbage\nrw-r--r-- 1 2 3 Dregg2_X.o\n").is_empty(),
-        "an unreadable listing must produce zero members (the floor then fails the run), never \
-         members with invented timestamps"
-    );
-
-    // 5 · THE WHOLE ASSEMBLY, against a REAL scratch source tree in this test's own temp dir —
-    //     reader, name mapping and comparison together. Legs 1-4 prove the reader can see a
-    //     difference; only this proves `stale_members` REPORTS one. Without it the gate could
-    //     read every timestamp correctly and still return an empty finding list forever.
+    // 4 · THE WHOLE ASSEMBLY against a REAL scratch source tree — only this proves
+    //     `stale_members` REPORTS a finding.
     let tmp = std::env::temp_dir().join(format!(
         "dregg-freshness-redproof-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
+            .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     ));
     let nested = tmp.join("Dregg2/Exec");
     std::fs::create_dir_all(&nested).expect("scratch tree");
-    // A module whose NAME CONTAINS AN UNDERSCORE, on purpose: inverting the flattened object
-    // name by splitting on `_` would map `Dregg2_Exec_Deployed_Constraint.o` to a path that does
-    // not exist, `resolved` would drop, and the gate would find nothing. The mapping is built by
-    // walking the tree precisely so this case resolves.
+    // A module whose NAME CONTAINS AN UNDERSCORE, on purpose: inverting the flattened object name
+    // by splitting on `_` would map `Dregg2_Exec_Deployed_Constraint.o` to a path that does not
+    // exist, `resolved` would drop, and the gate would find nothing.
+    let body = b"-- red-proof fixture\n";
     for name in ["DeployedConstraint.lean", "Deployed_Constraint.lean"] {
-        std::fs::write(nested.join(name), "-- red-proof fixture\n").expect("scratch source");
+        std::fs::write(nested.join(name), body).expect("scratch source");
     }
     let sources = source_index(&tmp);
-    assert_eq!(
-        sources.len(),
-        2,
-        "the source walk did not index the scratch tree it was handed: {sources:?}"
-    );
-    assert!(
-        sources.contains_key("Dregg2_Exec_Deployed_Constraint.o"),
-        "a module name containing `_` must still map — it is the case a split-on-`_` inverse gets \
-         wrong, and getting it wrong finds nothing stale by construction"
-    );
+    assert_eq!(sources.len(), 2, "the source walk missed the scratch tree: {sources:?}");
+    assert!(sources.contains_key("Dregg2_Exec_Deployed_Constraint.o"));
+    let built = blake3::hash(body).to_hex().to_string();
+    let listed = vec![
+        ("Dregg2_Exec_DeployedConstraint.o".to_string(), 10),
+        ("Dregg2_Exec_Deployed_Constraint.o".to_string(), 20),
+    ];
+    let table = parse_member_stamps(&format!(
+        "{h}\nDregg2_Exec_DeployedConstraint.o\t10\t{built}\t1784948520.0\n\
+         Dregg2_Exec_Deployed_Constraint.o\t20\t{built}\t1784948520.0\n"
+    ))
+    .unwrap();
+    let members = provenance_of(&listed, &table).expect("sizes agree");
 
-    // The sources were written JUST NOW; the members claim 2026-07-25, the seed's own stamp.
-    let old_members = parse_ar_listing(
-        "rw-r--r--     501/20       620280 Jul 25 03:02 2026 Dregg2_Exec_DeployedConstraint.o\n\
-         rw-r--r--     501/20       620280 Jul 25 03:02 2026 Dregg2_Exec_Deployed_Constraint.o\n",
-    );
-    assert_eq!(old_members.len(), 2);
-    let (resolved, findings) = stale_members(&old_members, &sources, &tmp);
+    // Built from exactly what is on disk: clean.
+    let (resolved, findings) = stale_members(&members, &sources, &tmp);
     assert_eq!(resolved, 2, "both members must map to a source");
-    assert_eq!(
-        findings.len(),
-        2,
-        "an archive member from 2026-07-25 against a source written this second MUST be reported \
-         stale — this is the 2026-08-07 wound, reproduced. Findings: {findings:?}"
-    );
+    assert!(findings.is_empty(), "objects built from the current bytes are fresh: {findings:?}");
+
+    // Rewritten with IDENTICAL bytes (a fresh mtime, the MultiwayTug case): still clean.
+    std::fs::write(nested.join("DeployedConstraint.lean"), body).unwrap();
+    assert!(stale_members(&members, &sources, &tmp).1.is_empty(), "a no-op rewrite is not drift");
+
+    // ONE BYTE of the source changes and nothing is rebuilt: red, naming the object and the file.
+    std::fs::write(nested.join("Deployed_Constraint.lean"), b"-- red-proof fixturE\n").unwrap();
+    let (resolved, findings) = stale_members(&members, &sources, &tmp);
+    assert_eq!(resolved, 2);
+    assert_eq!(findings.len(), 1, "exactly the edited module is stale: {findings:?}");
     assert!(
-        findings[0].contains("Dregg2_Exec_Deployed") && findings[0].contains("2026-07-25"),
-        "a finding must NAME the object and print the member's date, or a reader cannot act on \
-         it: {:?}",
+        findings[0].contains("Dregg2_Exec_Deployed_Constraint.o")
+            && findings[0].contains("Deployed_Constraint.lean"),
+        "a finding must NAME the object and its source: {:?}",
         findings[0]
     );
 
-    // ...and the healthy direction stays quiet: a member stamped in the future is not a finding.
-    let fresh_members = parse_ar_listing(
-        "rw-r--r--     501/20       620280 Jan  1 00:00 2099 Dregg2_Exec_DeployedConstraint.o\n\
-         rw-r--r--     501/20       620280 Jan  1 00:00 2099 Dregg2_Exec_Deployed_Constraint.o\n",
-    );
-    let (resolved, findings) = stale_members(&fresh_members, &sources, &tmp);
-    assert_eq!(resolved, 2);
-    assert!(
-        findings.is_empty(),
-        "an object NEWER than its source is the healthy direction; a gate that reports it is a \
-         wall, not a gate: {findings:?}"
-    );
+    // A member build.rs recorded no source for, whose source exists now: red.
+    let none = parse_member_stamps(&format!(
+        "{h}\nDregg2_Exec_DeployedConstraint.o\t10\t-\t-\n"
+    ))
+    .unwrap();
+    let members = provenance_of(&listed[..1], &none).expect("size agrees");
+    assert_eq!(stale_members(&members, &sources, &tmp).1.len(), 1);
 
     let _ = std::fs::remove_dir_all(&tmp);
-}
-
-/// `SystemTime` to `YYYY-MM-DDTHH:MM:SSZ`. A finding whose two timestamps are unreadable is a
-/// finding a reader cannot act on, so this is part of the check, not decoration.
-fn fmt(t: SystemTime) -> String {
-    let Ok(d) = t.duration_since(SystemTime::UNIX_EPOCH) else {
-        return "pre-epoch".to_string();
-    };
-    let secs = d.as_secs() as i64;
-    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
-    // civil-from-days (Howard Hinnant), the inverse of `parse_ar_stamp`'s days-from-civil.
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = if month <= 2 { y + 1 } else { y };
-    format!(
-        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
-        rem / 3_600,
-        (rem % 3_600) / 60,
-        rem % 60
-    )
 }

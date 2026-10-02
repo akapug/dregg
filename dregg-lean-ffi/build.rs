@@ -1021,6 +1021,100 @@ fn facet_stamp_path(obj: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
+/// ⚑ THE ARCHIVE'S MEMBER PROVENANCE, written beside it — because the archive cannot carry it.
+///
+/// `tests/linked_archive_freshness.rs` asks, per `Dregg2_*.o` member, "was this object compiled
+/// from the `.lean` that is on disk now?". It used to answer with `ar tv`'s member mtime against the
+/// source's mtime, which failed TWO ways, both measured on hbox on 2026-10-01:
+///
+///   * GNU binutils builds DETERMINISTIC archives by default (`ar`'s `D` modifier: every member
+///     stamped at the epoch). All 346 members listed as `Dec 31 1969`; the reader could stamp none,
+///     its floor fired, and the test was red on every Linux box while measuring nothing.
+///   * mtime is not what Lake keys on. With real stamps (a sidecar of compile times, first cut of
+///     this change) the test reported `Dregg2_Games_MultiwayTug.o` stale: its `.lean` had been
+///     REWRITTEN WITH IDENTICAL BYTES at 07:49 (the content is unchanged since 08-09), Lake's hash
+///     said up to date, and no rebuild could ever clear the finding. A freshness gate that a correct
+///     build cannot turn green is a wall.
+///
+/// So this records CONTENT: per Dregg2 member of the working archive, its size (the test checks it
+/// against the archive's own listing, so the table cannot vouch for a different object) and the
+/// BLAKE3 of the `.lean` it was built from — snapshotted BEFORE this run's `lake build` (see
+/// `snapshot_dregg2_sources`), so a source edited while Lake runs is recorded as the OLDER content
+/// and reads as stale rather than fresh. Also the compile time of the cached object, for the
+/// message only. Deterministic archives are a feature and stay deterministic.
+///
+/// Written only when the archive is current-source (not provenance-downgraded), at the end of every
+/// build.rs run that gets that far; DELETED when the working archive is re-seeded. An absent table
+/// is a FAULT to the test, never "no drift".
+const MEMBER_STAMPS_FILE: &str = "libdregg_lean.dregg2-members.tsv";
+const MEMBER_STAMPS_HEADER: &str =
+    "# dregg2-member-provenance v2\tmember\tbytes\tsource_blake3\tcompiled_unix_seconds.nanos\n";
+
+fn member_stamps_path(out_dir: &Path) -> PathBuf {
+    out_dir.join(MEMBER_STAMPS_FILE)
+}
+
+/// BLAKE3 of every `Dregg2/**/*.lean`, keyed by the flattened object name the splice gives its
+/// object (`splice_obj_name` over `metatheory/` — the same flattening as over the IR tree).
+fn snapshot_dregg2_sources(meta: &Path) -> std::collections::HashMap<String, String> {
+    let mut files = Vec::new();
+    collect_files(&meta.join("Dregg2"), &mut files);
+    files
+        .into_iter()
+        .filter(|p| p.extension().map(|e| e == "lean").unwrap_or(false))
+        .filter_map(|p| {
+            let bytes = std::fs::read(&p).ok()?;
+            Some((splice_obj_name(meta, &p), blake3::hash(&bytes).to_hex().to_string()))
+        })
+        .collect()
+}
+
+/// Write the provenance table for the `Dregg2_*.o` members of `archive`, read from the archive's
+/// own `ar tv` listing (names + sizes; the stamps there are the epoch in a deterministic archive and
+/// are ignored). Staged + renamed so a reader never sees half a table.
+fn write_member_stamps(
+    out_dir: &Path,
+    archive: &Path,
+    sources: &std::collections::HashMap<String, String>,
+) -> std::io::Result<usize> {
+    let listing = Command::new(ar_tool()).arg("tv").arg(archive).output()?;
+    if !listing.status.success() {
+        return Err(std::io::Error::other(format!("`ar tv` exited {}", listing.status)));
+    }
+    let obj_dir = out_dir.join("dregg2_closure_objs");
+    let mut rows = Vec::new();
+    for line in String::from_utf8_lossy(&listing.stdout).lines() {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        if f.len() < 8 {
+            continue;
+        }
+        let name = f[f.len() - 1];
+        if !name.starts_with("Dregg2_") || !name.ends_with(".o") {
+            continue;
+        }
+        let Ok(size) = f[f.len() - 6].parse::<u64>() else {
+            continue;
+        };
+        let source = sources.get(name).map(String::as_str).unwrap_or("-");
+        let compiled = std::fs::metadata(obj_dir.join(name))
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| format!("{}.{:09}", d.as_secs(), d.subsec_nanos()))
+            .unwrap_or_else(|| "-".to_string());
+        rows.push(format!("{name}\t{size}\t{source}\t{compiled}\n"));
+    }
+    rows.sort();
+    let mut body = String::from(MEMBER_STAMPS_HEADER);
+    for row in &rows {
+        body.push_str(row);
+    }
+    let staged = out_dir.join(format!("{MEMBER_STAMPS_FILE}.partial"));
+    std::fs::write(&staged, body)?;
+    std::fs::rename(&staged, member_stamps_path(out_dir))?;
+    Ok(rows.len())
+}
+
 /// `true` iff `target` is missing or older than `src` (the "recompile this" predicate — mirrors the
 /// script's `[ ! -f "$out" ] || [ "$c" -nt "$out" ]`). Treats unreadable mtimes as "stale" so we
 /// fail toward recompiling rather than shipping a stale object.
@@ -1112,6 +1206,9 @@ fn seed_build_archive(seed: &Path, build: &Path) -> bool {
         }
         let _ = std::fs::remove_file(&tmp);
     }
+    // The working archive's Dregg2 slice was just replaced by the seed's, so the provenance table
+    // describes objects that are no longer in it. Until this run rewrites it, absent is the truth.
+    let _ = std::fs::remove_file(member_stamps_path(parent));
     true
 }
 
@@ -3035,6 +3132,11 @@ fn main() {
     // build.rs (no watched file changed), so the ~6000-object closure is never needlessly
     // regenerated. The working archive (`build_archive`) is our OWN per-build output; we do not
     // `rerun-if-changed` it (it lives in OUT_DIR and watching it would loop).
+    // Snapshot the Lean sources BEFORE `lake build` runs (see `MEMBER_STAMPS_FILE`): the table
+    // written at the end of this run records this content, so an edit that lands mid-build reads
+    // as stale, never as fresh.
+    let source_snapshot = meta_opt.as_deref().map(snapshot_dregg2_sources);
+
     if let Some(meta) = &meta_opt {
         let mut watched = Vec::new();
         collect_files(&meta.join("Dregg2"), &mut watched);
@@ -3190,6 +3292,26 @@ fn main() {
         );
         println!("cargo:rustc-cfg=dregg_lean_stale_archive");
         return;
+    }
+
+    // The archive is current-source: record its members' provenance for the freshness test.
+    match &source_snapshot {
+        Some(sources) => match write_member_stamps(&out_dir, &build_archive, sources) {
+            Ok(n) => println!(
+                "cargo:warning=dregg-lean-ffi: recorded the source provenance of {n} Dregg2 \
+                 archive members ({MEMBER_STAMPS_FILE})."
+            ),
+            Err(e) => {
+                let _ = std::fs::remove_file(member_stamps_path(&out_dir));
+                println!(
+                    "cargo:warning=dregg-lean-ffi: could not record archive member provenance \
+                     ({e}); tests/linked_archive_freshness.rs will report it cannot measure."
+                );
+            }
+        },
+        None => {
+            let _ = std::fs::remove_file(member_stamps_path(&out_dir));
+        }
     }
 
     println!("cargo:rustc-cfg=lean_lib_present");
@@ -4671,6 +4793,13 @@ fn main() {
     println!(
         "cargo:rustc-env=DREGG_LEAN_LINKED_ARCHIVE={}",
         linked_archive.display()
+    );
+    // The per-member source provenance (see `MEMBER_STAMPS_FILE`): the freshness test's evidence,
+    // since a deterministic `ar` archive carries none. The trimmed archive's Dregg2 members are a
+    // subset of the working archive's, so the same table covers both link modes.
+    println!(
+        "cargo:rustc-env=DREGG_LEAN_MEMBER_STAMPS={}",
+        member_stamps_path(&out_dir).display()
     );
     // Empty when `metatheory_dir()` did not resolve — the freshness test reads an empty value as a
     // FAULT it cannot measure through, never as "no drift".
