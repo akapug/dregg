@@ -2123,6 +2123,21 @@ pub fn install_verified_pq_cores() {
     }
 }
 
+// Bypass libtest's captured print channel so fixed phase markers survive a
+// nextest timeout. A broken stderr write/flush must not look like a completed
+// diagnostic phase. No keys, payloads, paths, or ledger values are emitted.
+#[cfg(test)]
+fn checkpoint_test_stderr_marker(marker: &'static [u8]) {
+    use std::io::Write;
+    let mut stderr = std::io::stderr().lock();
+    stderr
+        .write_all(marker)
+        .expect("checkpoint test phase stderr write failed");
+    stderr
+        .flush()
+        .expect("checkpoint test phase stderr flush failed");
+}
+
 /// Call [`install_verified_pq_cores`] at process start in the LIB-TEST binary.
 ///
 /// The five callers of `install_verified_pq_cores` — `run_node`, `run_genesis`,
@@ -2149,7 +2164,9 @@ pub fn install_verified_pq_cores() {
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod pq_test_bootstrap {
     extern "C" fn install() {
+        super::checkpoint_test_stderr_marker(b"DREGG_CHECKPOINT_NODE_LIBTEST_BOOTSTRAP_BEFORE\n");
         super::install_verified_pq_cores();
+        super::checkpoint_test_stderr_marker(b"DREGG_CHECKPOINT_NODE_LIBTEST_BOOTSTRAP_AFTER\n");
     }
 
     #[used]

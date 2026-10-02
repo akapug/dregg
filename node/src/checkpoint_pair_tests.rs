@@ -385,6 +385,7 @@ fn empty_checkpoint_test_commit(ledger: &dregg_cell::Ledger) -> dregg_persist::C
 
 #[test]
 fn finalized_checkpoint_ledger_binds_committed_root_and_refuses_missing_authority() {
+    crate::checkpoint_test_stderr_marker(b"DREGG_CHECKPOINT_SYNC_SENTINEL_ENTRY\n");
     let store = dregg_persist::PersistentStore::open_in_memory().unwrap();
     let ledger = dregg_cell::Ledger::new();
     assert!(finalized_checkpoint_ledger_wire(&store, &ledger, 1).is_err());
@@ -397,6 +398,7 @@ fn finalized_checkpoint_ledger_binds_committed_root_and_refuses_missing_authorit
         .insert_cell(dregg_cell::Cell::with_balance([0x32; 32], [0; 32], 9))
         .unwrap();
     assert!(finalized_checkpoint_ledger_wire(&store, &altered, 1).is_err());
+    crate::checkpoint_test_stderr_marker(b"DREGG_CHECKPOINT_SYNC_SENTINEL_DONE\n");
 }
 
 #[test]
