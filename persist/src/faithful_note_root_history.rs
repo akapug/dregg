@@ -477,6 +477,7 @@ pub struct FaithfulNoteRootExpectationV1 {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FaithfulNoteRootReplayPhases {
     pub rows: u64,
+    pub workers: usize,
     pub decode: Duration,
     pub hybrid_verify: Duration,
     pub structural_append: Duration,
@@ -546,9 +547,9 @@ impl FaithfulNoteRootHistoryV1 {
             .unwrap_or_else(|| self.anchor.clone())
     }
 
-    fn append_structurally(
-        &mut self,
-        envelope: FaithfulNoteRootEnvelopeV1,
+    fn validate_structural_extension(
+        &self,
+        envelope: &FaithfulNoteRootEnvelopeV1,
     ) -> std::result::Result<(), FaithfulNoteRootHistoryError> {
         let head = self.head();
         if let Some(existing) = self
@@ -556,7 +557,7 @@ impl FaithfulNoteRootHistoryV1 {
             .iter()
             .find(|existing| existing.record.height == envelope.record.height)
         {
-            return Err(if existing == &envelope {
+            return Err(if existing == envelope {
                 FaithfulNoteRootHistoryError::Replay
             } else {
                 FaithfulNoteRootHistoryError::Fork
@@ -569,7 +570,14 @@ impl FaithfulNoteRootHistoryV1 {
         {
             return Err(FaithfulNoteRootHistoryError::DuplicateBlock);
         }
-        envelope.record.validate_extension(&head)?;
+        envelope.record.validate_extension(&head)
+    }
+
+    fn append_structurally(
+        &mut self,
+        envelope: FaithfulNoteRootEnvelopeV1,
+    ) -> std::result::Result<(), FaithfulNoteRootHistoryError> {
+        self.validate_structural_extension(&envelope)?;
         self.envelopes.push(envelope);
         Ok(())
     }
@@ -650,6 +658,59 @@ impl HeadSealV1 {
             head: FaithfulNoteRootAnchorV1::from_bytes(&anchor)?,
         })
     }
+}
+
+/// Check a bounded contiguous prefix without publishing structurally staged rows.
+/// The returned first failure is by row order, regardless of worker completion order.
+fn authenticate_replay_batch(
+    envelopes: &[FaithfulNoteRootEnvelopeV1],
+    authenticate: &(impl Fn(&FaithfulNoteRootEnvelopeV1) -> bool + Sync),
+    workers: usize,
+) -> StoreResult<()> {
+    if workers <= 1 || envelopes.len() <= 1 {
+        return if envelopes.iter().all(authenticate) {
+            Ok(())
+        } else {
+            Err(integrity(FaithfulNoteRootHistoryError::AuthenticationFailed))
+        };
+    }
+    std::thread::scope(|scope| {
+        let workers = workers.min(envelopes.len());
+        let tasks: Vec<_> = (0..workers)
+            .map(|worker| {
+                let start = worker * envelopes.len() / workers;
+                let end = (worker + 1) * envelopes.len() / workers;
+                let chunk = &envelopes[start..end];
+                let task = scope.spawn(move || {
+                    chunk.iter().enumerate().fold(None, |first, (index, envelope)| {
+                        let valid = authenticate(envelope);
+                        first.or_else(|| (!valid).then_some(index))
+                    })
+                });
+                (start, task)
+            })
+            .collect();
+        let mut first_bad = None;
+        // Join every worker, even after a refusal. Contiguous chunks are joined
+        // in height order, so later completion cannot replace an earlier error.
+        for (start, task) in tasks {
+            let candidate = match task.join() {
+                Ok(Some(index)) => Some((start + index, false)),
+                Err(_) => Some((start, true)),
+                Ok(None) => None,
+            };
+            if first_bad.is_none() {
+                first_bad = candidate;
+            }
+        }
+        match first_bad {
+            Some((_, true)) => Err(integrity(FaithfulNoteRootHistoryError::Malformed(
+                "hybrid replay worker panicked",
+            ))),
+            Some((_, false)) => Err(integrity(FaithfulNoteRootHistoryError::AuthenticationFailed)),
+            None => Ok(()),
+        }
+    })
 }
 
 impl PersistentStore {
@@ -970,6 +1031,131 @@ impl PersistentStore {
         })
     }
 
+    /// Verify every hybrid envelope in bounded, ordered batches. The reader
+    /// owns only one extra batch beyond the history already returned by replay;
+    /// a staged history cannot escape until every signature and seal has passed.
+    /// The caller must establish default-full Lean readiness before using workers.
+    pub fn load_faithful_note_root_history_hybrid_parallel(
+        &self,
+        committee: &[PublicKey],
+        ml_dsa_committee: &[MlDsaPublicKey],
+        threshold: usize,
+        expected: FaithfulNoteRootExpectationV1,
+        workers: usize,
+    ) -> StoreResult<(FaithfulNoteRootHistoryV1, FaithfulNoteRootReplayPhases)> {
+        self.load_faithful_note_root_history_with_parallel(
+            expected,
+            |envelope| envelope.verify_hybrid(committee, ml_dsa_committee, threshold),
+            workers,
+        )
+    }
+
+    fn load_faithful_note_root_history_with_parallel(
+        &self,
+        expected: FaithfulNoteRootExpectationV1,
+        authenticate: impl Fn(&FaithfulNoteRootEnvelopeV1) -> bool + Sync,
+        workers: usize,
+    ) -> StoreResult<(FaithfulNoteRootHistoryV1, FaithfulNoteRootReplayPhases)> {
+        const BATCH: usize = 16;
+        const MAX_WORKERS: usize = 4;
+        let workers = workers.clamp(1, MAX_WORKERS);
+        if workers == 1 {
+            return self.load_faithful_note_root_history_with_measured(expected, authenticate);
+        }
+        let mut phases = FaithfulNoteRootReplayPhases::default();
+        let read = self.db.begin_read()?;
+        let table = read.open_table(tables::FAITHFUL_NOTE_ROOT_HISTORY)?;
+        let metadata = read.open_table(tables::METADATA_BYTES)?;
+        let anchor_guard = metadata
+            .get(tables::META_FAITHFUL_NOTE_ROOT_ANCHOR)?
+            .ok_or_else(|| integrity(FaithfulNoteRootHistoryError::Malformed("missing anchor")))?;
+        let anchor =
+            FaithfulNoteRootAnchorV1::from_bytes(anchor_guard.value()).map_err(integrity)?;
+        let head_guard = metadata
+            .get(tables::META_FAITHFUL_NOTE_ROOT_HEAD)?
+            .ok_or_else(|| integrity(FaithfulNoteRootHistoryError::Malformed("missing head seal")))?;
+        let seal = HeadSealV1::from_bytes(head_guard.value()).map_err(integrity)?;
+        if table.len()? != seal.records {
+            return Err(integrity(FaithfulNoteRootHistoryError::SnapshotMismatch(
+                "persisted record count",
+            )));
+        }
+
+        let mut history = FaithfulNoteRootHistoryV1::new(anchor);
+        let mut batch_start = 0;
+        let mut pending_error = None;
+        let mut unappended = None;
+        for entry in table.iter()? {
+            let (height, bytes) = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    pending_error = Some(error.into());
+                    break;
+                }
+            };
+            let started = Instant::now();
+            let envelope = match FaithfulNoteRootEnvelopeV1::from_bytes(bytes.value()) {
+                Ok(envelope) => envelope,
+                Err(error) => {
+                    pending_error = Some(error);
+                    break;
+                }
+            };
+            if envelope.record.height != height.value() {
+                pending_error = Some(integrity(FaithfulNoteRootHistoryError::Malformed(
+                    "height key",
+                )));
+                break;
+            }
+            phases.decode = phases.decode.saturating_add(started.elapsed());
+            let started = Instant::now();
+            if let Err(error) = history.validate_structural_extension(&envelope) {
+                pending_error = Some(integrity(error));
+                unappended = Some(envelope);
+                break;
+            }
+            // Identical validation to append_structurally; retain the owned row
+            // without copying its PQ signature before the bounded verification.
+            history.envelopes.push(envelope);
+            phases.structural_append = phases.structural_append.saturating_add(started.elapsed());
+            if history.envelopes.len() - batch_start == BATCH {
+                let started = Instant::now();
+                authenticate_replay_batch(&history.envelopes[batch_start..], &authenticate, workers)?;
+                phases.hybrid_verify = phases.hybrid_verify.saturating_add(started.elapsed());
+                phases.rows += BATCH as u64;
+                phases.workers = workers;
+                batch_start = history.envelopes.len();
+            }
+        }
+        if batch_start < history.envelopes.len() {
+            let started = Instant::now();
+            let batch = &history.envelopes[batch_start..];
+            authenticate_replay_batch(batch, &authenticate, workers)?;
+            phases.hybrid_verify = phases.hybrid_verify.saturating_add(started.elapsed());
+            phases.rows += batch.len() as u64;
+            phases.workers = phases.workers.max(workers.min(batch.len()));
+        }
+        if let Some(envelope) = unappended {
+            // Serial replay authenticates this row before refusing its
+            // structural error. Do the same after authenticating its prefix.
+            if !authenticate(&envelope) {
+                return Err(integrity(FaithfulNoteRootHistoryError::AuthenticationFailed));
+            }
+        }
+        if let Some(error) = pending_error {
+            return Err(error);
+        }
+        let started = Instant::now();
+        if history.head() != seal.head {
+            return Err(integrity(FaithfulNoteRootHistoryError::SnapshotMismatch(
+                "persisted head seal",
+            )));
+        }
+        history.verify_exact_snapshot(expected).map_err(integrity)?;
+        phases.seal_check = started.elapsed();
+        Ok((history, phases))
+    }
+
     fn load_faithful_note_root_history_with(
         &self,
         expected: FaithfulNoteRootExpectationV1,
@@ -1027,6 +1213,7 @@ impl PersistentStore {
             history.append_structurally(envelope).map_err(integrity)?;
             phases.structural_append = phases.structural_append.saturating_add(started.elapsed());
             phases.rows += 1;
+            phases.workers = 1;
         }
         let started = Instant::now();
         if history.head() != seal.head {
@@ -1483,6 +1670,13 @@ mod tests {
         assert_eq!(empty.head(), anchor);
         assert_eq!(phases.rows, 0);
         assert_eq!(calls.get(), 0);
+        let (_, parallel_empty) = store
+            .load_faithful_note_root_history_with_parallel(expected, |_| {
+                panic!("zero-row replay must not authenticate")
+            }, usize::MAX)
+            .unwrap();
+        assert_eq!(parallel_empty.rows, 0);
+        assert_eq!(parallel_empty.workers, 0);
 
         let first = planned(&tree, &anchor, 3, &[[0x81; 32]]);
         tree.append_blake3_commitment(&[0x81; 32]);
@@ -1509,22 +1703,75 @@ mod tests {
             })
             .is_err());
         assert_eq!(calls.get(), 2, "a failed verifier still sees the second row");
+
+        // Compare serial and bounded parallel on a multi-row model history,
+        // including unequal contiguous chunks and two failing rows.
+        tree.append_blake3_commitment(&[0x82; 32]);
+        let mut head = second.record.to_anchor();
+        for block in 5..9 {
+            let commitment = [block; 32];
+            let envelope = planned(&tree, &head, block, &[commitment]);
+            store.append_faithful_note_root_verified(&envelope).unwrap();
+            tree.append_blake3_commitment(&commitment);
+            head = envelope.record.to_anchor();
+        }
+        let expected = store.faithful_note_root_expectation().unwrap().unwrap();
+        let (serial, _) = store
+            .load_faithful_note_root_history_with_measured(expected, |_| true)
+            .unwrap();
+        let seen = std::sync::atomic::AtomicUsize::new(0);
+        let (parallel, phases) = store
+            .load_faithful_note_root_history_with_parallel(
+                expected,
+                |_| {
+                    seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    true
+                },
+                usize::MAX,
+            )
+            .unwrap();
+        assert_eq!(serial.envelopes(), parallel.envelopes());
+        assert_eq!(phases.rows, 6);
+        assert_eq!(phases.workers, 4);
+        assert_eq!(seen.load(std::sync::atomic::Ordering::Relaxed), 6);
+        let serial_error = store
+            .load_faithful_note_root_history_with_measured(expected, |row| {
+                row.record.height != anchor.height + 2 && row.record.height != anchor.height + 5
+            })
+            .unwrap_err();
+        let parallel_error = store
+            .load_faithful_note_root_history_with_parallel(
+                expected,
+                |row| {
+                    row.record.height != anchor.height + 2 && row.record.height != anchor.height + 5
+                },
+                4,
+            )
+            .unwrap_err();
+        assert_eq!(serial_error.to_string(), parallel_error.to_string());
     }
 
     #[test]
     #[ignore = "requires a fresh, qualified per-test process for strict real-core installation"]
     fn measured_hybrid_replay_rejects_tampered_pq_half() {
-        let strict = dregg_pq_testkit::install_mldsa_real_first_or_panic();
+        let strict = dregg_pq_testkit::require_process_start_mldsa_real_first_or_panic();
+        let init_started = Instant::now();
+        let readiness = dregg_pq_testkit::require_default_full_for_pq_or_panic();
+        let default_full_init = init_started.elapsed();
         let store = PersistentStore::open_in_memory().unwrap();
         let signer = HybridSigner::new(0x79);
-        let (tree, anchor) = empty_anchor();
+        let (mut tree, anchor) = empty_anchor();
         store.initialize_faithful_note_root_history(&anchor).unwrap();
         let first = signed_planned(&signer, &tree, &anchor, 3, &[[0x81; 32]]);
+        tree.append_blake3_commitment(&[0x81; 32]);
+        let second = signed_planned(&signer, &tree, &first.record.to_anchor(), 4, &[[0x82; 32]]);
         store.append_faithful_note_root_verified(&first).unwrap();
+        store.append_faithful_note_root_verified(&second).unwrap();
         let expected = store.faithful_note_root_expectation().unwrap().unwrap();
         let committee = [signer.ed_pk];
         let pq_committee = [signer.pq_pk.clone()];
-        let (_, phases) = store
+        let serial_started = Instant::now();
+        let (serial, serial_phases) = store
             .load_faithful_note_root_history_hybrid_measured(
                 &committee,
                 &pq_committee,
@@ -1532,37 +1779,76 @@ mod tests {
                 expected,
             )
             .unwrap();
-        assert_eq!(phases.rows, 1);
+        let serial_total = serial_started.elapsed();
+        let requested_workers = std::thread::available_parallelism()
+            .map(|available| available.get())
+            .unwrap_or(1)
+            .min(2);
+        let parallel_started = Instant::now();
+        let (parallel, parallel_phases) = store
+            .load_faithful_note_root_history_hybrid_parallel(
+                &committee,
+                &pq_committee,
+                1,
+                expected,
+                requested_workers,
+            )
+            .unwrap();
+        let parallel_total = parallel_started.elapsed();
+        assert_eq!(serial.head(), parallel.head());
+        assert_eq!(serial.envelopes(), parallel.envelopes());
+        assert_eq!(serial_phases.rows, 2);
+        assert_eq!(parallel_phases.rows, 2);
+        assert_eq!(parallel_phases.workers, requested_workers);
 
-        let mut tampered = first.clone();
+        let mut tampered = second.clone();
         tampered.hybrid_quorum[0].pq_signature[0] ^= 1;
         let write = store.db.begin_write().unwrap();
         {
             let mut table = write.open_table(tables::FAITHFUL_NOTE_ROOT_HISTORY).unwrap();
             let bytes = tampered.to_bytes().unwrap();
-            table.insert(first.record.height, bytes.as_slice()).unwrap();
+            table.insert(second.record.height, bytes.as_slice()).unwrap();
         }
         write.commit().unwrap();
-        assert!(store
+        let serial_error = store
             .load_faithful_note_root_history_hybrid_measured(
                 &committee,
                 &pq_committee,
                 1,
                 expected,
             )
-            .is_err());
+            .unwrap_err();
+        let parallel_error = store
+            .load_faithful_note_root_history_hybrid_parallel(
+                &committee,
+                &pq_committee,
+                1,
+                expected,
+                requested_workers,
+            )
+            .unwrap_err();
+        assert_eq!(serial_error.to_string(), parallel_error.to_string());
         eprintln!(
             "strict_mldsa_first_install verify={:?} sign={:?} keygen={:?} \
-             replay_rows={} replay_decode_ms={} hybrid_verify_ms={} \
-             ordered_append_ms={} replay_seal_ms={} tampered_pq_refused=true",
+             default_full_ready={} default_full_init_ms={} requested_workers={} selected_workers={} \
+             serial_rows={} parallel_rows={} serial_replay_total_ms={} parallel_replay_total_ms={} \
+             serial_verify_ms={} parallel_verify_ms={} parallel_decode_ms={} \
+             parallel_ordered_append_ms={} parallel_seal_ms={} \
+             tampered_pq_refused=true",
             strict.verify,
             strict.sign,
             strict.keygen,
-            phases.rows,
-            phases.decode.as_millis(),
-            phases.hybrid_verify.as_millis(),
-            phases.structural_append.as_millis(),
-            phases.seal_check.as_millis(),
+            matches!(readiness.default_full, Some(Ok(()))),
+            default_full_init.as_millis(),
+            requested_workers,
+            parallel_phases.workers,
+            serial_phases.rows,
+            parallel_phases.rows,
+            serial_phases.hybrid_verify.as_millis(),
+            parallel_phases.hybrid_verify.as_millis(),
+            parallel_phases.decode.as_millis(),
+            parallel_phases.structural_append.as_millis(),
+            parallel_phases.seal_check.as_millis(),
         );
     }
 
@@ -1588,13 +1874,42 @@ mod tests {
         }
         write.commit().unwrap();
         let calls = std::cell::Cell::new(0);
-        assert!(store
+        let serial_error = store
             .load_faithful_note_root_history_with_measured(expected, |_| {
                 calls.set(calls.get() + 1);
                 true
             })
-            .is_err());
+            .unwrap_err();
         assert_eq!(calls.get(), 2, "authentication still precedes structural append");
+        let seen = std::sync::atomic::AtomicUsize::new(0);
+        let parallel_error = store
+            .load_faithful_note_root_history_with_parallel(
+                expected,
+                |_| {
+                    seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    true
+                },
+                4,
+            )
+            .unwrap_err();
+        assert_eq!(serial_error.to_string(), parallel_error.to_string());
+        assert_eq!(seen.load(std::sync::atomic::Ordering::Relaxed), 2);
+
+        // The structurally invalid row must still be authenticated before
+        // its structural error can be reported, matching serial precedence.
+        let serial_error = store
+            .load_faithful_note_root_history_with_measured(expected, |row| {
+                row.record.height != second.record.height
+            })
+            .unwrap_err();
+        let parallel_error = store
+            .load_faithful_note_root_history_with_parallel(
+                expected,
+                |row| row.record.height != second.record.height,
+                4,
+            )
+            .unwrap_err();
+        assert_eq!(serial_error.to_string(), parallel_error.to_string());
 
         let write = store.db.begin_write().unwrap();
         {
@@ -1615,13 +1930,26 @@ mod tests {
         }
         write.commit().unwrap();
         calls.set(0);
-        assert!(store
+        let serial_error = store
             .load_faithful_note_root_history_with_measured(expected, |_| {
                 calls.set(calls.get() + 1);
                 true
             })
-            .is_err());
+            .unwrap_err();
         assert_eq!(calls.get(), 2, "the complete replay still checks the head seal");
+        seen.store(0, std::sync::atomic::Ordering::Relaxed);
+        let parallel_error = store
+            .load_faithful_note_root_history_with_parallel(
+                expected,
+                |_| {
+                    seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    true
+                },
+                4,
+            )
+            .unwrap_err();
+        assert_eq!(serial_error.to_string(), parallel_error.to_string());
+        assert_eq!(seen.load(std::sync::atomic::Ordering::Relaxed), 2);
     }
 
     #[test]

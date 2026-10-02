@@ -52,6 +52,8 @@ fn restore_and_verify_faithful_note_tree(
             history_records = 0,
             leaf_rebuild_ms = leaf_rebuild.as_millis(),
             head_attestation_ms = head_started.elapsed().as_millis(),
+            default_full_init_ms = 0,
+            replay_workers = 0,
             replay_total_ms = 0,
             replay_decode_ms = 0,
             hybrid_verify_ms = 0,
@@ -89,12 +91,42 @@ fn restore_and_verify_faithful_note_tree(
     let seed = cclerk.gossip_signing_key().to_bytes();
     let local_ed = cclerk.public_key();
     let (local_pq, _) = dregg_federation::frost::MlDsaSigningKey::from_seed(&seed);
+    // The PQ-only init keeps native calls serialized. Full default init is
+    // required before any worker can overlap inside with_pq; that same API
+    // attaches each host thread and refuses ST or a sticky init failure.
+    // An empty segment needs no replay verification and no forced full init;
+    // local identity derivation above retains its existing PQ initialization.
+    let init_started = Instant::now();
+    let workers = if expected.records == 0 {
+        1
+    } else {
+        if !dregg_pq::lean_verify_core_real_installed() {
+            return Err("faithful note-root replay requires an installed verified ML-DSA core".into());
+        }
+        if !dregg_lean_ffi::lean_available() {
+            return Err("faithful note-root replay requires successful default-full Lean initialization".into());
+        }
+        let status = dregg_lean_ffi::lean_initialization_status();
+        if status.runtime_mode != Some(dregg_lean_ffi::LeanRuntimeMode::Default)
+            || !matches!(status.default_full, Some(Ok(())))
+            || !status.pq_ready
+            || status.failure.is_some()
+        {
+            return Err("faithful note-root replay refused incomplete default-full Lean initialization".into());
+        }
+        std::thread::available_parallelism()
+            .map(|available| available.get())
+            .unwrap_or(1)
+            .min(4)
+    };
+    let default_full_init = init_started.elapsed();
     let (_, phases) = store
-        .load_faithful_note_root_history_hybrid_measured(
+        .load_faithful_note_root_history_hybrid_parallel(
             std::slice::from_ref(&local_ed),
             std::slice::from_ref(&local_pq),
             1,
             expected,
+            workers,
         )
         .map_err(|e| format!("faithful note-root authenticated replay refused: {e}"))?;
     tracing::info!(
@@ -102,6 +134,8 @@ fn restore_and_verify_faithful_note_tree(
         history_records = phases.rows,
         leaf_rebuild_ms = leaf_rebuild.as_millis(),
         head_attestation_ms = head_attestation.as_millis(),
+        default_full_init_ms = default_full_init.as_millis(),
+        replay_workers = phases.workers,
         replay_total_ms = replay_started.elapsed().as_millis(),
         replay_decode_ms = phases.decode.as_millis(),
         hybrid_verify_ms = phases.hybrid_verify.as_millis(),

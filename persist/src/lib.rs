@@ -68,7 +68,7 @@ pub mod tables;
 // Export-gated testkit installation leaves production and missing-core refusal
 // unchanged; blocklace_store tests assert that the pre-main install succeeded.
 #[cfg(test)]
-dregg_pq_testkit::install_at_process_start!();
+dregg_pq_testkit::install_at_process_start!(record_mldsa_first);
 
 #[cfg(test)]
 mod tests;

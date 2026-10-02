@@ -52,7 +52,11 @@
 //! is 2.2 MB with zero Lean runtime symbols; `dregg-pq`'s `mldsa_lean_verify` test, which
 //! does use it, is 126.8 MB with 234. So the cost is per-BINARY-that-calls, not per-crate.
 
-use std::sync::Once;
+use std::sync::{Once, OnceLock};
+
+static INSTALL_ONCE: Once = Once::new();
+// None means the process-start hook did not perform this testkit's first install.
+static PROCESS_START_MLDSA_INSTALL: OnceLock<Option<StrictMlDsaRealInstall>> = OnceLock::new();
 
 /// Which of the six PQ directions have a Lean-verified core live in this process.
 ///
@@ -89,21 +93,31 @@ impl Installed {
 /// first PQ operation on the calling thread: `dregg-pq`'s installs are `OnceLock`s, so an
 /// operation that beats the install takes the no-core path and aborts.
 pub fn install() -> Installed {
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
+    install_with_bootstrap_receipt(false)
+}
+
+fn install_with_bootstrap_receipt(record: bool) -> Installed {
+    let mut won_install = false;
+    INSTALL_ONCE.call_once(|| {
         use dregg_pq::*;
-        let _ = install_verified_mldsa_verify_core(
-            dregg_lean_ffi::fips204_verify_real_core_available,
-            |w| dregg_lean_ffi::shadow_fips204_verify_real(w).ok(),
-        );
-        let _ = install_verified_mldsa_sign_core_real(
-            dregg_lean_ffi::fips204_sign_real_core_available,
-            |w| dregg_lean_ffi::shadow_fips204_sign_real(w).ok(),
-        );
-        let _ = install_verified_mldsa_keygen_core_real(
-            dregg_lean_ffi::mldsa_keygen_real_core_available,
-            |w| dregg_lean_ffi::shadow_mldsa_keygen_real(w).ok(),
-        );
+        won_install = true;
+        let outcomes = StrictMlDsaRealInstall {
+            verify: install_verified_mldsa_verify_core(
+                dregg_lean_ffi::fips204_verify_real_core_available,
+                |w| dregg_lean_ffi::shadow_fips204_verify_real(w).ok(),
+            ),
+            sign: install_verified_mldsa_sign_core_real(
+                dregg_lean_ffi::fips204_sign_real_core_available,
+                |w| dregg_lean_ffi::shadow_fips204_sign_real(w).ok(),
+            ),
+            keygen: install_verified_mldsa_keygen_core_real(
+                dregg_lean_ffi::mldsa_keygen_real_core_available,
+                |w| dregg_lean_ffi::shadow_mldsa_keygen_real(w).ok(),
+            ),
+        };
+        if record {
+            let _ = PROCESS_START_MLDSA_INSTALL.set(Some(outcomes));
+        }
         let _ = install_verified_mlkem_encaps_core(
             dregg_lean_ffi::mlkem_encaps_real_core_available,
             |w| dregg_lean_ffi::shadow_mlkem_encaps_real(w).ok(),
@@ -117,7 +131,39 @@ pub fn install() -> Installed {
             |w| dregg_lean_ffi::shadow_mlkem_keygen_real(w).ok(),
         );
     });
+    if record && !won_install {
+        let _ = PROCESS_START_MLDSA_INSTALL.set(None);
+    }
     installed()
+}
+
+/// Test-process hook that records installer outcomes only if THIS hook won the
+/// existing one-time install. The ordinary idempotent [`install`] is unchanged.
+#[doc(hidden)]
+pub fn install_from_process_start() -> Installed {
+    install_with_bootstrap_receipt(true)
+}
+
+/// Require actual first installer verdicts from the process-start hook, not
+/// merely the present core slots. The optional receipt is never a verifier.
+pub fn require_process_start_mldsa_real_first_or_panic() -> StrictMlDsaRealInstall {
+    let outcomes = PROCESS_START_MLDSA_INSTALL.get().copied().flatten();
+    assert!(
+        strict_mldsa_installed_first(outcomes),
+        "strict ML-DSA test requires the process-start hook to win all three real installers: {outcomes:?}"
+    );
+    outcomes.expect("checked first-installed receipt")
+}
+
+fn strict_mldsa_installed_first(outcomes: Option<StrictMlDsaRealInstall>) -> bool {
+    matches!(
+        outcomes,
+        Some(StrictMlDsaRealInstall {
+            verify: dregg_pq::MlDsaVerifyCoreInstall::Installed,
+            sign: dregg_pq::MlDsaSignCoreRealInstall::Installed,
+            keygen: dregg_pq::MlDsaKeygenCoreRealInstall::Installed,
+        })
+    )
 }
 
 /// What is live RIGHT NOW, independent of who installed it.
@@ -193,6 +239,24 @@ pub fn install_mldsa_real_first_or_panic() -> StrictMlDsaRealInstall {
     outcomes
 }
 
+/// Require the existing default-full runtime and PQ family before a strict
+/// test requests concurrent host-thread calls. Does not install any core.
+pub fn require_default_full_for_pq_or_panic() -> dregg_lean_ffi::LeanInitializationStatus {
+    assert!(
+        dregg_lean_ffi::lean_available(),
+        "strict PQ replay requires default-full Lean initialization"
+    );
+    let status = dregg_lean_ffi::lean_initialization_status();
+    assert!(
+        status.runtime_mode == Some(dregg_lean_ffi::LeanRuntimeMode::Default)
+            && matches!(status.default_full, Some(Ok(())))
+            && status.pq_ready
+            && status.failure.is_none(),
+        "strict PQ replay requires ready default-full PQ modules: {status:?}"
+    );
+    status
+}
+
 /// Run [`install`] at PROCESS START, from one line at the top of a test file.
 ///
 /// # When this, and not a call at the gateway
@@ -238,11 +302,17 @@ pub fn install_mldsa_real_first_or_panic() -> StrictMlDsaRealInstall {
 #[macro_export]
 macro_rules! install_at_process_start {
     () => {
+        $crate::install_at_process_start!(@using install);
+    };
+    (record_mldsa_first) => {
+        $crate::install_at_process_start!(@using install_from_process_start);
+    };
+    (@using $installer:ident) => {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         #[allow(dead_code)]
         mod dregg_pq_testkit_process_start {
             extern "C" fn install() {
-                let got = $crate::install();
+                let got = $crate::$installer();
                 if !got.mldsa_complete() {
                     // stderr, at process start: libtest has not installed its output capture
                     // yet, so unlike a message printed from inside a test this one survives.
@@ -265,4 +335,52 @@ macro_rules! install_at_process_start {
             static INSTALL_VERIFIED_PQ_CORES: extern "C" fn() = install;
         }
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dregg_pq::{
+        MlDsaKeygenCoreRealInstall as Keygen, MlDsaSignCoreRealInstall as Sign,
+        MlDsaVerifyCoreInstall as Verify,
+    };
+
+    #[test]
+    fn strict_receipt_refuses_missing_prior_or_absent_real_core() {
+        let installed = StrictMlDsaRealInstall {
+            verify: Verify::Installed,
+            sign: Sign::Installed,
+            keygen: Keygen::Installed,
+        };
+        assert!(strict_mldsa_installed_first(Some(installed)));
+        assert!(!strict_mldsa_installed_first(None));
+        for outcomes in [
+            StrictMlDsaRealInstall {
+                verify: Verify::AlreadyInstalled,
+                ..installed
+            },
+            StrictMlDsaRealInstall {
+                sign: Sign::AlreadyInstalled,
+                ..installed
+            },
+            StrictMlDsaRealInstall {
+                keygen: Keygen::AlreadyInstalled,
+                ..installed
+            },
+            StrictMlDsaRealInstall {
+                verify: Verify::ExportAbsent,
+                ..installed
+            },
+            StrictMlDsaRealInstall {
+                sign: Sign::ExportAbsent,
+                ..installed
+            },
+            StrictMlDsaRealInstall {
+                keygen: Keygen::ExportAbsent,
+                ..installed
+            },
+        ] {
+            assert!(!strict_mldsa_installed_first(Some(outcomes)), "{outcomes:?}");
+        }
+    }
 }
