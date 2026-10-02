@@ -27,6 +27,92 @@ import Dregg2.Games.PathOfAngels.NetworkJudgeWire
 namespace Dregg2.Games.PathOfAngels.NetworkJudgeWire
 
 set_option autoImplicit false
+open Lean
+open Dregg2.Games.PathOfAngels
+open scoped Prod.Lex
+open scoped Prod.Lex
+
+/-! ## The laboratory, moved out of the runtime module (#86)
+
+These definitions were compiled into the `Dregg2.FFI` closure, and Lean computes every compiled
+no-argument `def` when its module initializes: each `check_*` and fixture here ran on every node
+boot. They live beside the pins that evaluate them now; nothing linked into the node reaches them. -/
+
+/-- The fixture input decodes back to itself under the canonical seal.
+(Pinned `= true` in `NetworkJudgeWireFixtures`.) -/
+def check_fixture_input_roundtrip : Bool :=
+  decide (decodeSignalInput fixtureInputBytes = some fixtureInputWire)
+
+/-- (Pinned `= true` in `NetworkJudgeWireFixtures`.) -/
+def check_fixture_input_refuses_tight_byte_cap : Bool :=
+  (decodeSignalInputWithLimit (fixtureInputBytes.length - 1) fixtureInputBytes).isNone
+
+/-- (Pinned `= true` in `NetworkJudgeWireFixtures`.) -/
+def check_fixture_input_semantic_inhabited : Bool :=
+  fixtureInputWire.toSemantic?.isSome
+
+/-- (Pinned `= true` in `NetworkJudgeWireFixtures`.) -/
+def check_fixture_input_refuses_trailing_bytes : Bool :=
+  (decodeSignalInput (fixtureInputBytes ++ "\n")).isNone
+
+/-- (Pinned `= true` in `NetworkJudgeWireFixtures`.) -/
+def check_fixture_input_refuses_uppercase_digest : Bool :=
+  (decodeSignalInput
+    (fixtureInputBytes.replace FIXTURE_FEDERATION_HEX
+      (String.toUpper FIXTURE_FEDERATION_HEX))).isNone
+
+def oversizedActionsInput : SignalInputWire :=
+  { fixtureInputWire with request := {
+      fixtureInputWire.request with
+        actions := .signal (List.replicate (GameTag.signal.actionLimit + 1) { low := 0, mid := 0, high := 0 })
+    } }
+
+/-- (Pinned `= true` in `NetworkJudgeWireFixtures`.) -/
+def check_fixture_input_refuses_oversized_actions : Bool :=
+  (decodeSignalInput oversizedActionsInput.toJson).isNone
+
+def duplicateKnownInput : SignalInputWire :=
+  { fixtureInputWire with canon := {
+      fixtureInputWire.canon with
+      known := [fixtureInputWire.config.mission.artifact, fixtureInputWire.config.mission.artifact]
+    } }
+
+/-- (Pinned `= true` in `NetworkJudgeWireFixtures`.) -/
+def check_fixture_input_refuses_duplicate_canon_rows : Bool :=
+  (decodeSignalInput duplicateKnownInput.toJson).isNone
+
+def mismatchedWorldInput : SignalInputWire :=
+  { fixtureInputWire with world := { fixtureInputWire.world with sequence := 1 } }
+
+/-- (Pinned `= true` in `NetworkJudgeWireFixtures`.) -/
+def check_fixture_semantics_refuses_world_canon_mismatch : Bool :=
+  !mismatchedWorldInput.toSemantic?.isSome
+
+def oversizedCarrierInput : SignalInputWire :=
+  { fixtureInputWire with carrier := {
+      fixtureInputWire.carrier with currentPlayerCounter := WIRE_NAT_LIMIT + 1
+    } }
+
+/-- (Pinned `= true` in `NetworkJudgeWireFixtures`.) -/
+def check_fixture_input_refuses_oversized_carrier_counter : Bool :=
+  (decodeSignalInput oversizedCarrierInput.toJson).isNone
+
+/-- The fixture output decodes back to itself under the canonical seal.
+(Pinned `= true` in `NetworkJudgeWireFixtures`.) -/
+def check_fixture_output_roundtrip : Bool :=
+  decide (decodeSignalOutput fixtureOutputBytes = some fixtureOutputWire)
+
+/-- (Pinned `= true` in `NetworkJudgeWireFixtures`.) -/
+def check_fixture_output_refuses_tight_byte_cap : Bool :=
+  (decodeSignalOutputWithLimit (fixtureOutputBytes.length - 1) fixtureOutputBytes).isNone
+
+/-- (Pinned `= true` in `NetworkJudgeWireFixtures`.) -/
+def check_fixture_output_semantic_inhabited : Bool :=
+  fixtureOutputWire.toSemantic?.isSome
+
+/-- (Pinned `= true` in `NetworkJudgeWireFixtures`.) -/
+def check_fixture_output_refuses_trailing_bytes : Bool :=
+  (decodeSignalOutput (fixtureOutputBytes ++ "\n")).isNone
 
 theorem fixture_input_roundtrip :
     check_fixture_input_roundtrip = true := by native_decide

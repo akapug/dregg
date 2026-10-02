@@ -25,6 +25,177 @@ import Dregg2.Games.PathOfAngels.DarkBazaarJudge
 namespace Dregg2.Games.PathOfAngels.DarkBazaarJudge
 
 set_option autoImplicit false
+open Dregg2.Games.PathOfAngels
+open Dregg2.Games.PathOfAngels.DarkBazaar
+open Dregg2.Games.PathOfAngels.DarkBazaarJudgeWire
+
+/-! ## The laboratory, moved out of the runtime module (#86)
+
+These definitions were compiled into the `Dregg2.FFI` closure, and Lean computes every compiled
+no-argument `def` when its module initializes: each `check_*` and fixture here ran on every node
+boot. They live beside the pins that evaluate them now; nothing linked into the node reaches them. -/
+
+private def repeatedDigest (value : Nat) : Digest32 where
+  bytes := List.replicate 32 ⟨value % 256, Nat.mod_lt _ (by decide)⟩
+  length_eq := by simp
+
+def fixtureFederation : Digest32 := repeatedDigest 1
+def fixtureContentRoot : Digest32 := repeatedDigest 2
+def fixtureActivation : Digest32 := repeatedDigest 3
+def fixtureSession : Digest32 := repeatedDigest 4
+def fixtureSeller : Digest32 := repeatedDigest 17
+def fixtureBuyer : Digest32 := repeatedDigest 34
+def fixtureSourceRoot : Digest32 := repeatedDigest 51
+def fixtureBaseNullifier : Digest32 := repeatedDigest 113
+def fixtureQuoteNullifier : Digest32 := repeatedDigest 114
+
+def fixtureIdentity : IdentityWire where
+  federationId := fixtureFederation
+  contentRoot := fixtureContentRoot
+  activationDigest := fixtureActivation
+  contentSession := fixtureSession
+  contentEpoch := 1
+  seller := fixtureSeller
+  buyer := fixtureBuyer
+  baseAsset := { kind := "supplies", relicId := 0 }
+  quoteAsset := { kind := "intel", relicId := 0 }
+
+def fixtureOutput : ClearingOutputWire := ⟨1, 13⟩
+
+def fixturePolicy : PolicyWire where
+  buckets := 4
+  quoteTick := 2
+  maxOrders := 4
+  maxOrderQuantity := 15
+  maxPublicAssetInputs := 8
+  allowedOutputs := [fixtureOutput]
+
+def fixtureDescriptorRoot : Fin 8 → Int :=
+  V1.hash8
+    (Market.DarkBazaarPrivateDescriptor.rootPreimage V1.DESCRIPTOR_SESSION
+      Market.DarkBazaarPrivateDescriptor.fixtureWitness)
+
+def fixtureCommitment : Digest32 := V1.digestOfRoot fixtureDescriptorRoot
+
+def fixtureOrderNullifiers : List Digest32 :=
+  ((List.ofFn fun slot : Fin 4 =>
+      (V1.orderId fixtureDescriptorRoot slot).nullifier.value).eraseDups).insertionSort
+    (fun left right => Emit.bytes32Hex left < Emit.bytes32Hex right)
+
+def fixtureBaseInput : AssetInputWire where
+  nullifier := fixtureBaseNullifier
+  owner := fixtureSeller
+  asset := { kind := "supplies", relicId := 0 }
+  amount := 13
+
+def fixtureQuoteInput : AssetInputWire where
+  nullifier := fixtureQuoteNullifier
+  owner := fixtureBuyer
+  asset := { kind := "intel", relicId := 0 }
+  amount := 52
+
+def fixtureClaim : ClaimWire where
+  spec := {
+    identity := fixtureIdentity
+    batchId := 7
+    sourceRoot := fixtureSourceRoot
+    policy := fixturePolicy
+  }
+  privateBookCommitment := fixtureCommitment
+  output := fixtureOutput
+  baseInputs := [fixtureBaseInput]
+  quoteInputs := [fixtureQuoteInput]
+  orderNullifiers := fixtureOrderNullifiers
+
+def fixtureState : StateWire where
+  identity := fixtureIdentity
+  policy := fixturePolicy
+  baseNotes := [fixtureBaseInput]
+  quoteNotes := [fixtureQuoteInput]
+  buyerBaseCustody := 0
+  sellerQuoteCustody := 0
+  consumedAssetNullifiers := []
+  consumedOrderNullifiers := []
+  consumedBatches := []
+
+def fixtureOpening : OpeningWire where
+  format := AUTHORIZATION_FORMAT
+  orders := [⟨2, 10⟩, ⟨1, 6⟩, ⟨4, 5⟩, ⟨5, 8⟩]
+  blinding := [777, 778, 779, 780, 781, 782, 783, 784]
+
+def fixtureInput : InputWire where
+  state := fixtureState
+  claim := fixtureClaim
+  opening := fixtureOpening
+
+def fixtureInputBytes : String := fixtureInput.toJson
+def fixtureExpectedOutput : OutputWire :=
+  OutputWire.ofTransition fixtureInputBytes fixtureInput
+    (fixtureState.successorCandidate fixtureClaim)
+def fixtureOutputBytes : String := fixtureExpectedOutput.toJson
+
+/-- (Pinned `= true` in `DarkBazaarJudgeFixtures`.) -/
+def check_fixture_input_roundtrip : Bool :=
+  decide (decodeInput fixtureInputBytes = some fixtureInput)
+
+/-- (Pinned `= true` in `DarkBazaarJudgeFixtures`.) -/
+def check_fixture_semantic_inhabited : Bool := fixtureInput.toSemantic?.isSome
+
+/-- (Pinned `= true` in `DarkBazaarJudgeFixtures`.) -/
+def check_fixture_process_success : Bool :=
+  processWire fixtureInputBytes == some fixtureOutputBytes
+
+/-- (Pinned `= true` in `DarkBazaarJudgeFixtures`.) -/
+def check_fixture_trailing_byte_refused : Bool :=
+  (processWire (fixtureInputBytes ++ "\n")).isNone
+
+def fixtureUnknownFieldBytes : String :=
+  fixtureInputBytes.replace "\"opening\":" "\"unknown\":0,\"opening\":"
+
+/-- (Pinned `= true` in `DarkBazaarJudgeFixtures`.) -/
+def check_fixture_unknown_field_refused : Bool := (processWire fixtureUnknownFieldBytes).isNone
+
+def fixtureUppercaseDigestBytes : String :=
+  fixtureInputBytes.replace
+    "e0a5c50385fa3b60e5ed0433b4c7075201b0b473b6afc4591d98ed7182d5102e"
+    "E0a5c50385fa3b60e5ed0433b4c7075201b0b473b6afc4591d98ed7182d5102e"
+
+/-- (Pinned `= true` in `DarkBazaarJudgeFixtures`.) -/
+def check_fixture_uppercase_digest_refused : Bool :=
+  (processWire fixtureUppercaseDigestBytes).isNone
+
+def fixtureReorderedNullifiers : InputWire :=
+  { fixtureInput with claim := {
+      fixtureInput.claim with orderNullifiers := fixtureInput.claim.orderNullifiers.reverse
+    } }
+
+/-- (Pinned `= true` in `DarkBazaarJudgeFixtures`.) -/
+def check_fixture_reordered_nullifiers_refused : Bool :=
+  (processWire fixtureReorderedNullifiers.toJson).isNone
+
+def fixtureOverboundOutput : InputWire :=
+  { fixtureInput with claim := { fixtureInput.claim with output :=
+      ⟨fixtureInput.claim.output.bucket, DarkBazaar.Wire.maxOutputVolume + 1⟩ } }
+
+/-- (Pinned `= true` in `DarkBazaarJudgeFixtures`.) -/
+def check_fixture_overbound_output_refused : Bool :=
+  (processWire fixtureOverboundOutput.toJson).isNone
+
+def fixtureWrongOutput : InputWire :=
+  { fixtureInput with claim := { fixtureInput.claim with output := ⟨2, 13⟩ } }
+
+/-- (Pinned `= true` in `DarkBazaarJudgeFixtures`.) -/
+def check_fixture_wrong_clearing_refused : Bool := (processWire fixtureWrongOutput.toJson).isNone
+
+def fixtureWrongNullifiers : InputWire :=
+  { fixtureInput with claim := {
+      fixtureInput.claim with orderNullifiers := [repeatedDigest 200, repeatedDigest 201,
+        repeatedDigest 202, repeatedDigest 203]
+    } }
+
+/-- (Pinned `= true` in `DarkBazaarJudgeFixtures`.) -/
+def check_fixture_wrong_nullifiers_refused : Bool :=
+  (processWire fixtureWrongNullifiers.toJson).isNone
 
 theorem fixture_input_roundtrip :
     check_fixture_input_roundtrip = true := by native_decide

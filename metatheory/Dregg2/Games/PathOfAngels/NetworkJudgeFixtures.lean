@@ -25,6 +25,14 @@ open Dregg2.Games.PathOfAngels.NetworkJudgeWire
 
 set_option autoImplicit false
 
+/-! ## The laboratory, moved out of the runtime module (#86)
+
+These definitions were compiled into the `Dregg2.FFI` closure, and Lean computes every compiled
+no-argument `def` when its module initializes: each `check_*` and fixture here ran on every node
+boot. They live beside the pins that evaluate them now; nothing linked into the node reaches them. -/
+
+
+
 /-- This is the actual emitted Signal puzzle, not an independently assembled
 receipt-shaped value.  It traverses strict input decode, semantic reconstruction,
 the abstract `JudgedRun` constructor boundary, Canon's world chain, and strict

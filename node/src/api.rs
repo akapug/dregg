@@ -332,6 +332,42 @@ pub struct StatusResponse {
     /// `producer_root_agreeing_effects`; this alias goes away once the last
     /// reader moves.
     pub producer_covered_effects: usize,
+    /// Which build this process runs — the commit and when it was built (`node/build.rs`). Asked
+    /// for by the 2026-09-30 redeploy, which could not tell from `/status` whether a restarted
+    /// container carried the new image.
+    pub version: NodeVersion,
+}
+
+/// The build identity `/status` reports. `git_sha` is the full commit (`unknown` when the build had
+/// neither `.git` nor `DREGG_BUILD_GIT_SHA`); `build_time` is RFC 3339 UTC of `build_unix_seconds`.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NodeVersion {
+    pub git_sha: &'static str,
+    pub build_time: &'static str,
+    pub build_unix_seconds: u64,
+    pub crate_version: &'static str,
+}
+
+impl NodeVersion {
+    pub const CURRENT: NodeVersion = NodeVersion {
+        git_sha: env!("DREGG_NODE_GIT_SHA"),
+        build_time: env!("DREGG_NODE_BUILD_TIME"),
+        build_unix_seconds: parse_u64(env!("DREGG_NODE_BUILD_UNIX")),
+        crate_version: env!("CARGO_PKG_VERSION"),
+    };
+}
+
+/// `const` decimal parse for the build stamp; a non-digit is a build error, not a silent zero.
+const fn parse_u64(s: &str) -> u64 {
+    let b = s.as_bytes();
+    let mut i = 0;
+    let mut n: u64 = 0;
+    while i < b.len() {
+        assert!(b[i].is_ascii_digit(), "DREGG_NODE_BUILD_UNIX is not a decimal integer");
+        n = n * 10 + (b[i] - b'0') as u64;
+        i += 1;
+    }
+    n
 }
 
 /// Public, redacted projection of one validated durable PoA Signal head.
@@ -3248,6 +3284,7 @@ async fn get_status(State(state): State<NodeState>) -> Json<StatusResponse> {
         consensus_order_over_budget_polls: order_tally.over_budget_polls,
         producer_root_agreeing_effects,
         producer_covered_effects: producer_root_agreeing_effects,
+        version: NodeVersion::CURRENT,
     })
 }
 
@@ -12929,6 +12966,51 @@ mod tests {
     /// configured `federation_id` after, while `/status` would still say
     /// `"solo"` for a committee of one. Clients sign over this field and derive
     /// nothing (#90), so it must be the value the executor verifies under.
+    /// `/status` names the build: the commit this binary was built from and when (#86 rider). The
+    /// sha is the one `git` reports for this tree, so a stale or hand-typed stamp fails here.
+    #[tokio::test]
+    async fn status_reports_the_build_version() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = NodeState::new(tmp.path(), vec![]).expect("node state");
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let app = router(state, false, recorder.handle());
+
+        let (code, json) = get_json(&app, "/status").await;
+        assert_eq!(code, StatusCode::OK);
+        let version = json.get("version").unwrap_or_else(|| panic!("/status lacks version: {json}"));
+        let sha = version["git_sha"].as_str().expect("git_sha is a string");
+        assert_eq!(sha, NodeVersion::CURRENT.git_sha);
+        let head = std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+        if std::env::var("DREGG_BUILD_GIT_SHA").map_or(true, |v| v.is_empty()) {
+            if let Some(head) = head {
+                assert_eq!(sha.len(), 40, "a git build stamps the full sha, got {sha}");
+                assert!(sha.bytes().all(|b| b.is_ascii_hexdigit()), "{sha}");
+                // HEAD may have moved since this test binary was built; the stamp must at least be
+                // a commit this repository knows.
+                let known = std::process::Command::new("git")
+                    .args(["cat-file", "-e", &format!("{sha}^{{commit}}")])
+                    .current_dir(env!("CARGO_MANIFEST_DIR"))
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false);
+                assert!(known, "stamped sha {sha} is not a commit here (HEAD {head})");
+            }
+        }
+        let unix = version["build_unix_seconds"].as_u64().expect("build_unix_seconds");
+        assert_eq!(unix, NodeVersion::CURRENT.build_unix_seconds);
+        assert!(unix > 1_700_000_000, "build stamp {unix} predates this code");
+        let time = version["build_time"].as_str().expect("build_time");
+        assert_eq!(time.len(), 20, "RFC 3339 UTC seconds, got {time}");
+        assert!(time.ends_with('Z') && time.as_bytes()[10] == b'T', "{time}");
+        assert_eq!(version["crate_version"], env!("CARGO_PKG_VERSION"));
+    }
+
     #[tokio::test]
     async fn status_serves_the_executor_federation_id() {
         let tmp = tempfile::tempdir().expect("tempdir");

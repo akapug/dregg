@@ -23,7 +23,16 @@ open Dregg2.Games.PathOfAngels.CrewRelayExpedition
 open Dregg2.Games.PathOfAngels.NightWatchCampaignAdmission
 
 set_option autoImplicit false
-set_option maxRecDepth 10000
+
+/-! ## The laboratory, moved out of the runtime module (#86)
+
+These definitions were compiled into the `Dregg2.FFI` closure, and Lean computes every compiled
+no-argument `def` when its module initializes: each `check_*` and fixture here ran on every node
+boot. They live beside the pins that evaluate them now; nothing linked into the node reaches them. -/
+
+/-- The refusal labels distinguish every error the kernel can raise.
+(Pinned `= true` in `NightWatchCampaignWireFixtures`.) -/
+def check_error_names_are_pairwise_distinct : Bool := decide (allErrors.map errorName).Nodup
 
 /-! ## Source-owned reachable watch fixtures -/
 

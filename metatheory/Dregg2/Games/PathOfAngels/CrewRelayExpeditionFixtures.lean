@@ -21,6 +21,21 @@ import Dregg2.Games.PathOfAngels.CrewRelayExpedition
 namespace Dregg2.Games.PathOfAngels.CrewRelayExpedition
 
 set_option autoImplicit false
+open Dregg2.Games.PathOfAngels
+
+/-! ## The laboratory, moved out of the runtime module (#86)
+
+These definitions were compiled into the `Dregg2.FFI` closure, and Lean computes every compiled
+no-argument `def` when its module initializes: each `check_*` and fixture here ran on every node
+boot. They live beside the pins that evaluate them now; nothing linked into the node reaches them. -/
+
+/-- The four fixture seats are distinct in every field that authorizes anything.
+(Pinned `= true` in `CrewRelayExpeditionFixtures`.) -/
+def check_fixture_roster_seats_are_distinct_in_every_authorizing_field : Bool :=
+  decide (fixtureRoster.map Seat.id).Nodup &&
+  decide (fixtureRoster.map Seat.playerKey).Nodup &&
+  decide (fixtureRoster.map Seat.credential).Nodup &&
+  decide (fixtureRoster.map Seat.role).Nodup
 
 theorem fixture_roster_seats_are_distinct_in_every_authorizing_field :
     check_fixture_roster_seats_are_distinct_in_every_authorizing_field = true := by native_decide

@@ -130,10 +130,6 @@ def allErrors : List NightWatchCampaign.Error :=
 theorem allErrors_is_exhaustive (error : NightWatchCampaign.Error) : error ∈ allErrors := by
   cases error <;> simp [allErrors]
 
-/-- The refusal labels distinguish every error the kernel can raise.
-(Pinned `= true` in `NightWatchCampaignWireFixtures`.) -/
-def check_error_names_are_pairwise_distinct : Bool := decide (allErrors.map errorName).Nodup
-
 #assert_axioms allErrors_is_exhaustive
 
 /-! ## The player's submission -/

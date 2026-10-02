@@ -29,6 +29,65 @@ import Dregg2.Games.PathOfAngels.BazaarGameRuntime
 namespace Dregg2.Games.PathOfAngels.BazaarGameRuntime
 
 set_option autoImplicit false
+open Lean
+open Dregg2.Games.PathOfAngels
+open Dregg2.Games.PathOfAngels.DarkBazaar
+open Dregg2.Games.PathOfAngels.BazaarGame
+-- The laboratory reads these runtime helpers; they stay private to the runtime module.
+open private fixtureCounter repeatedDigest from Dregg2.Games.PathOfAngels.BazaarGameRuntime
+
+/-! ## The laboratory, moved out of the runtime module (#86)
+
+These definitions were compiled into the `Dregg2.FFI` closure, and Lean computes every compiled
+no-argument `def` when its module initializes: each `check_*` and fixture here ran on every node
+boot. They live beside the pins that evaluate them now; nothing linked into the node reaches them. -/
+
+def stateKeyCodecValidB (key : StateKey) : Bool :=
+  match decodeStateKey (stateKeyToCanonicalJson key) with
+  | some decoded => decoded.toJson == stateKeyToCanonicalJson key
+  | none => false
+
+def fixtureState2 : StateKey :=
+  fixtureStateKey (fixtureCounter 2 (by decide)) (fixtureCounter 1 (by decide))
+def fixtureState3 : StateKey :=
+  fixtureStateKey (fixtureCounter 3 (by decide)) (fixtureCounter 2 (by decide))
+
+def fixtureSuccessorRequest : RuntimeCasRequest := ⟨some fixtureState1, fixtureState2⟩
+def fixtureStaleRequest : RuntimeCasRequest := ⟨some fixtureState1, fixtureState3⟩
+
+private def replayRefusalB (expected : ReplayRefusal) :
+    Except ReplayRefusal ReplayApplied → Bool
+  | .error actual => decide (actual = expected)
+  | .ok _ => false
+
+/-- (Pinned `= true` in `BazaarGameRuntimeFixtures`.) -/
+def check_fixture_replay_event_codec_is_canonical : Bool :=
+  decide (decodeReplayCommandEvent
+    (replayCommandEventToCanonicalJson fixtureReplayContext
+      (.initialize fixtureReplayGenesis)) =
+    some (fixtureReplayContext, .initialize fixtureReplayGenesis))
+
+/-- (Pinned `= true` in `BazaarGameRuntimeFixtures`.) -/
+def check_fixture_cross_deployment_event_refuses : Bool :=
+  replayRefusalB .deploymentMismatch
+    (replayCommand ⟨repeatedDigest 99, repeatedDigest 23⟩ none
+      (.initialize fixtureReplayGenesis))
+
+/-- (Pinned `= true` in `BazaarGameRuntimeFixtures`.) -/
+def check_fixture_state_codec_is_canonical : Bool := stateKeyCodecValidB fixtureState2
+
+/-- (Pinned `= true` in `BazaarGameRuntimeFixtures`.) -/
+def check_fixture_request_codec_is_canonical : Bool :=
+  runtimeCasRequestCodecValidB fixtureSuccessorRequest
+
+/-- (Pinned `= true` in `BazaarGameRuntimeFixtures`.) -/
+def check_fixture_state_trailing_byte_refuses : Bool :=
+  (decodeStateKey (stateKeyToCanonicalJson fixtureState2 ++ " ")).isNone
+
+/-- (Pinned `= true` in `BazaarGameRuntimeFixtures`.) -/
+def check_fixture_request_substitution_changes_wire : Bool :=
+  runtimeCasRequestToCanonicalJson fixtureSuccessorRequest !=
+    runtimeCasRequestToCanonicalJson fixtureStaleRequest
 
 theorem fixture_state_codec_is_canonical :
     check_fixture_state_codec_is_canonical = true := by native_decide

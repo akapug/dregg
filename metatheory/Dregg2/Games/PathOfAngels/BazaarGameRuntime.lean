@@ -796,11 +796,6 @@ theorem decodeRuntimeCasRequest_reencodes {bytes : String} {value : WireValue}
         exact canonicalDecode_reencodes decoded
       · simp [decodeRuntimeCasRequest, decoded, valid] at accepted
 
-def stateKeyCodecValidB (key : StateKey) : Bool :=
-  match decodeStateKey (stateKeyToCanonicalJson key) with
-  | some decoded => decoded.toJson == stateKeyToCanonicalJson key
-  | none => false
-
 def runtimeCasRequestCodecValidB (request : RuntimeCasRequest) : Bool :=
   match decodeRuntimeCasRequest (runtimeCasRequestToCanonicalJson request) with
   | some decoded => decoded.toJson == runtimeCasRequestToCanonicalJson request
@@ -1040,15 +1035,7 @@ def fixtureStateKey (revision tick : PlayerCounter) : StateKey where
 
 def fixtureState1 : StateKey :=
   fixtureStateKey (fixtureCounter 1 (by decide)) (fixtureCounter 0 (by decide))
-def fixtureState2 : StateKey :=
-  fixtureStateKey (fixtureCounter 2 (by decide)) (fixtureCounter 1 (by decide))
-def fixtureState3 : StateKey :=
-  fixtureStateKey (fixtureCounter 3 (by decide)) (fixtureCounter 2 (by decide))
-
 def fixtureGenesisRequest : RuntimeCasRequest := ⟨none, fixtureState1⟩
-def fixtureSuccessorRequest : RuntimeCasRequest := ⟨some fixtureState1, fixtureState2⟩
-def fixtureStaleRequest : RuntimeCasRequest := ⟨some fixtureState1, fixtureState3⟩
-
 def fixtureReplayContext : ReplayContext :=
   ⟨repeatedDigest 88, repeatedDigest 23⟩
 
@@ -1068,11 +1055,6 @@ private def replayValueOfAccepted
   match h : result with
   | .ok value => value
   | .error _ => False.elim (by simp [replayAcceptedB] at accepted)
-
-private def replayRefusalB (expected : ReplayRefusal) :
-    Except ReplayRefusal ReplayApplied → Bool
-  | .error actual => decide (actual = expected)
-  | .ok _ => false
 
 def fixtureReplayGenesisResult := replayCommand fixtureReplayContext none
   (.initialize fixtureReplayGenesis)
@@ -1099,35 +1081,6 @@ theorem fixture_replay_advance_accepts :
 
 def fixtureReplayAdvanceApplied : ReplayApplied :=
   replayValueOfAccepted fixtureReplayAdvanceResult fixture_replay_advance_accepts
-
-/-- (Pinned `= true` in `BazaarGameRuntimeFixtures`.) -/
-def check_fixture_replay_event_codec_is_canonical : Bool :=
-  decide (decodeReplayCommandEvent
-    (replayCommandEventToCanonicalJson fixtureReplayContext
-      (.initialize fixtureReplayGenesis)) =
-    some (fixtureReplayContext, .initialize fixtureReplayGenesis))
-
-/-- (Pinned `= true` in `BazaarGameRuntimeFixtures`.) -/
-def check_fixture_cross_deployment_event_refuses : Bool :=
-  replayRefusalB .deploymentMismatch
-    (replayCommand ⟨repeatedDigest 99, repeatedDigest 23⟩ none
-      (.initialize fixtureReplayGenesis))
-
-/-- (Pinned `= true` in `BazaarGameRuntimeFixtures`.) -/
-def check_fixture_state_codec_is_canonical : Bool := stateKeyCodecValidB fixtureState2
-
-/-- (Pinned `= true` in `BazaarGameRuntimeFixtures`.) -/
-def check_fixture_request_codec_is_canonical : Bool :=
-  runtimeCasRequestCodecValidB fixtureSuccessorRequest
-
-/-- (Pinned `= true` in `BazaarGameRuntimeFixtures`.) -/
-def check_fixture_state_trailing_byte_refuses : Bool :=
-  (decodeStateKey (stateKeyToCanonicalJson fixtureState2 ++ " ")).isNone
-
-/-- (Pinned `= true` in `BazaarGameRuntimeFixtures`.) -/
-def check_fixture_request_substitution_changes_wire : Bool :=
-  runtimeCasRequestToCanonicalJson fixtureSuccessorRequest !=
-    runtimeCasRequestToCanonicalJson fixtureStaleRequest
 
 -- The two named-residue construction proofs; the six codec pins moved to
 -- `BazaarGameRuntimeFixtures.lean`, rooted in `PathOfAngelsGuards` — see the fixture header.

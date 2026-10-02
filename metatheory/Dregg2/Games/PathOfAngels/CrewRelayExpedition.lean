@@ -140,14 +140,6 @@ def fixtureSeat3 : Seat := ⟨⟨3⟩, digestFilled 13, ⟨13⟩, .quartermaster
 
 def fixtureRoster : List Seat := [fixtureSeat0, fixtureSeat1, fixtureSeat2, fixtureSeat3]
 
-/-- The four fixture seats are distinct in every field that authorizes anything.
-(Pinned `= true` in `CrewRelayExpeditionFixtures`.) -/
-def check_fixture_roster_seats_are_distinct_in_every_authorizing_field : Bool :=
-  decide (fixtureRoster.map Seat.id).Nodup &&
-  decide (fixtureRoster.map Seat.playerKey).Nodup &&
-  decide (fixtureRoster.map Seat.credential).Nodup &&
-  decide (fixtureRoster.map Seat.role).Nodup
-
 #assert_axioms command_is_determined_by_role_and_strategy
 #assert_axioms command_code_injective
 

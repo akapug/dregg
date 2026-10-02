@@ -22,6 +22,184 @@ import Dregg2.Games.PathOfAngels.Shipworks
 namespace Dregg2.Games.PathOfAngels.Shipworks
 
 set_option autoImplicit false
+open Dregg2.Games.PathOfAngels
+
+/-! ## The laboratory, moved out of the runtime module (#86)
+
+These definitions were compiled into the `Dregg2.FFI` closure, and Lean computes every compiled
+no-argument `def` when its module initializes: each `check_*` and fixture here ran on every node
+boot. They live beside the pins that evaluate them now; nothing linked into the node reaches them. -/
+
+def atmosphereDispatch : Dispatch := dispatchForFinalizedEpoch ⟨1⟩
+def coolantDispatch : Dispatch := dispatchForFinalizedEpoch ⟨2⟩
+def rationDispatch : Dispatch := dispatchForFinalizedEpoch ⟨3⟩
+
+def reservePowerLoadout : Loadout := ⟨.busCoupler, .spareCartridge⟩
+def atmosphereLoadout : Loadout := ⟨.diagnosticArray, .scrubberMesh⟩
+def coolantLoadout : Loadout := ⟨.diagnosticArray, .cryoPatch⟩
+def rationLoadout : Loadout := ⟨.diagnosticArray, .cultureCatalyst⟩
+
+def reservePowerPlan : List Action :=
+  [.scan, .usePrimary, .useSecondary, .advance, .improvise, .certify]
+
+def atmospherePlan : List Action :=
+  [.usePrimary, .advance, .useSecondary, .advance, .certify]
+
+def coolantPlan : List Action :=
+  [.usePrimary, .advance, .useSecondary, .advance, .certify]
+
+def rationPlan : List Action :=
+  [.usePrimary, .advance, .useSecondary, .advance, .improvise, .certify]
+
+/-- (Pinned `= true` in `ShipworksFixtures`.) -/
+def check_careful_power_completes : Bool :=
+  decide ((replay powerDispatch carefulPowerLoadout carefulPowerPlan).map State.status =
+    some .complete)
+
+/-- (Pinned `= true` in `ShipworksFixtures`.) -/
+def check_reserve_power_completes : Bool :=
+  decide ((replay powerDispatch reservePowerLoadout reservePowerPlan).map State.status =
+    some .complete)
+
+/-- (Pinned `= true` in `ShipworksFixtures`.) -/
+def check_careful_power_preserves_more_quality : Bool :=
+  decide ((replay powerDispatch carefulPowerLoadout carefulPowerPlan).map quality = some 6)
+
+/-- (Pinned `= true` in `ShipworksFixtures`.) -/
+def check_reserve_power_trades_quality_for_cohesion : Bool :=
+  decide ((replay powerDispatch reservePowerLoadout reservePowerPlan).map quality = some 4)
+
+/-- (Pinned `= true` in `ShipworksFixtures`.) -/
+def check_power_strategies_have_distinct_exact_contributions : Bool :=
+  decide ((replay powerDispatch carefulPowerLoadout carefulPowerPlan >>= contributionFor).map
+      (fun c => (c.intel.val, c.supplies.val, c.cohesion.val, c.score.val)) =
+    some (2, 16, 2, 160)) &&
+  decide ((replay powerDispatch reservePowerLoadout reservePowerPlan >>= contributionFor).map
+      (fun c => (c.intel.val, c.supplies.val, c.cohesion.val, c.score.val)) =
+    some (0, 14, 4, 140))
+
+/-- (Pinned `= true` in `ShipworksFixtures`.) -/
+def check_authored_epoch_variant_changes_pressure_exactly : Bool :=
+  decide ((replay powerDispatch carefulPowerLoadout carefulPowerPlan).map
+      (fun state => (state.fault, quality state)) = some (3, 6)) &&
+  decide ((replay (dispatchForFinalizedEpoch ⟨4⟩) carefulPowerLoadout carefulPowerPlan).map
+      (fun state => (state.fault, quality state)) = some (4, 5))
+
+/-- (Pinned `= true` in `ShipworksFixtures`.) -/
+def check_atmosphere_scrub_completes : Bool :=
+  decide ((replay atmosphereDispatch atmosphereLoadout atmospherePlan).map State.status =
+    some .complete)
+
+/-- (Pinned `= true` in `ShipworksFixtures`.) -/
+def check_coolant_repair_completes : Bool :=
+  decide ((replay coolantDispatch coolantLoadout coolantPlan).map State.status =
+    some .complete)
+
+/-- (Pinned `= true` in `ShipworksFixtures`.) -/
+def check_ration_synthesis_completes : Bool :=
+  decide ((replay rationDispatch rationLoadout rationPlan).map State.status =
+    some .complete)
+
+/-- (Pinned `= true` in `ShipworksFixtures`.) -/
+def check_three_other_jobs_have_distinct_exact_contributions : Bool :=
+  decide ((replay atmosphereDispatch atmosphereLoadout atmospherePlan >>= contributionFor).map
+      (fun c => (c.intel.val, c.supplies.val, c.cohesion.val, c.score.val)) =
+    some (1, 3, 13, 150)) &&
+  decide ((replay coolantDispatch coolantLoadout coolantPlan >>= contributionFor).map
+      (fun c => (c.intel.val, c.supplies.val, c.cohesion.val, c.score.val)) =
+    some (1, 13, 5, 170)) &&
+  decide ((replay rationDispatch rationLoadout rationPlan >>= contributionFor).map
+      (fun c => (c.intel.val, c.supplies.val, c.cohesion.val, c.score.val)) =
+    some (0, 15, 4, 160))
+
+/-- (Pinned `= true` in `ShipworksFixtures`.) -/
+def check_duplicate_tools_refuse : Bool :=
+  (initialState powerDispatch ⟨.busCoupler, .busCoupler⟩).isNone
+
+/-- (Pinned `= true` in `ShipworksFixtures`.) -/
+def check_early_certification_refuses : Bool :=
+  (initialState powerDispatch carefulPowerLoadout >>= fun state => step state .certify).isNone
+
+/-- (Pinned `= true` in `ShipworksFixtures`.) -/
+def check_duplicate_scan_refuses : Bool :=
+  (replay powerDispatch carefulPowerLoadout [.scan, .scan]).isNone
+
+/-- (Pinned `= true` in `ShipworksFixtures`.) -/
+def check_duplicate_tool_use_refuses : Bool :=
+  (replay powerDispatch carefulPowerLoadout [.usePrimary, .usePrimary]).isNone
+
+/-- (Pinned `= true` in `ShipworksFixtures`.) -/
+def check_reserve_exhaustion_refuses : Bool :=
+  (replay powerDispatch carefulPowerLoadout [.stabilize, .stabilize, .stabilize]).isNone
+
+/-- (Pinned `= true` in `ShipworksFixtures`.) -/
+def check_second_spare_cartridge_use_refuses : Bool :=
+  (replay powerDispatch reservePowerLoadout [.useSecondary, .useSecondary]).isNone
+
+def nearFullSpareState : State := {
+  dispatch := powerDispatch
+  loadout := ⟨.spareCartridge, .busCoupler⟩
+  status := .active
+  turn := 0
+  output := 0
+  fault := 2
+  reserves := 3
+  scanned := false
+  primaryUsed := false
+  secondaryUsed := false
+}
+
+/-- (Pinned `= true` in `ShipworksFixtures`.) -/
+def check_near_full_spare_state_is_valid : Bool := nearFullSpareState.Valid
+
+/-- (Pinned `= true` in `ShipworksFixtures`.) -/
+def check_over_capacity_spare_cartridge_refuses : Bool :=
+  (step nearFullSpareState .usePrimary).isNone
+
+/-- (Pinned `= true` in `ShipworksFixtures`.) -/
+def check_first_power_claim_succeeds : Bool :=
+  (settle CareRecord.empty (powerSubmission 20_000)).isSome
+
+/-- (Pinned `= true` in `ShipworksFixtures`.) -/
+def check_power_claim_ignores_browser_calendar : Bool :=
+  decide (settle CareRecord.empty (powerSubmission 0) =
+    settle CareRecord.empty (powerSubmission 4_294_967_295))
+
+def replayedPowerSubmission : Submission := {
+  powerSubmission 20_001 with
+  claimCounter := ⟨2, by decide⟩
+}
+
+/-- (Pinned `= true` in `ShipworksFixtures`.) -/
+def check_same_epoch_second_claim_refuses : Bool :=
+  ((settle CareRecord.empty (powerSubmission 20_000)).bind
+    (fun first => settle first.nextRecord replayedPowerSubmission)).isNone
+
+def gapRecord : CareRecord := {
+  lastClaimedEpoch := some ⟨0⟩
+  lastCounter := ⟨1, by decide⟩
+}
+
+def noHistoryAtCounterOne : CareRecord := {
+  lastClaimedEpoch := none
+  lastCounter := ⟨1, by decide⟩
+}
+
+def epochFourSubmission : Submission := {
+  dispatch := dispatchForFinalizedEpoch ⟨4⟩
+  presentedMissionEpoch := ⟨4⟩
+  browserUtcDay := 20_004
+  claimCounter := ⟨2, by decide⟩
+  loadout := carefulPowerLoadout
+  actions := carefulPowerPlan
+}
+
+/-- Four missed rotations do not lower the reward.  Both records have the same
+counter; one records an old visit and one records no earlier visit at all.
+(Pinned `= true` in `ShipworksFixtures`.) -/
+def check_missed_epochs_do_not_change_reward : Bool :=
+  decide ((settle gapRecord epochFourSubmission).map Settlement.contribution =
+    (settle noHistoryAtCounterOne epochFourSubmission).map Settlement.contribution)
 
 theorem careful_power_completes :
     check_careful_power_completes = true := by native_decide

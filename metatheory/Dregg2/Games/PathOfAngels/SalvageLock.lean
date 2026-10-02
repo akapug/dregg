@@ -176,14 +176,6 @@ def boardRow (seed : Fin SEED_SPACE) : List (Fin 3) :=
     | some pg => pg.2
     | none => 0
 
-/-- The partner of each plate, plate 0 first: the matching as a function. -/
-def partnerRow (seed : Fin SEED_SPACE) : List (Fin 6) :=
-  let ps := pairsOf seed
-  allSlots.map fun slot =>
-    match ps.find? (fun pr => pr.1 == slot || pr.2 == slot) with
-    | some pr => if pr.1 == slot then pr.2 else pr.1
-    | none => slot
-
 /-- The glyph sealed under a plate. -/
 def glyphAt (seed : Fin SEED_SPACE) (slot : Fin 6) : Fin 3 :=
   (boardRow seed).getD slot.val 0
@@ -228,36 +220,6 @@ Checked against independently enumerated domains rather than against `pairsOf` /
 "fixed-point-free involution", which is what a perfect matching of six plates IS,
 and `allBoards` filters all 3^6 candidate glyph rows by "two of each glyph". -/
 
-/-- Every row of length `n` over an alphabet. -/
-def rowsOver {α : Type} (alphabet : List α) : Nat → List (List α)
-  | 0 => [[]]
-  | n + 1 => (rowsOver alphabet n).flatMap fun row => alphabet.map fun x => x :: row
-
-/-- A perfect matching of the six plates is exactly a fixed-point-free involution of
-them: no plate is its own partner, and partnering twice returns. -/
-def isPerfectMatchingB (row : List (Fin 6)) : Bool :=
-  (List.finRange 6).all fun i =>
-    let j := row.getD i.val i
-    j != i && row.getD j.val j == i
-
-/-- All perfect matchings of six plates, over all 6^6 candidate partner rows. -/
-def allMatchings : List (List (Fin 6)) :=
-  (rowsOver (List.finRange 6) 6).filter isPerfectMatchingB
-
-/-- All six-plate boards carrying two copies of each glyph, over all 3^6 candidate
-glyph rows. -/
-def allBoards : List (List (Fin 3)) :=
-  (rowsOver (List.finRange 3) 6).filter fun row =>
-    (List.finRange 3).all fun g => (row.filter (fun x => x == g)).length == 2
-
-/-- The matchings the seed space actually produces. -/
-def realizedMatchings : List (List (Fin 6)) :=
-  ((List.finRange SEED_SPACE).map partnerRow).eraseDups
-
-/-- The boards the seed space actually produces. -/
-def realizedBoards : List (List (Fin 3)) :=
-  ((List.finRange SEED_SPACE).map boardRow).eraseDups
-
 /-! ⚑ **THE SEED-SPACE ENUMERATIONS NO LONGER EVALUATE IN THIS MODULE (2026-08-08).** This
 module is in the `Dregg2.FFI` closure — the crypto archive's build root — and the four
 `native_decide` pins below enumerate 6^6 partner rows, 3^6 glyph rows and all 90 seeds at
@@ -270,43 +232,6 @@ the `PathOfAngelsGuards` library: a plain `lake build` still runs every pin, and
 seed space reds the guard library instead of the archive.
 
 Named residue: NONE — nothing here demands a proof as data, so all four pins moved. -/
-
-/-- Six plates admit exactly 15 perfect matchings; every seed names one of them, and
-every one of them is named by some seed.  This is the statement the old board failed:
-its 3 seeds named ONE matching.
-(Pinned `= true` in `SalvageLockFixtures`.) -/
-def check_seed_space_realizes_every_perfect_matching : Bool :=
-  allMatchings.length == 15 &&
-  realizedMatchings.length == 15 &&
-  realizedMatchings.all isPerfectMatchingB &&
-  allMatchings.all (fun m => realizedMatchings.contains m)
-
-/-- The 90 seeds name 90 distinct boards, and those are exactly the boards carrying
-two copies of each glyph: the seed-to-board map is a bijection onto them, so the
-seed space is neither degenerate nor redundant.
-(Pinned `= true` in `SalvageLockFixtures`.) -/
-def check_seed_space_is_exactly_the_two_of_each_boards : Bool :=
-  allBoards.length == SEED_SPACE &&
-  realizedBoards.length == SEED_SPACE &&
-  allBoards.all (fun b => realizedBoards.contains b)
-
-/-- Six seeds share each matching — the 3! relabellings of its pairs — so a glyph
-name carries no information about the pairing beyond agreement with a glyph already
-seen.  A canonical labelling would leak: "this plate shows glyph 0" would mean "this
-plate is plate 0's partner".
-(Pinned `= true` in `SalvageLockFixtures`.) -/
-def check_every_matching_has_all_six_labellings : Bool :=
-  realizedMatchings.all fun m =>
-    ((List.finRange SEED_SPACE).filter (fun s => partnerRow s == m)).length == 6
-
-def glyphPopulation (seed : Fin SEED_SPACE) (glyph : Fin 3) : Nat :=
-  (allSlots.filter (fun slot => glyphAt seed slot = glyph)).length
-
-/-- Generated boards contain exactly two of each glyph, for every seed.
-(Pinned `= true` in `SalvageLockFixtures`.) -/
-def check_glyph_population_two : Bool :=
-  (List.finRange SEED_SPACE).all fun seed =>
-    (List.finRange 3).all fun glyph => glyphPopulation seed glyph == 2
 
 structure Config where
   seed : Fin SEED_SPACE
