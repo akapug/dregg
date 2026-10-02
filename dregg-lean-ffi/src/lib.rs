@@ -2869,8 +2869,8 @@ mod ffi {
     }
 
     /// FIPS-204-SIGN EXTRACTION — run the VERIFIED Lean ML-DSA sign core (leanc-native).
-    /// Input: `"s1 s2 t0 μ y"` (secret + message + the sampled randomness/mask); output: the signature
-    /// wire `"c̃ z h"` (an accepted iteration) or `"REJECT"` (a rejected sample / malformed wire, retry).
+    /// Input: `"s1 s2 t0 μ y"` (secret + message + the sampled randomness/mask); output: tagged
+    /// `"1 c̃ z h"` (accepted), `"0"` (honest resample), or `"2 <fault>"` (malformed wire; stop).
     /// This is the SIGNING direction as a Lean-verified object: the extracted `signCore` (the
     /// Fiat–Shamir-with-aborts signer at the deployed ML-DSA-65 parameters), proved to round-trip
     /// through `verifyCore`.
@@ -3417,26 +3417,28 @@ mod ffi {
         /// THE SIGN → VERIFY ROUND-TRIP: the verified Lean ML-DSA SIGN core runs (leanc-compiled native)
         /// and its accepted output VERIFIES through the extracted verify core — the full `Fips204Correct`
         /// round-trip across two extracted objects. The honest secret `(5,1,3)` with mask `y=40`, message
-        /// `μ=7` SIGNS to `"7 45 0"`, which verifies as `"1"` under `thi = 5+1−3 = 3`. A bad-mask sample
-        /// (`lowGap` fails) and an out-of-norm response are honestly `"REJECT"` (retry, not faked); a
-        /// malformed wire fails closed.
+        /// `μ=7` SIGNS to tagged `"1 7 45 0"`; only the untagged signature `"7 45 0"` verifies as `"1"`
+        /// under `thi = 5+1−3 = 3`. A bad-mask sample (`lowGap` fails) and an out-of-norm response
+        /// answer `"0"` (honest resample), while an unreadable wire answers distinct `"2 1"`.
         #[test]
         fn verified_ml_dsa_sign_verify_roundtrips_in_lean() {
             lean_init_once().expect("init the Lean runtime");
-            // Honest accepted iteration ⇒ the signature wire.
+            // Honest accepted iteration ⇒ tagged success, not a bare signature.
             let sig = lean_fips204_sign("5 1 3 7 40").expect("sign round-trip");
-            assert_eq!(sig, "7 45 0", "honest sign emits the signature wire");
-            // ROUND-TRIP: the accepted signature, prefixed `thi μ`, VERIFIES via the extracted verify core.
+            let signature = sig.strip_prefix("1 ").expect("honest sign success tag");
+            assert_eq!(signature, "7 45 0", "honest sign emits the signature wire");
+            // ROUND-TRIP: only the untagged signature, prefixed `thi μ`, verifies.
             assert_eq!(
-                lean_fips204_verify(&format!("3 7 {sig}")).expect("verify"),
+                lean_fips204_verify(&format!("3 7 {signature}")).expect("verify"),
                 "1",
                 "the extracted sign output round-trips through verifyCore"
             );
-            // Rejected samples are honest "REJECT" (retry): bad mask (lowGap fails) / out-of-norm z.
-            assert_eq!(lean_fips204_sign("5 1 3 7 261888").unwrap(), "REJECT");
-            assert_eq!(lean_fips204_sign("5 1 3 7 1000000").unwrap(), "REJECT");
-            // Malformed wire fails CLOSED.
-            assert_eq!(lean_fips204_sign("garbage").unwrap(), "REJECT");
+            // Bad mask / out-of-norm response honestly resample; unreadable wire is DISTINCT.
+            assert_eq!(lean_fips204_sign("5 1 3 7 261888").unwrap(), "0");
+            assert_eq!(lean_fips204_sign("5 1 3 7 1000000").unwrap(), "0");
+            let malformed = lean_fips204_sign("garbage").unwrap();
+            assert_eq!(malformed, "2 1");
+            assert_ne!(malformed, "0", "unreadable input is not a resample");
         }
     }
 

@@ -239,8 +239,9 @@ extern lean_object *dregg_fips204_verify_real(lean_object *input);
 /* The @[export]ed Lean `String -> String` VERIFIED ML-DSA SIGN CORE
  * (`Dregg2.Crypto.Fips204Verify.signFFI`): decodes the wire `"s1 s2 t0 μ y"` (secret + message + the
  * sampled randomness/mask), runs the extracted, spec-agreeing `signCore` (the deterministic
- * Fiat–Shamir-with-aborts signer at the deployed ML-DSA-65 parameters), and returns the signature wire
- * `"c̃ z h"` on an ACCEPTED iteration or `"REJECT"` on a rejected sample / malformed wire. Together with
+ * Fiat–Shamir-with-aborts signer at the deployed ML-DSA-65 parameters), and returns tagged
+ * `"1 c̃ z h"` on an ACCEPTED iteration, `"0"` for an honest rejected sample (resample), or
+ * `"2 <fault>"` for an unreadable wire (stop, do not resample). Together with
  * `dregg_fips204_verify` this discharges `Fips204Correct` FULLY (both directions extracted).
  *
  * GATED on DREGG_FIPS204_SIGN. The symbol is co-located in the SAME module as the verify core
@@ -3151,9 +3152,10 @@ size_t dregg_mldsa_keygen_real_str(const char *in_utf8, char *out, size_t out_ca
 #ifdef DREGG_FIPS204_SIGN
 /* dregg_fips204_sign_str — the C string bridge over the VERIFIED Lean `String -> String` ML-DSA
  * sign-core export (`Dregg2.Crypto.Fips204Verify.signFFI`). Input: `"s1 s2 t0 μ y"` (secret + message +
- * the sampled randomness/mask). Output: `"c̃ z h"` (an accepted signature) or `"REJECT"` (a rejected
- * sample / malformed wire — the caller resamples `y`). Runs the extracted `signCore` — the deterministic
- * Fiat–Shamir-with-aborts signer at the deployed ML-DSA-65 parameters, PROVED to agree with the spec
+ * the sampled randomness/mask). Output: `"1 c̃ z h"` (accepted), `"0"` (honest resample), or
+ * `"2 <fault>"` (malformed wire — the caller must STOP, not resample). Runs the extracted
+ * `signCore` — the deterministic Fiat–Shamir-with-aborts signer at the deployed ML-DSA-65
+ * parameters, PROVED to agree with the spec
  * (`signCore_eq_spec`) and to round-trip through `verifyCore` (`signCore_verifies`). Same return contract
  * as the bridges above. */
 size_t dregg_fips204_sign_str(const char *in_utf8, char *out, size_t out_cap) {
