@@ -31,6 +31,7 @@ pub mod blocklace_store;
 pub mod channel_rosters;
 pub mod checkpoint;
 pub mod commit_log;
+pub mod copied_store_admission;
 mod exact_fnsp_v3_faithful_bridge;
 pub mod exact_fnsp_v3_frame_head;
 pub mod exact_fnsp_v3_state;

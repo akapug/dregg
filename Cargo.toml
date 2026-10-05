@@ -305,6 +305,15 @@ servo-paint = { path = "servo-render/vendor/servo-paint" }
 # servo-net forbidden-schemes fork (servo-render's libservo path): allow an
 # embedder ProtocolHandler for http/https (the cap-gated byte socket).
 servo-net = { path = "servo-render/vendor/servo-net" }
+# redb 2.6.3 with ONE additive seam: `ReadOnlyDatabase`, a non-repairing
+# read-only open for clean file-format-v2 images (task/4268 offline copied-store
+# audit). It never obtains a writable fd, never runs the writable open/drop
+# protocol (which flushes allocator state and writes recovery headers), and
+# refuses dirty, non-v2, or layout-mismatched files instead of repairing them.
+# `Database`/`Builder` behavior is byte-identical to upstream 2.6.3 — the seam
+# adds `read_only: false` to the existing constructor path. Source-candidate
+# patch helm-codex task/4268 DATA 011ceec2 (VCS pin f4e3eb69dc2a4b4e01fefff0b9e039c6c7ab98f6).
+redb = { path = "vendor/redb-readonly" }
 
 # The gpui fork (emberian/zed) resolves directly from git at the rev pinned in
 # starbridge-v2/Cargo.toml (the offscreen/headless wgpu renderer the render-capture

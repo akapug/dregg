@@ -622,9 +622,9 @@ impl FaithfulNoteRootHistoryV1 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct HeadSealV1 {
-    records: u64,
-    head: FaithfulNoteRootAnchorV1,
+pub(crate) struct HeadSealV1 {
+    pub(crate) records: u64,
+    pub(crate) head: FaithfulNoteRootAnchorV1,
 }
 
 impl HeadSealV1 {
@@ -639,7 +639,7 @@ impl HeadSealV1 {
         out
     }
 
-    fn from_bytes(bytes: &[u8]) -> std::result::Result<Self, FaithfulNoteRootHistoryError> {
+    pub(crate) fn from_bytes(bytes: &[u8]) -> std::result::Result<Self, FaithfulNoteRootHistoryError> {
         if bytes.len() != FAITHFUL_NOTE_ROOT_HEAD_V1_BYTES
             || bytes[0..4] != HEAD_MAGIC
             || u16::from_le_bytes(bytes[4..6].try_into().unwrap()) != VERSION_V1
@@ -1170,61 +1170,103 @@ impl PersistentStore {
         expected: FaithfulNoteRootExpectationV1,
         authenticate: impl Fn(&FaithfulNoteRootEnvelopeV1) -> bool,
     ) -> StoreResult<(FaithfulNoteRootHistoryV1, FaithfulNoteRootReplayPhases)> {
-        let mut phases = FaithfulNoteRootReplayPhases::default();
         let read = self.db.begin_read()?;
-        let table = read.open_table(tables::FAITHFUL_NOTE_ROOT_HISTORY)?;
-        let metadata = read.open_table(tables::METADATA_BYTES)?;
-        let anchor_guard = metadata
-            .get(tables::META_FAITHFUL_NOTE_ROOT_ANCHOR)?
-            .ok_or_else(|| integrity(FaithfulNoteRootHistoryError::Malformed("missing anchor")))?;
-        let anchor =
-            FaithfulNoteRootAnchorV1::from_bytes(anchor_guard.value()).map_err(integrity)?;
-        let head_guard = metadata
-            .get(tables::META_FAITHFUL_NOTE_ROOT_HEAD)?
-            .ok_or_else(|| {
-                integrity(FaithfulNoteRootHistoryError::Malformed("missing head seal"))
-            })?;
-        let seal = HeadSealV1::from_bytes(head_guard.value()).map_err(integrity)?;
-        if table.len()? != seal.records {
-            return Err(integrity(FaithfulNoteRootHistoryError::SnapshotMismatch(
-                "persisted record count",
-            )));
-        }
-
-        let mut history = FaithfulNoteRootHistoryV1::new(anchor);
-        for entry in table.iter()? {
-            let (height, bytes) = entry?;
-            let started = Instant::now();
-            let envelope = FaithfulNoteRootEnvelopeV1::from_bytes(bytes.value())?;
-            if envelope.record.height != height.value() {
-                return Err(integrity(FaithfulNoteRootHistoryError::Malformed(
-                    "height key",
-                )));
-            }
-            phases.decode = phases.decode.saturating_add(started.elapsed());
-            let started = Instant::now();
-            if !authenticate(&envelope) {
-                return Err(integrity(
-                    FaithfulNoteRootHistoryError::AuthenticationFailed,
-                ));
-            }
-            phases.hybrid_verify = phases.hybrid_verify.saturating_add(started.elapsed());
-            let started = Instant::now();
-            history.append_structurally(envelope).map_err(integrity)?;
-            phases.structural_append = phases.structural_append.saturating_add(started.elapsed());
-            phases.rows += 1;
-            phases.workers = 1;
-        }
-        let started = Instant::now();
-        if history.head() != seal.head {
-            return Err(integrity(FaithfulNoteRootHistoryError::SnapshotMismatch(
-                "persisted head seal",
-            )));
-        }
-        history.verify_exact_snapshot(expected).map_err(integrity)?;
-        phases.seal_check = started.elapsed();
-        Ok((history, phases))
+        replay_faithful_note_root_history_in(&read, expected, None, authenticate)
     }
+}
+
+/// Audit one externally anchored history using the caller's existing read transaction.
+///
+/// Neither the trusted start nor the non-rollback head may be obtained from this store.
+/// This does not open, initialize, repair, or qualify the rest of the database.
+pub fn audit_faithful_note_root_history_in(
+    read: &redb::ReadTransaction,
+    expected_anchor: &FaithfulNoteRootAnchorV1,
+    committee: &[PublicKey],
+    ml_dsa_committee: &[MlDsaPublicKey],
+    threshold: usize,
+    expected: FaithfulNoteRootExpectationV1,
+) -> StoreResult<FaithfulNoteRootHistoryV1> {
+    if committee.is_empty()
+        || threshold == 0
+        || threshold > committee.len()
+        || ml_dsa_committee.len() != committee.len()
+        || committee.iter().enumerate().any(|(i, key)| committee[..i].contains(key))
+    {
+        return Err(integrity(FaithfulNoteRootHistoryError::AuthenticationFailed));
+    }
+    replay_faithful_note_root_history_in(read, expected, Some(expected_anchor), |envelope| {
+        envelope.verify_hybrid(committee, ml_dsa_committee, threshold)
+    })
+    .map(|(history, _)| history)
+}
+
+fn replay_faithful_note_root_history_in(
+    read: &redb::ReadTransaction,
+    expected: FaithfulNoteRootExpectationV1,
+    expected_anchor: Option<&FaithfulNoteRootAnchorV1>,
+    authenticate: impl Fn(&FaithfulNoteRootEnvelopeV1) -> bool,
+) -> StoreResult<(FaithfulNoteRootHistoryV1, FaithfulNoteRootReplayPhases)> {
+    let mut phases = FaithfulNoteRootReplayPhases::default();
+    let table = read.open_table(tables::FAITHFUL_NOTE_ROOT_HISTORY)?;
+    let metadata = read.open_table(tables::METADATA_BYTES)?;
+    let anchor_guard = metadata
+        .get(tables::META_FAITHFUL_NOTE_ROOT_ANCHOR)?
+        .ok_or_else(|| integrity(FaithfulNoteRootHistoryError::Malformed("missing anchor")))?;
+    let anchor =
+        FaithfulNoteRootAnchorV1::from_bytes(anchor_guard.value()).map_err(integrity)?;
+    if let Some(expected_anchor) = expected_anchor
+        && anchor != *expected_anchor
+    {
+        return Err(integrity(FaithfulNoteRootHistoryError::ContextMismatch(
+            "externally expected anchor",
+        )));
+    }
+    let head_guard = metadata
+        .get(tables::META_FAITHFUL_NOTE_ROOT_HEAD)?
+        .ok_or_else(|| {
+            integrity(FaithfulNoteRootHistoryError::Malformed("missing head seal"))
+        })?;
+    let seal = HeadSealV1::from_bytes(head_guard.value()).map_err(integrity)?;
+    if table.len()? != seal.records {
+        return Err(integrity(FaithfulNoteRootHistoryError::SnapshotMismatch(
+            "persisted record count",
+        )));
+    }
+
+    let mut history = FaithfulNoteRootHistoryV1::new(anchor);
+    for entry in table.iter()? {
+        let (height, bytes) = entry?;
+        let started = Instant::now();
+        let envelope = FaithfulNoteRootEnvelopeV1::from_bytes(bytes.value())?;
+        if envelope.record.height != height.value() {
+            return Err(integrity(FaithfulNoteRootHistoryError::Malformed(
+                "height key",
+            )));
+        }
+        phases.decode = phases.decode.saturating_add(started.elapsed());
+        let started = Instant::now();
+        if !authenticate(&envelope) {
+            return Err(integrity(
+                FaithfulNoteRootHistoryError::AuthenticationFailed,
+            ));
+        }
+        phases.hybrid_verify = phases.hybrid_verify.saturating_add(started.elapsed());
+        let started = Instant::now();
+        history.append_structurally(envelope).map_err(integrity)?;
+        phases.structural_append = phases.structural_append.saturating_add(started.elapsed());
+        phases.rows += 1;
+        phases.workers = 1;
+    }
+    let started = Instant::now();
+    if history.head() != seal.head {
+        return Err(integrity(FaithfulNoteRootHistoryError::SnapshotMismatch(
+            "persisted head seal",
+        )));
+    }
+    history.verify_exact_snapshot(expected).map_err(integrity)?;
+    phases.seal_check = started.elapsed();
+    Ok((history, phases))
 }
 
 /// Append or replay-check one faithful transition inside a caller-owned redb
