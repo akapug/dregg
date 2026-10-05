@@ -943,9 +943,10 @@ mod tests {
         reader.close().unwrap();
 
         // Negatives: same valid seal, same matching record count — only the
-        // anchor bytes are malformed. The writer store is opened once (open
-        // does not read the faithful note-root anchor) and each corruption is
-        // committed, copied, audited, then restored for the next variant.
+        // anchor bytes are malformed. Each variant is written through a
+        // scoped writer that is DROPPED before the copy — a store held open
+        // carries RECOVERY_REQUIRED on disk, and the reader would (correctly)
+        // refuse the copy as Dirty rather than reach the malformed anchor.
         let good_anchor = fixture.anchor.to_bytes();
         let mut short = good_anchor.to_vec();
         short.truncate(FAITHFUL_NOTE_ROOT_ANCHOR_V1_BYTES - 1);
@@ -953,20 +954,22 @@ mod tests {
         bad_header[0] ^= 0xFF; // magic byte
         let mut bad_root = good_anchor;
         bad_root[96..100].copy_from_slice(&u32::MAX.to_le_bytes()); // lane >= BABYBEAR_P
-        let store = PersistentStore::open(&live).unwrap();
         for (name, bytes) in [
             ("length", short.as_slice()),
             ("header", bad_header.as_slice()),
             ("root", bad_root.as_slice()),
         ] {
-            let write = store.db.begin_write().unwrap();
             {
-                let mut metadata = write.open_table(tables::METADATA_BYTES).unwrap();
-                metadata
-                    .insert(tables::META_FAITHFUL_NOTE_ROOT_ANCHOR, bytes)
-                    .unwrap();
+                let store = PersistentStore::open(&live).unwrap();
+                let write = store.db.begin_write().unwrap();
+                {
+                    let mut metadata = write.open_table(tables::METADATA_BYTES).unwrap();
+                    metadata
+                        .insert(tables::META_FAITHFUL_NOTE_ROOT_ANCHOR, bytes)
+                        .unwrap();
+                }
+                write.commit().unwrap();
             }
-            write.commit().unwrap();
             std::fs::copy(&live, &copy).unwrap();
             let before = file_bytes(&copy);
 
