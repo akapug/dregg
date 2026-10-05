@@ -20,7 +20,7 @@ boot, the HTTP API, consensus — lives in the `dregg_node` library. The command
   `--port`/`--bind` (`:108`, `:113`), `--federation-peers`, `--data-dir`/`--key-file`,
   `--gossip-port`, `--federation-mode` (`solo`|`full`, default `solo`, `:235`), `--consensus`
   (`blocklace`, the only engine, `:240`), `--prove-turns` (prove + verify-gate every finalized
-  turn, also `DREGG_PROVE_TURNS=1`, `:160`), `--enable-faucet`, `--enable-pruning`, the
+  turn, also `DREGG_PROVE_TURNS=1`, `:160`), `--enable-faucet`, the
   block-cadence / idle-heartbeat / min-block-interval timers (`:189`–`:220`), the blocklace
   checkpoint/wave tuning (`:174`, `:178`), `--groups`, `--auto-approve-joins`,
   `--cors-origin`, and `--deos-program` (`:285`).
