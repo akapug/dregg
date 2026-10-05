@@ -256,10 +256,14 @@ impl StoredAttestedRoot {
         // lets ONE holder of that key fill two PQ slots — a quantum adversary who
         // breaks ed25519 forges both classical halves, reuses the ONE enrolled
         // key's PQ signature at both positions, and a 2-of-2 quantum bar collapses
-        // to 1-of-1. This is the same distinct-roster contract
+        // to 1-of-1. The SAME distinct-roster contract is being added to the
+        // sibling hybrid carriers by their own lanes —
         // `federation::frost::verify_pq_quorum_half` (task/4847) and
-        // `federation::receipt::verify_hybrid_quorum_sigs` (task/4721) enforce on
-        // the other hybrid carriers; the guard lives HERE, in the one verifier
+        // `federation::receipt::verify_hybrid_quorum_sigs` (task/4721). At THIS
+        // commit neither sibling enforces it yet (each dedups only its own
+        // signature indices / ed25519 signers), so the names above record the
+        // contract all three are converging on, NOT one already in force in
+        // those two. The guard lives HERE, in the one verifier
         // every live consensus caller routes through (`node::state`'s restart
         // anchor and `exact_fnsp_v3_actor_authority`), rather than as a second
         // copy at each call site. Checked over the WHOLE roster — including

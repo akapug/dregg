@@ -48,8 +48,15 @@ fn junk_sig(pk: PublicKey) -> QuorumSignature {
 /// Used only in NEGATIVE assertions: the rejections here fire on the classical
 /// half / membership / count, but a length-aligned roster ensures we exercise
 /// the real pinned path rather than short-circuiting on a roster-length mismatch.
+///
+/// The keys are DISTINCT per index (one byte of `i` repeated), NOT `[0u8; 1952]`
+/// repeated: a duplicated roster now trips `verify_finalization_quorum`'s own
+/// pairwise-distinct roster guard (task/4854) and would short-circuit EVERY arm
+/// below before the per-signer checks each arm names — silently vacating them.
+/// A distinct roster keeps each rejection on the classical half / membership /
+/// count, which is what these arms claim to pin.
 fn junk_ml_dsa_roster(len: usize) -> Vec<MlDsaPublicKey> {
-    vec![MlDsaPublicKey([0u8; 1952]); len]
+    (0..len).map(|i| MlDsaPublicKey([i as u8; 1952])).collect()
 }
 
 /// A full-mode attested root as the deployed commit path FIRST persists it
