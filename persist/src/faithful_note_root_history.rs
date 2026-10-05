@@ -944,10 +944,15 @@ impl PersistentStore {
         })
     }
 
+    /// Replay order and refusals are exactly a serial row-by-row loop's: the
+    /// first row in key order that fails decoding, its height key, its
+    /// authentication, or structural extension decides the error.  Only the
+    /// signature checks run on several threads (they are independent per row);
+    /// the decision over their verdicts stays serial.
     fn load_faithful_note_root_history_with(
         &self,
         expected: FaithfulNoteRootExpectationV1,
-        authenticate: impl Fn(&FaithfulNoteRootEnvelopeV1) -> bool,
+        authenticate: impl Fn(&FaithfulNoteRootEnvelopeV1) -> bool + Sync,
     ) -> StoreResult<FaithfulNoteRootHistoryV1> {
         let read = self.db.begin_read()?;
         let table = read.open_table(tables::FAITHFUL_NOTE_ROOT_HISTORY)?;
@@ -969,21 +974,41 @@ impl PersistentStore {
             )));
         }
 
-        let mut history = FaithfulNoteRootHistoryV1::new(anchor);
+        // Decode rows up to the first undecodable one; its error is raised only
+        // after every earlier row has had its own checks, as in a serial loop.
+        let mut rows = Vec::new();
+        let mut decode_error = None;
         for entry in table.iter()? {
-            let (height, bytes) = entry?;
-            let envelope = FaithfulNoteRootEnvelopeV1::from_bytes(bytes.value())?;
-            if envelope.record.height != height.value() {
-                return Err(integrity(FaithfulNoteRootHistoryError::Malformed(
-                    "height key",
-                )));
+            let decoded = entry.map_err(StoreError::from).and_then(|(height, bytes)| {
+                let envelope = FaithfulNoteRootEnvelopeV1::from_bytes(bytes.value())?;
+                if envelope.record.height != height.value() {
+                    return Err(integrity(FaithfulNoteRootHistoryError::Malformed(
+                        "height key",
+                    )));
+                }
+                Ok(envelope)
+            });
+            match decoded {
+                Ok(envelope) => rows.push(envelope),
+                Err(e) => {
+                    decode_error = Some(e);
+                    break;
+                }
             }
-            if !authenticate(&envelope) {
+        }
+
+        let authentic = authenticate_rows(&rows, &authenticate);
+        let mut history = FaithfulNoteRootHistoryV1::new(anchor);
+        for (envelope, authentic) in rows.into_iter().zip(authentic) {
+            if !authentic {
                 return Err(integrity(
                     FaithfulNoteRootHistoryError::AuthenticationFailed,
                 ));
             }
             history.append_structurally(envelope).map_err(integrity)?;
+        }
+        if let Some(e) = decode_error {
+            return Err(e);
         }
         if history.head() != seal.head {
             return Err(integrity(FaithfulNoteRootHistoryError::SnapshotMismatch(
@@ -993,6 +1018,53 @@ impl PersistentStore {
         history.verify_exact_snapshot(expected).map_err(integrity)?;
         Ok(history)
     }
+}
+
+/// Authenticate every row on all available cores and return one verdict per row.
+///
+/// Every row before the first failing one is checked; a row after a known failure
+/// is reported `false` without being checked, because the serial decision loop
+/// stops at the earlier failure and never reads it.
+fn authenticate_rows(
+    rows: &[FaithfulNoteRootEnvelopeV1],
+    authenticate: &(impl Fn(&FaithfulNoteRootEnvelopeV1) -> bool + Sync),
+) -> Vec<bool> {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    let workers = std::thread::available_parallelism()
+        .map_or(1, std::num::NonZeroUsize::get)
+        .min(rows.len());
+    if workers <= 1 {
+        let mut verdicts = vec![false; rows.len()];
+        for (verdict, row) in verdicts.iter_mut().zip(rows) {
+            *verdict = authenticate(row);
+            if !*verdict {
+                break;
+            }
+        }
+        return verdicts;
+    }
+    let verdicts: Vec<AtomicBool> = rows.iter().map(|_| AtomicBool::new(false)).collect();
+    let next = AtomicUsize::new(0);
+    let first_failure = AtomicUsize::new(usize::MAX);
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| {
+                loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    if i >= rows.len() || i > first_failure.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    if authenticate(&rows[i]) {
+                        verdicts[i].store(true, Ordering::Relaxed);
+                    } else {
+                        first_failure.fetch_min(i, Ordering::Relaxed);
+                    }
+                }
+            });
+        }
+    });
+    verdicts.into_iter().map(AtomicBool::into_inner).collect()
 }
 
 /// Append or replay-check one faithful transition inside a caller-owned redb
@@ -1830,6 +1902,68 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+    }
+
+    /// The replay checks signatures on several threads but must refuse exactly
+    /// as a serial row-by-row loop does: at the first failing row in key order,
+    /// with every earlier row checked, and an undecodable later row never masks
+    /// an earlier authentication failure.
+    #[test]
+    fn parallel_replay_refuses_at_the_first_failing_row_in_key_order() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        let (mut tree, anchor) = empty_anchor();
+        store
+            .initialize_faithful_note_root_history(&anchor)
+            .unwrap();
+        let mut head = anchor;
+        let mut heights = Vec::new();
+        for block in 0x20..0x40u8 {
+            let commitment = [block; 32];
+            let envelope = planned(&tree, &head, block, &[commitment]);
+            tree.append_blake3_commitment(&commitment);
+            store.append_faithful_note_root_verified(&envelope).unwrap();
+            head = envelope.record.to_anchor();
+            heights.push(envelope.record.height);
+        }
+        let expected = store.faithful_note_root_expectation().unwrap().unwrap();
+        let loaded = store
+            .load_faithful_note_root_history_with(expected, |_| true)
+            .unwrap();
+        assert_eq!(loaded.envelopes().len(), heights.len());
+
+        let bad = heights[9];
+        let checked = std::sync::Mutex::new(std::collections::BTreeSet::new());
+        let refusal = store
+            .load_faithful_note_root_history_with(expected, |envelope| {
+                checked.lock().unwrap().insert(envelope.record.height);
+                envelope.record.height != bad
+            })
+            .unwrap_err();
+        let authentication = integrity(FaithfulNoteRootHistoryError::AuthenticationFailed);
+        assert_eq!(refusal.to_string(), authentication.to_string());
+        let checked = checked.into_inner().unwrap();
+        assert!(heights[..=9].iter().all(|height| checked.contains(height)));
+
+        // Corrupt a LATER row: the earlier authentication failure still decides.
+        let write = store.db.begin_write().unwrap();
+        {
+            let mut table = write
+                .open_table(tables::FAITHFUL_NOTE_ROOT_HISTORY)
+                .unwrap();
+            table.insert(heights[20], [0xFFu8; 3].as_slice()).unwrap();
+        }
+        write.commit().unwrap();
+        let refusal = store
+            .load_faithful_note_root_history_with(expected, |envelope| {
+                envelope.record.height != bad
+            })
+            .unwrap_err();
+        assert_eq!(refusal.to_string(), authentication.to_string());
+        // With every row authentic, the corrupt row is the refusal.
+        let refusal = store
+            .load_faithful_note_root_history_with(expected, |_| true)
+            .unwrap_err();
+        assert_ne!(refusal.to_string(), authentication.to_string());
     }
 
     #[test]
