@@ -1206,11 +1206,16 @@ fn lone_signature_tamper_floor_is_hybrid() {
 /// A genesis that enrols the SAME ML-DSA-65 key at two committee positions (the
 /// enrollment path checks only length alignment) must not let ONE holder of that
 /// PQ key fill both slots. The threat is the quantum one the hybrid bar exists
-/// for: an adversary who breaks ed25519 forges BOTH classical halves, but cannot
+/// for: an adversary who breaks ed25519 forges the classical halves, but cannot
 /// forge the PQ half — so with a duplicate roster it reuses the ONE enrolled
-/// key's signature at both positions, and a 2-of-2 quantum bar collapses to
-/// 1-of-1. The whole-roster distinctness check refuses the duplicated roster
-/// outright, at every threshold.
+/// key's signature at both positions and one PQ authority counts twice toward
+/// the supermajority. The whole-roster distinctness check refuses the
+/// duplicated roster outright.
+///
+/// n = 4 so the supermajority floor (`required_quorum` = 3) leaves one slot
+/// out of the quorum: that is what lets the second arm show the WHOLE roster
+/// is checked, not only the positions a quorum names. At n = 2 every slot is
+/// in every quorum and that arm could not fail for the reason it names.
 #[test]
 fn duplicate_enrolled_pq_roster_cannot_inflate_finalization_quorum() {
     use crate::federation::QuorumSignature;
@@ -1221,23 +1226,30 @@ fn duplicate_enrolled_pq_roster_cannot_inflate_finalization_quorum() {
     // verified core installed — see `FaithfulNoteRootEnvelopeV1::verify_hybrid`.
     dregg_pq_testkit::install_or_panic();
 
-    // Two DISTINCT classical committee members…
-    let sks: Vec<SigningKey> = (1u8..=2)
+    // Four DISTINCT classical committee members…
+    let sks: Vec<SigningKey> = (1u8..=4)
         .map(|s| SigningKey::from_bytes(&[s; 32]))
         .collect();
     let committee: Vec<PublicKey> = sks.iter().map(|k| k.public_key()).collect();
-    // …and two DISTINCT enrolled ML-DSA keys (the honest roster).
-    let pqs: Vec<(dregg_federation::frost::MlDsaPublicKey, MlDsaSigningKey)> = (1u8..=2)
+    // …and four DISTINCT enrolled ML-DSA keys (the honest roster).
+    let pqs: Vec<(dregg_federation::frost::MlDsaPublicKey, MlDsaSigningKey)> = (1u8..=4)
         .map(|s| MlDsaSigningKey::from_seed(&[s; 32]))
         .collect();
     let honest_roster: Vec<dregg_federation::frost::MlDsaPublicKey> =
         pqs.iter().map(|(pk, _)| pk.clone()).collect();
+    // The duplicated roster: slot 3 enrols member 0's ML-DSA key.
+    let dup_roster = vec![
+        honest_roster[0].clone(),
+        honest_roster[1].clone(),
+        honest_roster[2].clone(),
+        honest_roster[0].clone(),
+    ];
 
     let block_id = [0xCD; 32];
     let merkle_root = [0xAB; 32];
     let vote_msg = dregg_types::finalization_vote_signing_message(&block_id, &merkle_root, None);
 
-    let root_with = |threshold: usize, quorum: Vec<QuorumSignature>| StoredAttestedRoot {
+    let root_with = |quorum: Vec<QuorumSignature>| StoredAttestedRoot {
         merkle_root,
         note_tree_root: None,
         nullifier_set_root: None,
@@ -1247,62 +1259,47 @@ fn duplicate_enrolled_pq_roster_cannot_inflate_finalization_quorum() {
         finality_round: Some(1),
         quorum_signatures: Vec::new(),
         threshold_qc: None,
-        threshold,
+        threshold: 3,
         federation_id: dregg_types::FederationId::PLACEHOLDER,
         receipt_stream_root: None,
         finalization_quorum: quorum,
     };
+    // Member `i`'s vote, its PQ half signed by member `pq_of`'s ML-DSA key.
+    let vote = |i: usize, pq_of: usize| QuorumSignature {
+        voter: sks[i].public_key(),
+        signature: sign(&sks[i], &vote_msg),
+        ml_dsa_pubkey: pqs[pq_of].0.0.to_vec(),
+        pq_signature: pqs[pq_of].1.sign(&vote_msg).expect("ml-dsa signing"),
+    };
 
-    // POSITIVE CONTROL: an honest DISTINCT roster, each member signing its OWN
-    // PQ key, verifies at threshold 2.
-    let honest: Vec<QuorumSignature> = sks
-        .iter()
-        .zip(pqs.iter())
-        .map(|(k, (pq_pk, pq_sk))| QuorumSignature {
-            voter: k.public_key(),
-            signature: sign(k, &vote_msg),
-            ml_dsa_pubkey: pq_pk.0.to_vec(),
-            pq_signature: pq_sk.sign(&vote_msg).expect("ml-dsa signing"),
-        })
-        .collect();
+    // POSITIVE CONTROL: an honest DISTINCT roster, members 0..3 each signing
+    // with their OWN PQ key, clears the n=4 supermajority (3).
+    let honest: Vec<QuorumSignature> = (0..3).map(|i| vote(i, i)).collect();
     assert!(
-        root_with(2, honest).verify_finalization_quorum(&committee, &honest_roster),
-        "an honest DISTINCT enrolled roster must still verify at threshold 2"
+        root_with(honest.clone()).verify_finalization_quorum(&committee, &honest_roster),
+        "an honest DISTINCT enrolled roster must still verify at the n=4 supermajority"
     );
 
-    // THE ATTACK: a roster that enrols member 0's ML-DSA key at BOTH positions.
-    // One REAL PQ signature (member 0's) sits at BOTH positions under two
-    // DISTINCT, valid classical halves — one PQ authority, two slots.
-    let dup_roster = vec![honest_roster[0].clone(), honest_roster[0].clone()];
-    let reused = pqs[0].1.sign(&vote_msg).expect("ml-dsa signing");
-    let aliased: Vec<QuorumSignature> = sks
-        .iter()
-        .map(|k| QuorumSignature {
-            voter: k.public_key(),
-            signature: sign(k, &vote_msg),
-            ml_dsa_pubkey: dup_roster[0].0.to_vec(),
-            pq_signature: reused.clone(),
-        })
-        .collect();
-    // Every half verifies on its own terms — this is not a corrupted or missing
-    // PQ half, it is ONE valid signature reused across two distinct voters…
-    assert_eq!(aliased[0].pq_signature, aliased[1].pq_signature);
-    for qs in &aliased {
+    // THE ATTACK: members 0, 1 and 3 vote, and member 3's PQ half is member 0's
+    // REAL signature under the key slot 3 enrols (member 0's). Every half
+    // verifies under the key it is pinned to, so only distinctness can refuse it.
+    let aliased = vec![vote(0, 0), vote(1, 1), vote(3, 0)];
+    for (qs, slot) in aliased.iter().zip([0usize, 1, 3]) {
         assert!(qs.voter.verify(&vote_msg, &qs.signature));
-        assert!(dup_roster[0].verify(&vote_msg, &qs.pq_signature));
+        assert_eq!(qs.ml_dsa_pubkey.as_slice(), dup_roster[slot].0.as_slice());
+        assert!(dup_roster[slot].verify(&vote_msg, &qs.pq_signature));
     }
-    // …yet the quorum must REFUSE: one enrolled PQ authority is not two.
     assert!(
-        !root_with(2, aliased.clone()).verify_finalization_quorum(&committee, &dup_roster),
-        "a duplicate enrolled ML-DSA roster must not inflate a 2-of-2 quantum bar to 1-of-1"
+        !root_with(aliased).verify_finalization_quorum(&committee, &dup_roster),
+        "a duplicate enrolled ML-DSA roster must not let one PQ authority fill two quorum slots"
     );
 
-    // The WHOLE roster is checked (not just the positions a quorum names), so a
-    // threshold-1 subset cannot launder the duplicate enrollment.
+    // The WHOLE roster is checked (not just the positions a quorum names): the
+    // honest quorum of members 0..3 never touches slot 3, yet the duplicated
+    // enrollment there still refuses it.
     assert!(
-        !root_with(1, vec![aliased[0].clone()])
-            .verify_finalization_quorum(&committee, &dup_roster),
-        "a duplicate enrolled roster refuses even when only one slot is used (t=1)"
+        !root_with(honest).verify_finalization_quorum(&committee, &dup_roster),
+        "a duplicate enrolled roster refuses even a quorum drawn only from distinct slots"
     );
 }
 
