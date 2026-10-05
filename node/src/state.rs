@@ -216,6 +216,69 @@ pub struct NodeState {
     /// deliberately not persisted, so a restart ends every open session rather than reviving a
     /// key from disk.
     dark_clearing: Arc<RwLock<crate::dark_clearing_service::NodeDarkClearing>>,
+    /// What `/status` reads from [`NodeStateInner`], refreshed as every state
+    /// write guard is released, so a probe never waits on the state lock.
+    status: Arc<Mutex<Option<StatusSnapshot>>>,
+    /// The last `(dag_height, block_count)` read from the blocklace, served
+    /// when the lace lock is busy.
+    lace_counts: Arc<Mutex<Option<(u64, usize)>>>,
+}
+
+/// The `/status` inputs held by [`NodeStateInner`]. Every field is cheap to
+/// clone and changes only under the state write lock.
+#[derive(Clone)]
+pub struct StatusSnapshot {
+    pub store: Arc<PersistentStore>,
+    pub blocklace: Option<crate::blocklace_sync::BlocklaceHandle>,
+    pub peer_count: usize,
+    pub solo: bool,
+    pub lean_producer: bool,
+    pub full_turn_proving: bool,
+    pub public_key: [u8; 32],
+}
+
+impl StatusSnapshot {
+    pub(crate) fn of(s: &NodeStateInner) -> Self {
+        Self {
+            store: Arc::clone(&s.store),
+            blocklace: s.blocklace_handle.clone(),
+            peer_count: s.peers.len(),
+            solo: s.solo_consensus.as_ref().is_some_and(|solo| solo.is_solo),
+            lean_producer: s.lean_producer_enabled,
+            full_turn_proving: s.full_turn_proving_enabled,
+            public_key: s.cclerk.public_key().0,
+        }
+    }
+}
+
+/// The state write guard. Releasing it refreshes the [`StatusSnapshot`] while
+/// the lock is still held, so the snapshot never runs ahead of the state.
+pub struct NodeStateWriteGuard<'a> {
+    guard: tokio::sync::RwLockWriteGuard<'a, NodeStateInner>,
+    status: &'a Mutex<Option<StatusSnapshot>>,
+}
+
+impl std::ops::Deref for NodeStateWriteGuard<'_> {
+    type Target = NodeStateInner;
+    fn deref(&self) -> &NodeStateInner {
+        &self.guard
+    }
+}
+
+impl std::ops::DerefMut for NodeStateWriteGuard<'_> {
+    fn deref_mut(&mut self) -> &mut NodeStateInner {
+        &mut self.guard
+    }
+}
+
+impl Drop for NodeStateWriteGuard<'_> {
+    fn drop(&mut self) {
+        let snapshot = StatusSnapshot::of(&self.guard);
+        *self
+            .status
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(snapshot);
+    }
 }
 
 /// One fixed-size, cursor-only page of the public append-only faithful note
@@ -1523,7 +1586,10 @@ impl NodeState {
             dark_clearing: Arc::new(RwLock::new(
                 crate::dark_clearing_service::NodeDarkClearing::new(),
             )),
-        })
+            status: Arc::new(Mutex::new(None)),
+            lace_counts: Arc::new(Mutex::new(None)),
+        }
+        .seed_status())
     }
 
     /// Create a NodeState with a pre-existing cipherclerk (restored from key material).
@@ -1722,7 +1788,10 @@ impl NodeState {
             dark_clearing: Arc::new(RwLock::new(
                 crate::dark_clearing_service::NodeDarkClearing::new(),
             )),
-        })
+            status: Arc::new(Mutex::new(None)),
+            lace_counts: Arc::new(Mutex::new(None)),
+        }
+        .seed_status())
     }
 
     /// Read-only handle to the node-hosted realm substrate (`realm-model`
@@ -1746,8 +1815,48 @@ impl NodeState {
     }
 
     /// Acquire a write lock on the inner state.
-    pub async fn write(&self) -> tokio::sync::RwLockWriteGuard<'_, NodeStateInner> {
-        self.inner.write().await
+    pub async fn write(&self) -> NodeStateWriteGuard<'_> {
+        NodeStateWriteGuard {
+            guard: self.inner.write().await,
+            status: &self.status,
+        }
+    }
+
+    fn seed_status(self) -> Self {
+        let snapshot = self
+            .inner
+            .try_read()
+            .expect("a just-built node state is unlocked");
+        *self
+            .status
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some(StatusSnapshot::of(&snapshot));
+        drop(snapshot);
+        self
+    }
+
+    /// The `/status` inputs as of the last released state write, without
+    /// touching the state lock.
+    pub fn status_snapshot(&self) -> Option<StatusSnapshot> {
+        self.status
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// `(dag_height, block_count)` of `handle`'s lace: read fresh when the lace
+    /// lock is free, else the last value read, so a probe never waits on it.
+    pub fn lace_counts(&self, handle: &crate::blocklace_sync::BlocklaceHandle) -> (u64, usize) {
+        let fresh = handle.try_lace_counts();
+        let mut cached = self
+            .lace_counts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if fresh.is_some() {
+            *cached = fresh;
+        }
+        cached.unwrap_or_default()
     }
 
     /// Get the current cipherclerk status.
@@ -2191,7 +2300,12 @@ impl NodeState {
 
     /// Set the blocklace consensus handle.
     pub async fn set_blocklace(&self, handle: crate::blocklace_sync::BlocklaceHandle) {
-        let mut s = self.inner.write().await;
+        let counts = handle.lace_counts().await;
+        *self
+            .lace_counts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(counts);
+        let mut s = self.write().await;
         s.blocklace_handle = Some(handle);
     }
 
