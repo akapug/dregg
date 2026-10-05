@@ -414,15 +414,20 @@ impl CopiedStoreReader {
     ) -> StoreResult<Option<FaithfulNoteRootExpectationV1>> {
         let table = self.txn.open_table(tables::FAITHFUL_NOTE_ROOT_HISTORY)?;
         let metadata = self.txn.open_table(tables::METADATA_BYTES)?;
-        let anchor_present = metadata
+        let anchor = metadata
             .get(tables::META_FAITHFUL_NOTE_ROOT_ANCHOR)?
-            .is_some();
+            .map(|guard| guard.value().to_vec());
         let seal = metadata
             .get(tables::META_FAITHFUL_NOTE_ROOT_HEAD)?
             .map(|guard| guard.value().to_vec());
-        match (anchor_present, seal) {
-            (false, None) if table.is_empty()? => Ok(None),
-            (true, Some(seal)) => {
+        match (anchor, seal) {
+            (None, None) if table.is_empty()? => Ok(None),
+            (Some(anchor), Some(seal)) => {
+                // Intact presence is not evidence: the stored anchor bytes must
+                // decode through the same gate `installed_faithful_note_root_anchor`
+                // and the admission replay apply, or this surface reports a valid
+                // expectation over a malformed/foreign anchor.
+                FaithfulNoteRootAnchorV1::from_bytes(&anchor).map_err(integrity)?;
                 let seal = HeadSealV1::from_bytes(&seal).map_err(integrity)?;
                 if table.len()? != seal.records {
                     return Err(integrity(FaithfulNoteRootHistoryError::SnapshotMismatch(
@@ -513,8 +518,8 @@ mod tests {
     use super::*;
     use crate::PersistentStore;
     use crate::faithful_note_root_history::{
-        CanonicalFaithfulRoot, FaithfulNoteRootEnvelopeV1, FaithfulNoteRootRecordV1,
-        plan_faithful_note_root_transition_v1,
+        CanonicalFaithfulRoot, FAITHFUL_NOTE_ROOT_ANCHOR_V1_BYTES, FaithfulNoteRootEnvelopeV1,
+        FaithfulNoteRootRecordV1, plan_faithful_note_root_transition_v1,
     };
     use dregg_federation::frost::MlDsaSigningKey;
     use dregg_types::{HybridQuorumSig, SigningKey};
@@ -868,6 +873,82 @@ mod tests {
         std::fs::write(&extended, &ext).unwrap();
         let err = CopiedStoreReader::open(&extended).unwrap_err();
         assert!(matches!(err, CopiedStoreAdmissionError::Dirty(_)), "{err}");
+    }
+
+    #[test]
+    fn malformed_anchor_bytes_refuse_the_expectation() {
+        // CL99 control: intact PRESENCE of the anchor key cannot stand in for a
+        // decodable anchor — `faithful_note_root_expectation` must run the same
+        // from_bytes gate as the installed-anchor and admission paths.
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("live.redb");
+        let copy = dir.path().join("copy.redb");
+        let fixture = write_history_store(&live);
+
+        // Positive control: the valid fixture reports its claimed expectation.
+        std::fs::copy(&live, &copy).unwrap();
+        let reader = CopiedStoreReader::open(&copy).unwrap();
+        assert_eq!(
+            reader.faithful_note_root_expectation().unwrap(),
+            Some(fixture.expected_head)
+        );
+        reader.close().unwrap();
+
+        // Negatives: same valid seal, same matching record count — only the
+        // anchor bytes are malformed. The writer store is opened once (open
+        // does not read the faithful note-root anchor) and each corruption is
+        // committed, copied, audited, then restored for the next variant.
+        let good_anchor = fixture.anchor.to_bytes();
+        let mut short = good_anchor.to_vec();
+        short.truncate(FAITHFUL_NOTE_ROOT_ANCHOR_V1_BYTES - 1);
+        let mut bad_header = good_anchor;
+        bad_header[0] ^= 0xFF; // magic byte
+        let mut bad_root = good_anchor;
+        bad_root[96..100].copy_from_slice(&u32::MAX.to_le_bytes()); // lane >= BABYBEAR_P
+        let store = PersistentStore::open(&live).unwrap();
+        for (name, bytes) in [
+            ("length", short.as_slice()),
+            ("header", bad_header.as_slice()),
+            ("root", bad_root.as_slice()),
+        ] {
+            let write = store.db.begin_write().unwrap();
+            {
+                let mut metadata = write.open_table(tables::METADATA_BYTES).unwrap();
+                metadata
+                    .insert(tables::META_FAITHFUL_NOTE_ROOT_ANCHOR, bytes)
+                    .unwrap();
+            }
+            write.commit().unwrap();
+            std::fs::copy(&live, &copy).unwrap();
+            let before = file_bytes(&copy);
+
+            let reader = CopiedStoreReader::open(&copy).unwrap();
+            let err = reader.faithful_note_root_expectation().unwrap_err();
+            assert!(
+                matches!(err, StoreError::Integrity(_)),
+                "{name}: a malformed anchor must refuse the expectation, not claim it: {err}"
+            );
+            let err = reader.installed_faithful_note_root_anchor().unwrap_err();
+            assert!(
+                matches!(err, StoreError::Integrity(_)),
+                "{name}: a malformed anchor must refuse on the installed path too: {err}"
+            );
+            let err = reader
+                .admit_faithful_note_root_history_hybrid(
+                    &fixture.anchor,
+                    &fixture.committee,
+                    &fixture.ml_dsa_committee,
+                    fixture.threshold,
+                    fixture.expected_head,
+                )
+                .unwrap_err();
+            assert!(
+                matches!(err, CopiedStoreAdmissionError::Store(StoreError::Integrity(_))),
+                "{name}: a malformed anchor must refuse admission: {err}"
+            );
+            assert_eq!(file_bytes(&copy), before, "{name}: refusal must not mutate");
+            reader.close().unwrap();
+        }
     }
 
     #[test]
