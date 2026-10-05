@@ -895,8 +895,8 @@ impl PersistentStore {
     }
 
     /// Append only after the exact record passes the enrolled-roster hybrid
-    /// quorum.  Structural validation and the table/head-seal mutation happen
-    /// under one redb writer transaction.
+    /// quorum with distinct enrolled ML-DSA keys. Structural validation and
+    /// the table/head-seal mutation happen under one redb writer transaction.
     pub fn append_faithful_note_root_hybrid(
         &self,
         envelope: &FaithfulNoteRootEnvelopeV1,
@@ -904,7 +904,12 @@ impl PersistentStore {
         ml_dsa_committee: &[MlDsaPublicKey],
         threshold: usize,
     ) -> StoreResult<()> {
-        if !envelope.verify_hybrid(committee, ml_dsa_committee, threshold) {
+        if ml_dsa_committee
+            .iter()
+            .enumerate()
+            .any(|(i, key)| ml_dsa_committee[..i].contains(key))
+            || !envelope.verify_hybrid(committee, ml_dsa_committee, threshold)
+        {
             return Err(integrity(
                 FaithfulNoteRootHistoryError::AuthenticationFailed,
             ));
@@ -1376,6 +1381,101 @@ mod tests {
             Err(FaithfulNoteRootHistoryError::AuthenticationFailed)
         ));
         assert!(history.envelopes().is_empty());
+    }
+
+    #[test]
+    fn durable_hybrid_append_rejects_duplicate_enrolled_pq_keys() {
+        let signers = [HybridSigner::new(0xB1), HybridSigner::new(0xB2)];
+        let committee = [signers[0].ed_pk, signers[1].ed_pk];
+        let enrolled = [signers[0].pq_pk.clone(), signers[1].pq_pk.clone()];
+        assert_ne!(committee[0], committee[1]);
+        assert_ne!(enrolled[0], enrolled[1]);
+        let (tree, anchor) = empty_anchor();
+        let record = plan_faithful_note_root_transition_v1(
+            &tree,
+            &anchor,
+            tag(0xB3),
+            &[[0xB4; 32]],
+        )
+        .unwrap();
+        let message = record.signing_message();
+        let honest = FaithfulNoteRootEnvelopeV1 {
+            record: record.clone(),
+            hybrid_quorum: signers
+                .iter()
+                .flat_map(|signer| signer.sign(record.clone()).hybrid_quorum)
+                .collect(),
+        };
+
+        // The actual durable API admits an honest, distinct two-of-two quorum.
+        let good_store = PersistentStore::open_in_memory().unwrap();
+        good_store
+            .initialize_faithful_note_root_history(&anchor)
+            .unwrap();
+        good_store
+            .append_faithful_note_root_hybrid(&honest, &committee, &enrolled, 2)
+            .expect("distinct enrolled hybrid quorum appends");
+        let expected = FaithfulNoteRootExpectationV1 {
+            records: 1,
+            height: record.height,
+            note_count: record.note_count,
+            root: record.successor,
+        };
+        let loaded = good_store
+            .load_faithful_note_root_history_hybrid(&committee, &enrolled, 2, expected)
+            .unwrap();
+        assert_eq!(loaded.envelopes(), std::slice::from_ref(&honest));
+
+        // One real PQ signature is reused under two different valid Ed keys.
+        // Both halves and both positional pins pass individually; only the
+        // enrollment's duplicated PQ authority is invalid.
+        let duplicated = [enrolled[0].clone(), enrolled[0].clone()];
+        let reused_pq = signers[0].pq.sign(&message).expect("ML-DSA signs");
+        let mut aliased = honest.clone();
+        for qs in &mut aliased.hybrid_quorum {
+            qs.ml_dsa_pubkey = duplicated[0].0.to_vec();
+            qs.pq_signature = reused_pq.clone();
+        }
+        assert_eq!(aliased.hybrid_quorum[0].pq_signature, aliased.hybrid_quorum[1].pq_signature);
+        for (qs, enrolled_key) in aliased.hybrid_quorum.iter().zip(&duplicated) {
+            assert!(qs.pubkey.verify(&message, &qs.signature));
+            assert_eq!(qs.ml_dsa_pubkey.as_slice(), enrolled_key.0.as_slice());
+            assert!(enrolled_key.verify(&message, &qs.pq_signature));
+        }
+
+        // Use a fresh, empty store: refusal cannot be a replay/height collision
+        // with the positive control, and must not mutate either table or seal.
+        let refused_store = PersistentStore::open_in_memory().unwrap();
+        refused_store
+            .initialize_faithful_note_root_history(&anchor)
+            .unwrap();
+        for threshold in [2, 1] {
+            let mut candidate = aliased.clone();
+            candidate.hybrid_quorum.truncate(threshold);
+            assert!(matches!(
+                refused_store.append_faithful_note_root_hybrid(
+                    &candidate,
+                    &committee,
+                    &duplicated,
+                    threshold,
+                ),
+                Err(StoreError::Integrity(message))
+                    if message == FaithfulNoteRootHistoryError::AuthenticationFailed.to_string()
+            ));
+        }
+        // Threshold one still rejects: the unused enrollment slot is part of
+        // the roster, not a reason to accept shared PQ authority.
+        let empty_expected = FaithfulNoteRootExpectationV1 {
+            records: 0,
+            height: anchor.height,
+            note_count: anchor.note_count,
+            root: anchor.root,
+        };
+        let empty = refused_store
+            .load_faithful_note_root_history_hybrid(&committee, &enrolled, 2, empty_expected)
+            .expect("refused enrollment leaves the installed empty head intact");
+        assert!(empty.envelopes().is_empty());
+        assert_eq!(empty.head(), anchor);
     }
 
     #[test]
