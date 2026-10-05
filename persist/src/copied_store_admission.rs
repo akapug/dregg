@@ -57,7 +57,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use redb::{ReadOnlyDatabase, ReadTransaction, StorageBackend};
+use redb::{ReadOnlyDatabase, ReadTransaction, ReadableTableMetadata, StorageBackend};
 
 use dregg_federation::frost::MlDsaPublicKey;
 use dregg_types::PublicKey;
@@ -318,6 +318,14 @@ pub struct CopiedStoreReader {
     /// since open (diagnostic; expected to stay 0 — the read-only
     /// `TransactionalMemory` never even attempts its drop-time flush).
     refused_writes: Arc<AtomicU64>,
+}
+
+impl std::fmt::Debug for CopiedStoreReader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CopiedStoreReader")
+            .field("refused_writes", &self.refused_writes.load(Ordering::Relaxed))
+            .finish_non_exhaustive()
+    }
 }
 
 impl CopiedStoreReader {
