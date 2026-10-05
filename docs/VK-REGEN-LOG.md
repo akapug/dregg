@@ -26,9 +26,12 @@ Two machine-readable structures serve it, and a malformed one is a **failure, ne
 ⚠ **BACK-FILLED 2026-08-01, so this column is younger than the rows that carry it.** Values were
 derived mechanically — `git show <that row's repo HEAD>:persist/src/lib.rs` — except for the four
 rows that declare their own bump, which carry the value *after* the change (their recorded repo HEAD
-predates their own bump commit). The 23 rows dated before 2026-07-23 are `epoch:unknown` and that is
-not a hedge: the constant **did not exist** at their repo HEAD (it was introduced at 11 by
-`99ecf54b8`, 2026-07-22).
+predates their own bump commit). That exception holds ONLY when the bump commits before the next row
+is appended; a bump authored in a lane and left uncommitted makes the rows written in that window
+carry the epoch they were about to be under rather than the one the constant held, and the column
+descends — the failure the correction paragraph below repairs. The 23 rows dated before 2026-07-23
+are `epoch:unknown` and that is not a hedge: the constant **did not exist** at their repo HEAD (it
+was introduced at 11 by `99ecf54b8`, 2026-07-22).
 
 ⚠ **TWO ROWS OF PROSE IN THIS FILE ARE WRONG ABOUT THE EPOCH, and the column does not repeat them.**
 The 2026-08-01T10:43:56Z row says "Schema epoch 16 -> 17"; the constant went **16 → 19** in one
