@@ -2204,6 +2204,7 @@ impl Blocklace {
             pending.iter().map(|block| (block.id(), block.predecessors.as_slice())),
         );
         let mut remaining: Vec<Option<Block>> = pending.into_iter().map(Some).collect();
+        let mut chains = ReplayCreatorChains::default();
         while let Some((round, index)) = frontier.pop() {
             let block = remaining[index].take().expect("ready row was not consumed");
             let id = block.id();
@@ -2220,7 +2221,9 @@ impl Blocklace {
             // starved one. Which pair gets pinned may differ across
             // re-derivations (map iteration order); any pair satisfies the
             // existential exclusion predicate identically.
-            if let Some(proof) = lace.detect_equivocation(&block) {
+            let equivocation = chains.detect_equivocation(&lace, &block);
+            chains.admitted(id, block.creator, equivocation.is_none());
+            if let Some(proof) = equivocation {
                 if lace.equivocators.insert(block.creator) {
                     lace.tips
                         .insert(block.creator, CreatorTips::pair(proof.block_a.id(), id));
@@ -2363,6 +2366,75 @@ pub struct CheckpointData {
     pub ordered_block_ids: Vec<BlockId>,
     /// Block IDs that have been attested by quorum.
     pub attested_block_ids: Vec<BlockId>,
+}
+
+/// [`Blocklace::detect_equivocation`]'s verdict for a checkpoint replay, without
+/// walking each block's whole causal past.
+///
+/// Replay admits a block only after all its predecessors, so an admitted block
+/// never has a later one in its past. While a creator's admitted blocks form one
+/// chain ending in `t`, every one of them is `t` or in `t`'s past, so a new block
+/// of that creator is incomparable to some earlier one exactly when `t` is not in
+/// its past, and then `t` is a witness. Only blocks admitted after `t` can reach
+/// `t`, so the search stops at older ones. A creator that has equivocated loses
+/// its chain and is checked by the full scan from then on.
+#[derive(Default)]
+struct ReplayCreatorChains {
+    position: HashMap<BlockId, usize>,
+    /// `Some(t)`: the creator's admitted blocks are a chain ending in `t`.
+    /// `None`: they are not, so the full scan decides.
+    tips: HashMap<[u8; 32], Option<BlockId>>,
+    /// Blocks whose predecessors a search has expanded, for the complexity test.
+    #[cfg(test)]
+    expanded: std::cell::Cell<usize>,
+}
+
+impl ReplayCreatorChains {
+    fn detect_equivocation(&self, lace: &Blocklace, block: &Block) -> Option<EquivocationProof> {
+        match self.tips.get(&block.creator) {
+            None => None,
+            Some(None) => lace.detect_equivocation(block),
+            Some(Some(tip)) if self.observes(lace, &block.predecessors, *tip) => None,
+            Some(Some(tip)) => Some(EquivocationProof {
+                creator: block.creator,
+                block_a: lace.blocks[tip].clone(),
+                block_b: block.clone(),
+            }),
+        }
+    }
+
+    /// Whether `target` is in the causal past named by `predecessors`.
+    fn observes(&self, lace: &Blocklace, predecessors: &[BlockId], target: BlockId) -> bool {
+        let floor = self.position[&target];
+        let mut seen = HashSet::new();
+        let mut queue: Vec<BlockId> = predecessors.to_vec();
+        while let Some(id) = queue.pop() {
+            if id == target {
+                return true;
+            }
+            if !seen.insert(id) || self.position.get(&id).is_none_or(|p| *p < floor) {
+                continue;
+            }
+            if let Some(block) = lace.blocks.get(&id) {
+                #[cfg(test)]
+                self.expanded.set(self.expanded.get() + 1);
+                queue.extend(block.predecessors.iter().copied());
+            }
+        }
+        false
+    }
+
+    fn admitted(&mut self, id: BlockId, creator: [u8; 32], extends_chain: bool) {
+        self.position.insert(id, self.position.len());
+        let tip = self.tips.entry(creator).or_insert(Some(id));
+        if extends_chain {
+            if tip.is_some() {
+                *tip = Some(id);
+            }
+        } else {
+            *tip = None;
+        }
+    }
 }
 
 /// Index the old checkpoint scan without changing its admission order. A ready
@@ -3060,7 +3132,32 @@ mod checkpoint_frontier_tests {
 
     fn same_state(actual: &Blocklace, legacy: &Blocklace) {
         assert_eq!(actual.blocks, legacy.blocks);
-        assert_eq!(actual.tips, legacy.tips);
+        // A pinned equivocation pair is whichever witness the scan met first
+        // (the legacy scan's is map-iteration order), so compare pairs as
+        // evidence: same creator, both blocks present, mutually incomparable.
+        let unpinned = |lace: &Blocklace| -> HashMap<[u8; 32], CreatorTips> {
+            lace.tips
+                .iter()
+                .filter(|(_, tips)| matches!(tips, CreatorTips::One(_)))
+                .map(|(creator, tips)| (*creator, tips.clone()))
+                .collect()
+        };
+        assert_eq!(unpinned(actual), unpinned(legacy));
+        let pinned = |lace: &Blocklace| -> HashSet<[u8; 32]> {
+            lace.tips
+                .iter()
+                .filter(|(_, tips)| matches!(tips, CreatorTips::Pair(..)))
+                .map(|(creator, _)| *creator)
+                .collect()
+        };
+        assert_eq!(pinned(actual), pinned(legacy));
+        for (creator, tips) in &actual.tips {
+            if let CreatorTips::Pair(a, b) = tips {
+                assert_eq!(actual.blocks[a].creator, *creator);
+                assert_eq!(actual.blocks[b].creator, *creator);
+                assert!(!actual.causal_past(a).contains(b) && !actual.causal_past(b).contains(a));
+            }
+        }
         assert_eq!(actual.equivocators, legacy.equivocators);
         assert_eq!(actual.finality.ack_counts, legacy.finality.ack_counts);
         assert_eq!(actual.finality.ordering.bilateral, legacy.finality.ordering.bilateral);
@@ -3186,6 +3283,73 @@ mod checkpoint_frontier_tests {
         frontier.admitted(1, 0);
         assert_eq!(frontier.pop(), Some((1, 2)));
         assert_eq!(frontier.left, 0);
+    }
+
+    /// Admit `blocks` in order, asking the creator-chain index and the full
+    /// scan the same question before each admission.
+    fn compare_equivocation_verdicts(blocks: &[Block]) -> (Vec<bool>, usize) {
+        let mut lace = Blocklace::new(key(9), 2);
+        let mut chains = ReplayCreatorChains::default();
+        let mut verdicts = Vec::new();
+        for block in blocks {
+            let fast = chains.detect_equivocation(&lace, block);
+            let full = lace.detect_equivocation(block);
+            assert_eq!(fast.is_some(), full.is_some(), "creator {:02x} seq {}", block.creator[0], block.seq);
+            if let Some(proof) = &fast {
+                let past = lace.causal_past_from_preds(&block.predecessors);
+                assert_eq!(proof.block_a.creator, block.creator);
+                assert!(!past.contains(&proof.block_a.id()), "the witness is incomparable");
+            }
+            chains.admitted(block.id(), block.creator, fast.is_none());
+            lace.blocks.insert(block.id(), block.clone());
+            verdicts.push(fast.is_some());
+        }
+        (verdicts, chains.expanded.get())
+    }
+
+    #[test]
+    fn creator_chain_index_agrees_with_the_full_equivocation_scan() {
+        let (a, b) = (key(1), key(2));
+        let a1 = signed(&a, 1, Payload::Data(vec![1]), vec![]);
+        let b1 = signed(&b, 1, Payload::Data(vec![2]), vec![a1.id()]);
+        let a2 = signed(&a, 2, Payload::Data(vec![3]), vec![a1.id(), b1.id()]);
+        let b2 = signed(&b, 2, Payload::Ack, vec![b1.id(), a2.id()]);
+        // `a` forks: a2x and a2 are incomparable.
+        let a2x = signed(&a, 2, Payload::Data(vec![4]), vec![a1.id()]);
+        let b3 = signed(&b, 3, Payload::Data(vec![5]), vec![b2.id(), a2x.id()]);
+        // After the fork `a` is checked by the full scan: a3 sees both halves,
+        // a4 sees only one of them.
+        let a3 = signed(&a, 3, Payload::Data(vec![6]), vec![a2.id(), b3.id()]);
+        let a4 = signed(&a, 4, Payload::Data(vec![7]), vec![a2.id()]);
+        // `b` forks off its own older block, past a block of another creator.
+        let b2x = signed(&b, 2, Payload::Data(vec![8]), vec![b1.id(), a2.id()]);
+        let (verdicts, _) =
+            compare_equivocation_verdicts(&[a1, b1, a2, b2, a2x, b3, a3, a4, b2x]);
+        assert_eq!(
+            verdicts,
+            [false, false, false, false, true, false, false, true, true]
+        );
+    }
+
+    /// A one-creator chain interleaved with another creator's acks: the full
+    /// scan walks each block's whole past (quadratic in the chain), the index
+    /// stops at the creator's tip, so its total work is linear.
+    #[test]
+    fn creator_chain_index_work_is_linear_in_a_long_chain() {
+        let (a, b) = (key(1), key(2));
+        let mut blocks = Vec::new();
+        let (mut a_tip, mut b_tip): (Option<BlockId>, Option<BlockId>) = (None, None);
+        for seq in 1..=400u64 {
+            let block = signed(&a, seq, Payload::Data(vec![1]), a_tip.into_iter().chain(b_tip).collect());
+            a_tip = Some(block.id());
+            blocks.push(block);
+            let ack = signed(&b, seq, Payload::Ack, b_tip.into_iter().chain(a_tip).collect());
+            b_tip = Some(ack.id());
+            blocks.push(ack);
+        }
+        let (verdicts, expanded) = compare_equivocation_verdicts(&blocks);
+        assert!(verdicts.iter().all(|equivocation| !equivocation));
+        assert!(expanded <= 2 * blocks.len(), "expanded {expanded} for {} blocks", blocks.len());
     }
 
     #[test]
