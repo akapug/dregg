@@ -688,6 +688,24 @@ impl PersistentStore {
         Ok(table.len()?)
     }
 
+    /// The highest-height attested root and the number of stored roots, read
+    /// in ONE transaction without decoding any other row.
+    ///
+    /// Equal to `(all_attested_roots().max_by_key(height), all_attested_roots().len())`
+    /// but O(log n): redb orders the `u64` keys, so the last entry is the
+    /// highest height. Reads the table itself rather than
+    /// `META_LATEST_ROOT_HEIGHT`, so a pruned or legacy store cannot make the
+    /// two disagree.
+    pub fn attested_root_summary(&self) -> Result<(Option<StoredAttestedRoot>, u64)> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(tables::ATTESTED_ROOTS)?;
+        let latest = match table.last()? {
+            Some((_, value)) => Some(postcard::from_bytes(value.value())?),
+            None => None,
+        };
+        Ok((latest, table.len()?))
+    }
+
     /// Load all attested roots in height order.
     pub fn all_attested_roots(&self) -> Result<Vec<StoredAttestedRoot>> {
         let read_txn = self.db.begin_read()?;

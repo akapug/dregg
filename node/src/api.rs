@@ -7742,11 +7742,14 @@ async fn get_block_by_height(
     }
 }
 
+/// Build the `/api/federations` listing. Only the latest root and the root
+/// count are needed, so this reads those two (O(log n)) instead of decoding
+/// every attested root under the state read lock.
 fn federation_infos(s: &crate::state::NodeStateInner) -> Vec<FederationInfo> {
-    let roots = s.store.all_attested_roots().unwrap_or_default();
-    let latest_root = roots.iter().max_by_key(|r| r.height);
-    let latest_height = latest_root.map(|r| r.height).unwrap_or(0);
-    let latest_root_hex = latest_root.map(|r| hex_encode(&r.merkle_root));
+    let (latest_root, root_count) = s.store.attested_root_summary().unwrap_or_default();
+    let latest_height = latest_root.as_ref().map(|r| r.height).unwrap_or(0);
+    let latest_root_hex = latest_root.as_ref().map(|r| hex_encode(&r.merkle_root));
+    let root_count = root_count as usize;
 
     let mut infos: Vec<FederationInfo> = s
         .known_federations
@@ -7761,7 +7764,7 @@ fn federation_infos(s: &crate::state::NodeStateInner) -> Vec<FederationInfo> {
             is_local: id.0 == s.federation_id,
             latest_height,
             latest_root: latest_root_hex.clone(),
-            num_finalized_roots: roots.len(),
+            num_finalized_roots: root_count,
         })
         .collect();
 
@@ -7778,7 +7781,7 @@ fn federation_infos(s: &crate::state::NodeStateInner) -> Vec<FederationInfo> {
             is_local: true,
             latest_height,
             latest_root: latest_root_hex,
-            num_finalized_roots: roots.len(),
+            num_finalized_roots: root_count,
         });
     }
 
@@ -11302,6 +11305,43 @@ mod tests {
         let mut s = state.write().await;
         s.federation_id = TEST_POA_AUTHORITY;
         s.federation_configured = true;
+    }
+
+    /// `/api/federations` serves exactly what the old full decode computed
+    /// (latest root by height + root count), on out-of-order roots.
+    #[tokio::test]
+    async fn federations_listing_equals_the_full_root_scan() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = NodeState::new(tmp.path(), vec![]).expect("node state");
+        let root = |height: u64| dregg_persist::federation::StoredAttestedRoot {
+            merkle_root: [height as u8; 32],
+            note_tree_root: None,
+            nullifier_set_root: None,
+            height,
+            timestamp: 1000 + height as i64,
+            blocklace_block_id: None,
+            finality_round: None,
+            quorum_signatures: Vec::new(),
+            threshold_qc: None,
+            threshold: 1,
+            federation_id: dregg_types::FederationId::PLACEHOLDER,
+            receipt_stream_root: None,
+            finalization_quorum: Vec::new(),
+        };
+        let s = state.read().await;
+        for h in [3, 11, 7, 2] {
+            s.store.store_attested_root(&root(h)).expect("store root");
+        }
+        let all = s.store.all_attested_roots().expect("all roots");
+        let latest = all.iter().max_by_key(|r| r.height).expect("latest");
+        let infos = federation_infos(&s);
+        assert!(!infos.is_empty());
+        for info in &infos {
+            assert_eq!(info.latest_height, latest.height);
+            assert_eq!(info.latest_root, Some(hex_encode(&latest.merkle_root)));
+            assert_eq!(info.num_finalized_roots, all.len());
+        }
+        assert_eq!((latest.height, all.len()), (11, 4));
     }
 
     async fn get_json(app: &Router, uri: &str) -> (StatusCode, serde_json::Value) {
