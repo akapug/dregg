@@ -131,10 +131,11 @@ empty temp directory and compared against the registry source directory:
     Only in <registry src>/redb-2.6.3: .cargo-ok
 
 One line, exit 1. `.cargo-ok` appears in NO archive listing — it is cargo's
-own zero-byte post-extraction marker, created in the source directory after
-extraction, not crate content. So the registry source directory this
-document compares against is the bound archive's bytes plus one cargo
-bookkeeping file.
+own post-extraction bookkeeping marker, created in the source directory after
+extraction, not crate content. The committed `.cargo-ok` blob is **7 bytes**
+and is a tracked addition to the vendor tree, not an archive file according
+to the reported comparison. So the registry source directory this document
+compares against is the bound archive's bytes plus one cargo bookkeeping file.
 
 **Working tree → committed subtree.** `git status --short vendor/` at this
 commit is EMPTY: every tracked vendor file matches the committed subtree
@@ -153,7 +154,11 @@ archive's bytes plus cargo's `.cargo-ok` marker; and the compared working
 tree is byte-identical to the committed subtree except the gitignored
 `Cargo.lock`. Taken together the committed vendor subtree is the published
 crate minus `Cargo.toml.orig` and the gitignored `Cargo.lock`, plus the 3
-modified files characterized above — with each link separately measured.
+modified files characterized above **and the added cargo-generated `.cargo-ok`
+bookkeeping file** — with each link separately measured. The reported 74
+identical files are from registry-source versus working-tree comparison and
+include `.cargo-ok` (not in the archive) and `Cargo.lock` (not committed);
+that figure is not an archive-versus-committed-subtree identity count.
 Not established: source or build inputs OUTSIDE the vendor path match those
 of the published crate (nothing here reads them), and the committed
 subtree's own `Cargo.lock`-less state means a git-only consumer resolves
