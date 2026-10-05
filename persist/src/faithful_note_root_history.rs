@@ -1192,6 +1192,14 @@ pub fn audit_faithful_note_root_history_in(
         || threshold > committee.len()
         || ml_dsa_committee.len() != committee.len()
         || committee.iter().enumerate().any(|(i, key)| committee[..i].contains(key))
+        // A duplicated enrolled PQ key silently shares one ML-DSA authority
+        // across distinct committee members: at threshold 2, [E1,E2]/[P,P]
+        // would count two signers whose PQ halves both verify under the SAME
+        // enrolled key — quorum authority thinner than the roster claims.
+        || ml_dsa_committee
+            .iter()
+            .enumerate()
+            .any(|(i, key)| ml_dsa_committee[..i].contains(key))
     {
         return Err(integrity(FaithfulNoteRootHistoryError::AuthenticationFailed));
     }

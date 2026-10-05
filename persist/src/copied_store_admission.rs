@@ -194,6 +194,38 @@ impl StorageBackend for ReadOnlyBackend {
     }
 }
 
+/// Acquire the copy `O_RDONLY|O_NONBLOCK`. A FIFO (or any other special file)
+/// with no writer would otherwise block `File::open` forever, before any
+/// refusal could be named. The flag is a no-op once the fd is proven a regular
+/// file, so it is handed to `FileBackend` unchanged.
+fn open_readonly_nonblocking(path: &Path) -> io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    // Solaris/illumos spell O_NONBLOCK as 0x80 (0x4 is O_NDELAY there) — rather
+    // than carry a wrong value, those targets take the plain blocking open.
+    #[cfg(all(unix, not(any(target_os = "solaris", target_os = "illumos"))))]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // std exposes no named O_NONBLOCK; Linux/Android and the BSDs spell it
+        // differently. This fleet is Linux — other values are carried, not
+        // exercised here.
+        const O_NONBLOCK: i32 = if cfg!(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "freebsd",
+            target_os = "dragonfly",
+            target_os = "netbsd",
+            target_os = "openbsd",
+        )) {
+            0x4
+        } else {
+            0o4000 // Linux, Android and other linux-ABI unixes
+        };
+        options.custom_flags(O_NONBLOCK);
+    }
+    options.open(path)
+}
+
 fn read_super_header(file: &std::fs::File, file_len: u64) -> io::Result<[u8; SUPER_HEADER_BYTES]> {
     let mut header = [0u8; SUPER_HEADER_BYTES];
     if file_len > 0 {
@@ -334,8 +366,15 @@ impl CopiedStoreReader {
     /// refused. A file requiring repair is refused as
     /// [`CopiedStoreAdmissionError::Dirty`].
     pub fn open(path: &Path) -> Result<Self, CopiedStoreAdmissionError> {
-        let file = std::fs::File::open(path).map_err(CopiedStoreAdmissionError::Io)?;
-        let file_len = file.metadata().map_err(CopiedStoreAdmissionError::Io)?.len();
+        let file = open_readonly_nonblocking(path).map_err(CopiedStoreAdmissionError::Io)?;
+        // Regularity is decided from the OPEN fd (fstat) — a path stat would
+        // TOCTOU between check and open. A FIFO, socket, or directory never
+        // reaches header I/O.
+        let metadata = file.metadata().map_err(CopiedStoreAdmissionError::Io)?;
+        if !metadata.file_type().is_file() {
+            return Err(CopiedStoreAdmissionError::Layout("not a regular file"));
+        }
+        let file_len = metadata.len();
         let header = read_super_header(&file, file_len).map_err(CopiedStoreAdmissionError::Io)?;
         preflight_super_header(&header, file_len)?;
 
@@ -345,8 +384,17 @@ impl CopiedStoreReader {
                 .map_err(|e| CopiedStoreAdmissionError::Database(e.to_string()))?,
             refused_writes: refused_writes.clone(),
         };
-        let db = ReadOnlyDatabase::open_with_backend(backend)
-            .map_err(|e| CopiedStoreAdmissionError::Database(e.to_string()))?;
+        let db = match ReadOnlyDatabase::open_with_backend(backend) {
+            Ok(db) => db,
+            Err(e) => {
+                // A write refused during open IS the diagnosis — name it instead
+                // of surfacing a bare backend error that hides the attempt count.
+                if refused_writes.load(Ordering::Relaxed) != 0 {
+                    return Err(CopiedStoreAdmissionError::WriteAttempted);
+                }
+                return Err(CopiedStoreAdmissionError::Database(e.to_string()));
+            }
+        };
         if refused_writes.load(Ordering::Relaxed) != 0 {
             return Err(CopiedStoreAdmissionError::WriteAttempted);
         }
@@ -979,5 +1027,250 @@ mod tests {
         reader
             .close()
             .expect("the only read transaction must be scoped to the handle");
+    }
+
+    /// A backend whose `len()` reports a different file length on every call —
+    /// the deterministic stand-in for a file appended mid-open. Its `write`
+    /// and `set_len` SUCCEED on a permissive shared counter so the test
+    /// measures whether a write was attempted, not whether one failed.
+    #[derive(Debug)]
+    struct DriftingLenBackend {
+        inner: redb::backends::FileBackend,
+        base_len: u64,
+        len_calls: AtomicU64,
+        writes_attempted: Arc<AtomicU64>,
+    }
+
+    impl StorageBackend for DriftingLenBackend {
+        fn len(&self) -> io::Result<u64> {
+            let call = self.len_calls.fetch_add(1, Ordering::Relaxed);
+            Ok(if call == 0 {
+                self.base_len
+            } else {
+                self.base_len + 4096
+            })
+        }
+
+        fn read(&self, offset: u64, len: usize) -> io::Result<Vec<u8>> {
+            self.inner.read(offset, len)
+        }
+
+        fn set_len(&self, _len: u64) -> io::Result<()> {
+            self.writes_attempted.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+
+        fn sync_data(&self, _eventual: bool) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn write(&self, _offset: u64, _data: &[u8]) -> io::Result<()> {
+            self.writes_attempted.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    fn file_backend_reader(
+        copy: &Path,
+    ) -> (ReadOnlyBackend, Arc<AtomicU64>) {
+        let file = open_readonly_nonblocking(copy).unwrap();
+        let refused = Arc::new(AtomicU64::new(0));
+        let backend = ReadOnlyBackend {
+            inner: redb::backends::FileBackend::new(file).unwrap(),
+            refused_writes: refused.clone(),
+        };
+        (backend, refused)
+    }
+
+    #[test]
+    fn a_read_transaction_can_outlive_the_database_handle() {
+        // The vendored seam documents "dropping the handle before this
+        // transaction is safe" — the txn owns an Arc of the memory, not a
+        // borrow of the db. Prove it at the boundary: reads issued after the
+        // handle is gone still resolve, and close succeeds once nothing is
+        // outstanding. `CopiedStoreReader`'s lifetime discipline lives above
+        // this floor, not under it.
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("live.redb");
+        let copy = dir.path().join("copy.redb");
+        let _fixture = write_history_store(&live);
+        std::fs::copy(&live, &copy).unwrap();
+        let before = file_bytes(&copy);
+
+        let (backend, refused) = file_backend_reader(&copy);
+        let db = ReadOnlyDatabase::open_with_backend(backend).unwrap();
+        let txn = db.begin_read().unwrap();
+        drop(db); // the handle is gone; the transaction lives on
+
+        let table = txn.open_table(tables::FAITHFUL_NOTE_ROOT_HISTORY).unwrap();
+        assert_eq!(table.len().unwrap(), 1, "reads resolve with the handle dropped");
+        drop(table);
+        txn.close()
+            .expect("the outliving transaction still closes cleanly");
+        assert_eq!(refused.load(Ordering::Relaxed), 0);
+        assert_eq!(file_bytes(&copy), before);
+    }
+
+    #[test]
+    fn the_read_only_backend_fails_closed_and_counts_every_attempt() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("live.redb");
+        let copy = dir.path().join("copy.redb");
+        let _fixture = write_history_store(&live);
+        std::fs::copy(&live, &copy).unwrap();
+        let before = file_bytes(&copy);
+
+        let (backend, refused) = file_backend_reader(&copy);
+        assert_eq!(
+            backend.write(0, &[0xAA]).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            backend.set_len(before.len() as u64).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(refused.load(Ordering::Relaxed), 2);
+        // Reads and len still delegate — the backend is read-capable, not dead.
+        assert_eq!(backend.len().unwrap(), before.len() as u64);
+        assert_eq!(backend.read(0, 4).unwrap(), &before[..4]);
+        backend.sync_data(true).unwrap();
+        assert_eq!(file_bytes(&copy), before);
+    }
+
+    #[test]
+    fn length_drift_during_open_is_refused_without_writes() {
+        // A backend reporting L then L+4096 passes the layout check against the
+        // first measurement, then drifts. The read-only open must refuse with a
+        // named diagnostic — and never reach the repair write at all.
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("live.redb");
+        let copy = dir.path().join("copy.redb");
+        let _fixture = write_history_store(&live);
+        std::fs::copy(&live, &copy).unwrap();
+        let before = file_bytes(&copy);
+
+        let file = open_readonly_nonblocking(&copy).unwrap();
+        let writes = Arc::new(AtomicU64::new(0));
+        let backend = DriftingLenBackend {
+            inner: redb::backends::FileBackend::new(file).unwrap(),
+            base_len: before.len() as u64,
+            len_calls: AtomicU64::new(0),
+            writes_attempted: writes.clone(),
+        };
+        let err = ReadOnlyDatabase::open_with_backend(backend)
+            .err()
+            .expect("a drifting backend must not open");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("moved") || msg.contains("mismatch") || msg.contains("Corrupted"),
+            "length drift must refuse with a diagnostic: {err}"
+        );
+        assert_eq!(file_bytes(&copy), before, "refusal must not mutate");
+        // The drift was caught before any writable branch: a permissive
+        // backend records ZERO attempted writes.
+        assert_eq!(writes.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn malformed_region_header_is_never_parsed() {
+        // Region 0's header begins at file offset 4096 with the format-version
+        // byte. Corrupting it used to PANIC inside `RegionHeader::deserialize`
+        // via `Allocators::from_bytes`. On a read-only handle allocator state
+        // is dead weight — every path that consults it is unreachable — so the
+        // parse is skipped and the bytes are never interpreted.
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("live.redb");
+        let copy = dir.path().join("copy.redb");
+        let fixture = write_history_store(&live);
+        std::fs::copy(&live, &copy).unwrap();
+        let mut bytes = file_bytes(&copy);
+        assert_eq!(bytes[4096], 1, "expected REGION_FORMAT_VERSION at region 0 base");
+        bytes[4096] = 0;
+        std::fs::write(&copy, &bytes).unwrap();
+        let before = file_bytes(&copy);
+
+        let reader = CopiedStoreReader::open(&copy)
+            .expect("a corrupted allocator header must not panic or refuse a read-only open");
+        // The faithful-history audit is unaffected — allocator metadata is not
+        // evidence this reader consumes.
+        reader
+            .admit_faithful_note_root_history_hybrid(
+                &fixture.anchor,
+                &fixture.committee,
+                &fixture.ml_dsa_committee,
+                fixture.threshold,
+                fixture.expected_head,
+            )
+            .unwrap();
+        reader.close().unwrap();
+        assert_eq!(file_bytes(&copy), before);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_is_refused_without_blocking() {
+        // A FIFO with no writer hangs a plain File::open forever — the reader
+        // would block before reaching any named refusal. O_NONBLOCK open +
+        // fd-level regularity check refuses it as a layout error. Completion
+        // of this test is the proof it did not hang.
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("pipe.redb");
+        let status = std::process::Command::new("mkfifo").arg(&fifo).status().unwrap();
+        assert!(status.success(), "mkfifo failed");
+        let err = CopiedStoreReader::open(&fifo).unwrap_err();
+        assert!(
+            matches!(err, CopiedStoreAdmissionError::Layout(_)),
+            "a FIFO must refuse as a layout error, not block: {err}"
+        );
+    }
+
+    #[test]
+    fn duplicated_pq_enrollment_cannot_share_one_authority() {
+        // [E1, E2] with enrolled [P, P] counts two signers whose PQ halves both
+        // verify under the SAME enrolled key — at threshold 1 the single
+        // envelope would satisfy the verifier, so the roster guard must refuse
+        // before any row is read.
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("live.redb");
+        let copy = dir.path().join("copy.redb");
+        let fixture = write_history_store(&live);
+        std::fs::copy(&live, &copy).unwrap();
+        let before = file_bytes(&copy);
+        let reader = CopiedStoreReader::open(&copy).unwrap();
+
+        let second = HybridSigner::new(0x77);
+        let committee = vec![fixture.committee[0], second.ed_pk];
+        let dup_pq = vec![
+            fixture.ml_dsa_committee[0].clone(),
+            fixture.ml_dsa_committee[0].clone(),
+        ];
+        let err = reader
+            .admit_faithful_note_root_history_hybrid(
+                &fixture.anchor,
+                &committee,
+                &dup_pq,
+                1,
+                fixture.expected_head,
+            )
+            .unwrap_err();
+        assert!(
+            matches!(err, CopiedStoreAdmissionError::Store(StoreError::Integrity(_))),
+            "a duplicated enrolled PQ key must refuse: {err}"
+        );
+        // Control: the same roster shape with DISTINCT PQ keys is judged on
+        // the quorum, not refused by the guard — threshold 1 with one genuine
+        // hybrid signer admits.
+        let distinct_pq = vec![fixture.ml_dsa_committee[0].clone(), second.pq_pk.clone()];
+        reader
+            .admit_faithful_note_root_history_hybrid(
+                &fixture.anchor,
+                &committee,
+                &distinct_pq,
+                1,
+                fixture.expected_head,
+            )
+            .expect("a well-formed roster is judged on the quorum, not the guard");
+        assert_eq!(file_bytes(&copy), before);
+        reader.close().unwrap();
     }
 }

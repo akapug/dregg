@@ -66,10 +66,19 @@ struct InMemoryState {
 }
 
 impl InMemoryState {
-    fn from_bytes(header: DatabaseHeader, file: &PagedCachedFile, version: u8) -> Result<Self> {
+    fn from_bytes(
+        header: DatabaseHeader,
+        file: &PagedCachedFile,
+        version: u8,
+        read_only: bool,
+    ) -> Result<Self> {
         // TODO: seems like there should be a nicer way to structure this, rather than having
         // a format version check here
-        let allocators = if header.recovery_required || version >= FILE_FORMAT_VERSION3 {
+        // Read-only handles never allocate, free, or flush allocator state — every path
+        // that consults it is unreachable. Skipping the parse keeps malformed region
+        // headers (which `RegionHeader::deserialize` asserts on) outside the read-only
+        // boundary entirely instead of turning them into a panic.
+        let allocators = if read_only || header.recovery_required || version >= FILE_FORMAT_VERSION3 {
             Allocators::new(header.layout())
         } else {
             Allocators::from_bytes(&header, file)?
@@ -285,10 +294,31 @@ impl TransactionalMemory {
         }
 
         assert_eq!(header.page_size() as usize, page_size);
-        assert!(storage.raw_file_len()? >= header.layout().len());
-        let needs_recovery =
-            header.recovery_required || header.layout().len() != storage.raw_file_len()?;
+        // A read-only open answers "would the writable path have written?" from ONE
+        // captured length (initial_storage_len). A file that grew or shrank between
+        // the first measurement and this second one — or a backend that misreports —
+        // is refused here rather than carried into the repair/write branch below.
+        let needs_recovery = if read_only {
+            if storage.raw_file_len()? != initial_storage_len {
+                return Err(StorageError::Corrupted(
+                    "read-only open refuses a file whose length moved during open".into(),
+                )
+                .into());
+            }
+            header.recovery_required || header.layout().len() != initial_storage_len
+        } else {
+            assert!(storage.raw_file_len()? >= header.layout().len());
+            header.recovery_required || header.layout().len() != storage.raw_file_len()?
+        };
         if needs_recovery {
+            if read_only {
+                // Provably unreachable given the refusals above — an independent guard so
+                // no later refactor can reach the writable repair branch from this mode.
+                return Err(StorageError::Corrupted(
+                    "read-only open refuses a file that would need repair".into(),
+                )
+                .into());
+            }
             let layout = header.layout();
             let region_max_pages = layout.full_region_layout().num_pages();
             let region_header_pages = layout.full_region_layout().get_header_pages();
@@ -308,11 +338,17 @@ impl TransactionalMemory {
         }
 
         let layout = header.layout();
-        assert_eq!(layout.len(), storage.raw_file_len()?);
+        if read_only {
+            // Already proven equal to initial_storage_len above; do not measure the
+            // backend a third time — a moving length must refuse, not assert.
+            assert_eq!(layout.len(), initial_storage_len);
+        } else {
+            assert_eq!(layout.len(), storage.raw_file_len()?);
+        }
         let region_size = layout.full_region_layout().len();
         let region_header_size = layout.full_region_layout().data_section().start;
         let version = header.primary_slot().version;
-        let state = InMemoryState::from_bytes(header, &storage, version)?;
+        let state = InMemoryState::from_bytes(header, &storage, version, read_only)?;
 
         assert!(page_size >= DB_HEADER_SIZE);
 
