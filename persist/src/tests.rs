@@ -1103,6 +1103,179 @@ fn lone_signature_tamper_floor_is_hybrid() {
     );
 }
 
+/// **DUPLICATE-ENROLLED-ROSTER ADVERSARIAL TEST (persist restart anchor).**
+///
+/// A genesis that enrols the SAME ML-DSA-65 key at two committee positions (the
+/// enrollment path checks only length alignment) must not let ONE holder of that
+/// PQ key fill both slots. The threat is the quantum one the hybrid bar exists
+/// for: an adversary who breaks ed25519 forges BOTH classical halves, but cannot
+/// forge the PQ half — so with a duplicate roster it reuses the ONE enrolled
+/// key's signature at both positions, and a 2-of-2 quantum bar collapses to
+/// 1-of-1. The whole-roster distinctness check refuses the duplicated roster
+/// outright, at every threshold.
+#[test]
+fn duplicate_enrolled_pq_roster_cannot_inflate_finalization_quorum() {
+    use crate::federation::QuorumSignature;
+    use dregg_federation::frost::MlDsaSigningKey;
+    use dregg_types::{SigningKey, sign};
+
+    // The ML-DSA derivations below go through `dregg-pq`, which aborts the process with no
+    // verified core installed — see `FaithfulNoteRootEnvelopeV1::verify_hybrid`.
+    dregg_pq_testkit::install_or_panic();
+
+    // Two DISTINCT classical committee members…
+    let sks: Vec<SigningKey> = (1u8..=2)
+        .map(|s| SigningKey::from_bytes(&[s; 32]))
+        .collect();
+    let committee: Vec<PublicKey> = sks.iter().map(|k| k.public_key()).collect();
+    // …and two DISTINCT enrolled ML-DSA keys (the honest roster).
+    let pqs: Vec<(dregg_federation::frost::MlDsaPublicKey, MlDsaSigningKey)> = (1u8..=2)
+        .map(|s| MlDsaSigningKey::from_seed(&[s; 32]))
+        .collect();
+    let honest_roster: Vec<dregg_federation::frost::MlDsaPublicKey> =
+        pqs.iter().map(|(pk, _)| pk.clone()).collect();
+
+    let block_id = [0xCD; 32];
+    let merkle_root = [0xAB; 32];
+    let vote_msg = dregg_types::finalization_vote_signing_message(&block_id, &merkle_root);
+
+    let root_with = |threshold: usize, quorum: Vec<QuorumSignature>| StoredAttestedRoot {
+        merkle_root,
+        note_tree_root: None,
+        nullifier_set_root: None,
+        height: 1,
+        timestamp: 1_700_000_000,
+        blocklace_block_id: Some(block_id),
+        finality_round: Some(1),
+        quorum_signatures: Vec::new(),
+        threshold_qc: None,
+        threshold,
+        federation_id: dregg_types::FederationId::PLACEHOLDER,
+        receipt_stream_root: None,
+        finalization_quorum: quorum,
+    };
+
+    // POSITIVE CONTROL: an honest DISTINCT roster, each member signing its OWN
+    // PQ key, verifies at threshold 2.
+    let honest: Vec<QuorumSignature> = sks
+        .iter()
+        .zip(pqs.iter())
+        .map(|(k, (pq_pk, pq_sk))| QuorumSignature {
+            voter: k.public_key(),
+            signature: sign(k, &vote_msg),
+            ml_dsa_pubkey: pq_pk.0.to_vec(),
+            pq_signature: pq_sk.sign(&vote_msg).expect("ml-dsa signing"),
+        })
+        .collect();
+    assert!(
+        root_with(2, honest).verify_finalization_quorum(&committee, &honest_roster),
+        "an honest DISTINCT enrolled roster must still verify at threshold 2"
+    );
+
+    // THE ATTACK: a roster that enrols member 0's ML-DSA key at BOTH positions.
+    // One REAL PQ signature (member 0's) sits at BOTH positions under two
+    // DISTINCT, valid classical halves — one PQ authority, two slots.
+    let dup_roster = vec![honest_roster[0].clone(), honest_roster[0].clone()];
+    let reused = pqs[0].1.sign(&vote_msg).expect("ml-dsa signing");
+    let aliased: Vec<QuorumSignature> = sks
+        .iter()
+        .map(|k| QuorumSignature {
+            voter: k.public_key(),
+            signature: sign(k, &vote_msg),
+            ml_dsa_pubkey: dup_roster[0].0.to_vec(),
+            pq_signature: reused.clone(),
+        })
+        .collect();
+    // Every half verifies on its own terms — this is not a corrupted or missing
+    // PQ half, it is ONE valid signature reused across two distinct voters…
+    assert_eq!(aliased[0].pq_signature, aliased[1].pq_signature);
+    for qs in &aliased {
+        assert!(qs.voter.verify(&vote_msg, &qs.signature));
+        assert!(dup_roster[0].verify(&vote_msg, &qs.pq_signature));
+    }
+    // …yet the quorum must REFUSE: one enrolled PQ authority is not two.
+    assert!(
+        !root_with(2, aliased.clone()).verify_finalization_quorum(&committee, &dup_roster),
+        "a duplicate enrolled ML-DSA roster must not inflate a 2-of-2 quantum bar to 1-of-1"
+    );
+
+    // The WHOLE roster is checked (not just the positions a quorum names), so a
+    // threshold-1 subset cannot launder the duplicate enrollment.
+    assert!(
+        !root_with(1, vec![aliased[0].clone()])
+            .verify_finalization_quorum(&committee, &dup_roster),
+        "a duplicate enrolled roster refuses even when only one slot is used (t=1)"
+    );
+}
+
+/// **VACUOUS-QUORUM TEST (persist restart anchor).** `threshold == 0` is not an
+/// authority. Without the guard, an EMPTY `finalization_quorum` satisfies
+/// `finalization_quorum.len() < threshold` (`0 < 0` is false) and the distinct
+/// count `0 >= 0` is true — so a stored root whose `threshold` was zeroed would
+/// re-anchor with NO committee signature at all. The sibling verifiers
+/// (`verify_signatures`, `frost::verify_pq_quorum_half`,
+/// `receipt::verify_hybrid_quorum_sigs`) all refuse it; so does this one now.
+#[test]
+fn zero_threshold_finalization_quorum_is_not_an_authority() {
+    use crate::federation::QuorumSignature;
+    use dregg_federation::frost::MlDsaSigningKey;
+    use dregg_types::{SigningKey, sign};
+
+    dregg_pq_testkit::install_or_panic();
+
+    let sks: Vec<SigningKey> = (1u8..=2)
+        .map(|s| SigningKey::from_bytes(&[s; 32]))
+        .collect();
+    let committee: Vec<PublicKey> = sks.iter().map(|k| k.public_key()).collect();
+    let pqs: Vec<(dregg_federation::frost::MlDsaPublicKey, MlDsaSigningKey)> = (1u8..=2)
+        .map(|s| MlDsaSigningKey::from_seed(&[s; 32]))
+        .collect();
+    let roster: Vec<dregg_federation::frost::MlDsaPublicKey> =
+        pqs.iter().map(|(pk, _)| pk.clone()).collect();
+
+    let block_id = [0xCD; 32];
+    let merkle_root = [0xAB; 32];
+    let vote_msg = dregg_types::finalization_vote_signing_message(&block_id, &merkle_root);
+
+    let root_with = |threshold: usize, quorum: Vec<QuorumSignature>| StoredAttestedRoot {
+        merkle_root,
+        note_tree_root: None,
+        nullifier_set_root: None,
+        height: 1,
+        timestamp: 1_700_000_000,
+        blocklace_block_id: Some(block_id),
+        finality_round: Some(1),
+        quorum_signatures: Vec::new(),
+        threshold_qc: None,
+        threshold,
+        federation_id: dregg_types::FederationId::PLACEHOLDER,
+        receipt_stream_root: None,
+        finalization_quorum: quorum,
+    };
+
+    // POSITIVE CONTROL: a genuine threshold-2 quorum still verifies.
+    let honest: Vec<QuorumSignature> = sks
+        .iter()
+        .zip(pqs.iter())
+        .map(|(k, (pq_pk, pq_sk))| QuorumSignature {
+            voter: k.public_key(),
+            signature: sign(k, &vote_msg),
+            ml_dsa_pubkey: pq_pk.0.to_vec(),
+            pq_signature: pq_sk.sign(&vote_msg).expect("ml-dsa signing"),
+        })
+        .collect();
+    assert!(
+        root_with(2, honest).verify_finalization_quorum(&committee, &roster),
+        "a genuine threshold-2 hybrid quorum must still verify"
+    );
+
+    // A ZERO threshold with an EMPTY quorum must NOT anchor.
+    assert!(
+        !root_with(0, Vec::new()).verify_finalization_quorum(&committee, &roster),
+        "threshold 0 is not an authority — an empty quorum must not anchor"
+    );
+}
+
 #[test]
 fn attested_root_store_and_load() {
     let store = new_store();

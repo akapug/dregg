@@ -190,6 +190,7 @@ impl StoredAttestedRoot {
     /// Returns `true` only when ALL of:
     ///   * this root is anchored to a blocklace block (`blocklace_block_id` is
     ///     `Some` — the vote preimage binds it);
+    ///   * `threshold` is non-zero (a vacuous quorum is not an authority);
     ///   * every signer is a committee member (at some index `i`) whose BOTH
     ///     signature halves — ed25519 AND ML-DSA-65 — verify over
     ///     [`dregg_types::finalization_vote_signing_message`] for THIS root's
@@ -201,15 +202,22 @@ impl StoredAttestedRoot {
     ///     (fail-closed hybrid: `classical ∧ pq`, PQ key pinned to genesis);
     ///   * the number of **distinct** fully-valid committee signers is
     ///     `>= threshold` (an equivocating/duplicated voter counts at most once,
-    ///     so a single member cannot inflate the quorum).
+    ///     so a single member cannot inflate the quorum);
+    ///   * the enrolled ML-DSA roster is pairwise **DISTINCT** — no two committee
+    ///     slots share ONE enrolled PQ authority (see the roster paragraph below).
     ///
     /// `ml_dsa_committee` is the genesis-ENROLLED ML-DSA-65 roster, aligned
     /// index-for-index with `committee`. A misaligned/empty roster
     /// (`ml_dsa_committee.len() != committee.len()`) cannot pin any signer's PQ
     /// half, so the whole re-verify REFUSES — never a silent ed25519-only
-    /// downgrade. This is what defeats a quantum adversary who breaks ed25519
-    /// alone: the PQ half must verify under the enrolled key it does not hold,
-    /// mirroring the FROST positional pin.
+    /// downgrade. The roster must ALSO be pairwise DISTINCT: a duplicate
+    /// enrollment (the same ML-DSA key at two positions — the genesis/enrollment
+    /// path checks only length alignment) would let ONE holder of that key fill
+    /// two PQ slots, so a quantum adversary who breaks ed25519 alone could reuse
+    /// the ONE enrolled key's PQ signature at both positions and collapse a
+    /// 2-of-2 quantum bar to 1-of-1. This is what defeats a quantum adversary who
+    /// breaks ed25519 alone: the PQ half must verify under the enrolled key it
+    /// does not hold, mirroring the FROST positional pin.
     ///
     /// This never accepts a root without a genuine >=threshold committee quorum
     /// over the exact finalized state — it closes the liveness fail-close
@@ -226,13 +234,42 @@ impl StoredAttestedRoot {
         let Some(block_id) = self.blocklace_block_id else {
             return false;
         };
-        if self.finalization_quorum.len() < self.threshold {
+        // A zero threshold is not an authority: `threshold == 0` makes the quorum
+        // vacuously satisfied by an EMPTY `finalization_quorum` (and by any
+        // roster), so an attacker who could set `threshold = 0` on a stored root
+        // would re-anchor without any committee signature. This is the same
+        // vacuous-quorum refusal `verify_signatures` (the sibling classical
+        // verifier) and the hybrid siblings `frost::verify_pq_quorum_half` /
+        // `receipt::verify_hybrid_quorum_sigs` already enforce.
+        if self.threshold == 0 || self.finalization_quorum.len() < self.threshold {
             return false;
         }
         // The enrolled PQ roster MUST align index-for-index with the ed25519
         // committee, or there is no enrolled key to pin each signer against —
         // fail closed (an EMPTY roster is included here: no silent downgrade).
         if ml_dsa_committee.len() != committee.len() {
+            return false;
+        }
+        // The enrolled ML-DSA roster must ALSO be pairwise DISTINCT: distinct
+        // classical committee slots cannot share ONE enrolled PQ authority.
+        // Without this, a roster that enrols the same ML-DSA key at two positions
+        // lets ONE holder of that key fill two PQ slots — a quantum adversary who
+        // breaks ed25519 forges both classical halves, reuses the ONE enrolled
+        // key's PQ signature at both positions, and a 2-of-2 quantum bar collapses
+        // to 1-of-1. This is the same distinct-roster contract
+        // `federation::frost::verify_pq_quorum_half` (task/4847) and
+        // `federation::receipt::verify_hybrid_quorum_sigs` (task/4721) enforce on
+        // the other hybrid carriers; the guard lives HERE, in the one verifier
+        // every live consensus caller routes through (`node::state`'s restart
+        // anchor and `exact_fnsp_v3_actor_authority`), rather than as a second
+        // copy at each call site. Checked over the WHOLE roster — including
+        // positions absent from this root's quorum — so a threshold-1 subset
+        // cannot launder a duplicate enrollment.
+        if ml_dsa_committee
+            .iter()
+            .enumerate()
+            .any(|(i, key)| ml_dsa_committee[..i].contains(key))
+        {
             return false;
         }
         let message = dregg_types::finalization_vote_signing_message(&block_id, &self.merkle_root);
