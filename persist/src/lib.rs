@@ -344,6 +344,8 @@ pub struct PersistentStore {
     /// `success: true`. Always compiled — one relaxed atomic load per config
     /// operation — and NEVER set in production.
     fail_config_io: std::sync::atomic::AtomicBool,
+    /// Incremental cache for [`Self::per_cell_receipt_heads_v1`].
+    per_cell_head_cache: per_cell_receipt_heads::PerCellReceiptHeadCache,
 }
 
 impl PersistentStore {
@@ -940,6 +942,7 @@ impl PersistentStore {
             db,
             fail_persist_block: std::sync::atomic::AtomicBool::new(false),
             fail_config_io: std::sync::atomic::AtomicBool::new(false),
+            per_cell_head_cache: Default::default(),
         };
         store.initialize_tables()?;
         store.enforce_canonical_state_schema_epoch()?;
@@ -982,6 +985,7 @@ impl PersistentStore {
             db,
             fail_persist_block: std::sync::atomic::AtomicBool::new(false),
             fail_config_io: std::sync::atomic::AtomicBool::new(false),
+            per_cell_head_cache: Default::default(),
         };
         store.initialize_tables()?;
         store.enforce_canonical_state_schema_epoch()?;
@@ -1012,6 +1016,7 @@ impl PersistentStore {
             db,
             fail_persist_block: std::sync::atomic::AtomicBool::new(false),
             fail_config_io: std::sync::atomic::AtomicBool::new(false),
+            per_cell_head_cache: Default::default(),
         };
         store.initialize_tables()?;
         store.enforce_canonical_state_schema_epoch()?;
