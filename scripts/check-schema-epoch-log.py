@@ -345,6 +345,21 @@ def self_test() -> int:
     """
     log0 = (ROOT / LOG_REL).read_text()
     persist0 = (ROOT / PERSIST_REL).read_text()
+
+    # ⚑ THE EPOCH IS READ FROM THE TREE, NEVER TYPED. These scenarios were written when the
+    # constant was 22 and hardcoded it, so the day it became 23 every injection matched 0 sites
+    # and the self-test aborted instead of testing — a self-test whose faults name an absolute
+    # number has a shelf life of one epoch. Derived, every scenario below stays meaningful at 24,
+    # 25, …, and the "goes backwards" case is built RELATIVE to the constant instead of picked to
+    # sit below a number that happened to be current once.
+    hits = CONST_RE.findall(persist0)
+    if len(hits) != 1:
+        raise SystemExit(
+            f"self-test: {PERSIST_REL} carries {len(hits)} definitions of the constant "
+            f"({hits or 'none'}); the scenarios derive their epoch from it. Repair the tree."
+        )
+    epoch = int(hits[0])
+    tag = f"| epoch:{epoch} |"
     bad = 0
 
     def scenario(name: str, log_text: str, persist_text: str, want_red: bool,
@@ -373,43 +388,72 @@ def self_test() -> int:
             )
         return text.replace(old, new, count)
 
+    def replace_last(text: str, old: str, new: str, what: str) -> str:
+        """Replace the LAST occurrence of `old`. The gate reads the LAST epoch-bearing row, so a
+        scenario about that row has to touch THAT row — and `str.replace` cannot say which."""
+        i = text.rfind(old)
+        if i < 0:
+            raise SystemExit(
+                f"self-test: {what}: injection `{old[:60]}` matches 0 sites. An injection that "
+                f"matches nothing proves nothing — repair the self-test rather than deleting the "
+                f"scenario."
+            )
+        return text[:i] + new + text[i + len(old):]
+
+    def append_table_row(text: str, header_prefix: str, row: str, what: str) -> str:
+        """Insert `row` as the LAST row of the table whose header starts with `header_prefix`.
+
+        A synthetic row is only legal at the END of its own table: the epoch column is in file
+        order and must never decrease, and the ledger is in commit order. So the new row has to
+        land inside the table it belongs to, not merely somewhere after its header.
+        """
+        lines = text.splitlines(keepends=True)
+        start = next((i for i, l in enumerate(lines) if l.startswith(header_prefix)), None)
+        if start is None:
+            raise SystemExit(
+                f"self-test: {what}: no table starting `{header_prefix}` to append to."
+            )
+        end = start + 1
+        while end < len(lines) and lines[end].startswith("|"):
+            end += 1
+        if end == start + 1:
+            raise SystemExit(f"self-test: {what}: table starting `{header_prefix}` has no rows.")
+        lines.insert(end, row if row.endswith("\n") else row + "\n")
+        return "".join(lines)
+
     print("check-schema-epoch-log --self-test (scratch copies; the working tree is untouched)")
 
     # 0 — CONTROL. The tree as it stands must be green, or every red below is meaningless.
     scenario("control (tree as-is)", log0, persist0, want_red=False)
 
-    # 1 — THE ORIGIN STORY: bump the constant, write no row.
+    # 1 — THE ORIGIN STORY: bump the constant, write no row. One past whatever the tree holds,
+    #     so the gap is always exactly the shape `6441705e8` had.
     bumped = mutate(persist0,
-                    "pub const CANONICAL_STATE_SCHEMA_EPOCH: u64 = 22;",
-                    "pub const CANONICAL_STATE_SCHEMA_EPOCH: u64 = 23;")
+                    f"pub const CANONICAL_STATE_SCHEMA_EPOCH: u64 = {epoch};",
+                    f"pub const CANONICAL_STATE_SCHEMA_EPOCH: u64 = {epoch + 1};")
     scenario("bump the constant, no row", log0, bumped, want_red=True, want_token="EPOCH-UNLOGGED")
 
     # 2 — ...then write the row. Green again, and that is what makes leg 2 a gate and not a wall.
-    rowed = log0.rstrip("\n") + (
-        "\n| 2026-08-02T00:00:00Z | selftest@scratch | schema-epoch (no emit) | " + "0" * 40
-        + " | " + "0" * 40 + " | no | SELF-TEST ROW | epoch:23 |\n"
-    )
-    rowed = mutate(
-        rowed,
-        "| 22 | `6342defa2` |",
-        "| 23 | `(uncommitted)` | 2026-08-02T00:00:00Z | self-test scratch row. |\n| 22 | `6342defa2` |",
-    )
-    # ledger rows are commit-ordered, so the new one goes last, not first
-    rowed = rowed.replace(
-        "| 23 | `(uncommitted)` | 2026-08-02T00:00:00Z | self-test scratch row. |\n| 22 | `6342defa2` |",
-        "| 22 | `6342defa2` |", 1)
-    rowed = re.sub(r"(\| 22 \| `6342defa2` \|[^\n]*\n)",
-                   r"\1| 23 | `(uncommitted)` | 2026-08-02T00:00:00Z | self-test scratch row. |\n",
-                   rowed, count=1)
+    #     The event row goes at the END of the event table (the epoch column must not decrease)
+    #     and the ledger row at the END of the ledger table (the ledger is commit-ordered).
+    rowed = append_table_row(
+        log0, EVENT_HEADER,
+        f"| 2026-08-02T00:00:00Z | selftest@scratch | schema-epoch (no emit) | {'0' * 40} | "
+        f"{'0' * 40} | no | SELF-TEST ROW | epoch:{epoch + 1} |",
+        "append the event row")
+    rowed = append_table_row(
+        rowed, LEDGER_HEADER,
+        f"| {epoch + 1} | `(uncommitted)` | 2026-08-02T00:00:00Z | self-test scratch row. |",
+        "append the ledger row")
     scenario("...then append the row + ledger row", rowed, bumped, want_red=False)
 
     # 3 — FAIL-CLOSED: truncate the last epoch cell. Unparseable must be RED, never green.
-    trunc = mutate(log0, "| epoch:22 |", "| epoch: |")
+    trunc = replace_last(log0, tag, "| epoch: |", "truncate the last epoch cell")
     scenario("truncate the last epoch cell", trunc, persist0, want_red=True,
              want_token="EVENT-ROW-EPOCH")
 
     # 4 — FAIL-CLOSED: corrupt it to something that parses as text but not as an epoch.
-    corrupt = mutate(log0, "| epoch:22 |", "| epoch:twenty-two |")
+    corrupt = replace_last(log0, tag, "| epoch:twenty-two |", "corrupt the last epoch cell")
     scenario("corrupt the last epoch cell", corrupt, persist0, want_red=True,
              want_token="EVENT-ROW-EPOCH")
 
@@ -432,13 +476,27 @@ def self_test() -> int:
         raise SystemExit("self-test: deleting the ledger matched nothing.")
     scenario("delete the ledger table", noledger, persist0, want_red=True)
 
-    # 8 — a ledger row removed: the bump is in git, the record no longer names it.
-    holed = mutate(log0, "| 20 | `a62c48c7b` |", "| 20x | `a62c48c7b` |")
-    scenario("drop epoch 20 from the ledger", holed, persist0, want_red=True,
+    # 8 — a ledger row removed: the bump is in git, the record no longer names it. The row is
+    #     DERIVED — the ledger's earliest, which is the constant's INTRODUCTION and so is always
+    #     in committed history — rather than a literal that has to be re-picked on every re-stamp.
+    first_ledger = re.search(r"^\| (\d+) \| `[0-9a-f]+` \|", log0, re.M)
+    if first_ledger is None:
+        raise SystemExit("self-test: no ledger row to hole out.")
+    holed = mutate(log0, first_ledger.group(0),
+                   first_ledger.group(0).replace(f"| {first_ledger.group(1)} |",
+                                                 f"| {first_ledger.group(1)}x |", 1))
+    scenario("drop the ledger's earliest row", holed, persist0, want_red=True,
              want_token="LEDGER-INCOMPLETE")
 
-    # 9 — the epoch column made non-monotone.
-    back = mutate(log0, "| epoch:21 |", "| epoch:5 |")
+    # 9 — the epoch column made non-monotone. The descent is CONSTRUCTED RELATIVE to the column:
+    #     rewind the last epoch-bearing row to one below the value before it. Picking an absolute
+    #     (the old `| epoch:21 |` → `| epoch:5 |`) only descends while the column happens to
+    #     straddle that number.
+    cells = [(m.group(0), int(m.group(1))) for m in re.finditer(r"\| epoch:(\d+) \|", log0)]
+    if len(cells) < 2:
+        raise SystemExit("self-test: fewer than two numeric epoch cells to reorder.")
+    back = replace_last(log0, cells[-1][0], f"| epoch:{min(cells[-2][1], cells[-1][1]) - 1} |",
+                        "make the column go backwards")
     scenario("make the column go backwards", back, persist0, want_red=True,
              want_token="EPOCH-GOES-BACKWARDS")
 
@@ -447,7 +505,7 @@ def self_test() -> int:
 
     # 11 — the constant deleted / duplicated.
     scenario("constant absent", log0, persist0.replace(
-        "pub const CANONICAL_STATE_SCHEMA_EPOCH: u64 = 22;", "// gone", 1),
+        f"pub const CANONICAL_STATE_SCHEMA_EPOCH: u64 = {epoch};", "// gone", 1),
         want_red=True, want_token="0 definitions")
 
     # 12 — ⚑ ANTI-VACUITY. Reconstruct the state at `6441705e8` — the bump this gate was written
@@ -455,19 +513,49 @@ def self_test() -> int:
     # decoration. The log is truncated to the rows that existed then (the MapAbsent row, which
     # said "Schema epoch UNCHANGED at 20", is last) and the ledger to the values git could see
     # at that commit; the constant is read from that commit's own `persist/src/lib.rs`.
+    #
+    # ⚑ WHICH ROWS THOSE ARE IS DERIVED FROM THAT COMMIT'S OWN CONSTANT, not listed. This filter
+    # used to name two timestamps and two ledger rows — the ones that happened to be last when it
+    # was written — so as the log grew the "reconstruction" kept rows written long after
+    # `6441705e8` and stopped testing the shape it is named for (the constant AHEAD of the log)
+    # while still reddening. `6441705e8` bumped the constant to `hist_epoch` and wrote no epoch
+    # cell, so every row the log carried then recorded a value BELOW it: an event row at or above
+    # `hist_epoch`, or a ledger row for one, was written after the bump this gate exists to catch.
     hist_persist = subprocess.run(
         ["git", "-C", str(ROOT), "show", "6441705e8:persist/src/lib.rs"],
         capture_output=True, text=True)
     if hist_persist.returncode != 0:
         raise SystemExit("self-test: cannot read persist/src/lib.rs at 6441705e8.")
+    hist_hits = CONST_RE.findall(hist_persist.stdout)
+    if len(hist_hits) != 1:
+        raise SystemExit(
+            f"self-test: persist/src/lib.rs at 6441705e8 carries {len(hist_hits)} definitions of "
+            f"the constant ({hist_hits or 'none'}); the reconstruction derives its cutoff from it."
+        )
+    hist_epoch = int(hist_hits[0])
+
+    def post_bump(cell: str) -> bool:
+        m = EPOCH_CELL_RE.match(cell)
+        return bool(m and m.group(1).isdigit() and int(m.group(1)) >= hist_epoch)
+
     keep = []
     for l in log0.splitlines():
-        if l.startswith("| 2026-08-01T13:20:41Z") or l.startswith("| 2026-08-01T20:40:00Z"):
-            continue                                   # written AFTER 6441705e8
-        if l.startswith("| 21 | `6441705e8`") or l.startswith("| 22 | `6342defa2`"):
-            continue                                   # the ledger did not exist yet
+        ledger_row = re.match(r"^\| (\d+) \| `[0-9a-f]+` \|", l)
+        if ledger_row is not None:
+            if int(ledger_row.group(1)) >= hist_epoch:
+                continue                               # a value the constant took after the bump
+        elif l.startswith("| 20"):
+            cells = [c.strip() for c in re.split(r"(?<!\\)\|", l)]
+            if cells and cells[0] == "":
+                cells = cells[1:]
+            if cells and cells[-1] == "":
+                cells = cells[:-1]
+            if cells and post_bump(cells[-1]):
+                continue                               # an event row a successor of the bump added
         keep.append(l)
     hist_log = "\n".join(keep) + "\n"
+    if hist_log == log0:
+        raise SystemExit("self-test: the 6441705e8 reconstruction dropped nothing.")
     scenario("⚑ reconstructed state at 6441705e8 (the bump that motivated this gate)",
              hist_log, hist_persist.stdout, want_red=True, want_token="EPOCH-UNLOGGED",
              as_of="6441705e8")
