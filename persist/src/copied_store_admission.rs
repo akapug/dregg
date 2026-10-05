@@ -969,6 +969,13 @@ mod tests {
                         .unwrap();
                 }
                 write.commit().unwrap();
+                // Same contract on the authoritative store: a malformed anchor
+                // refuses the expectation there too, not just on the copy.
+                let err = store.faithful_note_root_expectation().unwrap_err();
+                assert!(
+                    matches!(err, StoreError::Integrity(_)),
+                    "{name}: the authoritative store must also refuse a malformed anchor: {err}"
+                );
             }
             std::fs::copy(&live, &copy).unwrap();
             let before = file_bytes(&copy);
@@ -1225,6 +1232,59 @@ mod tests {
             matches!(err, CopiedStoreAdmissionError::Layout(_)),
             "a FIFO must refuse as a layout error, not block: {err}"
         );
+    }
+
+    #[test]
+    fn max_committed_transaction_id_opens_without_wrapping() {
+        // The read-only constructor registers the COMMITTED transaction id,
+        // not a future write id — a clean v2 image whose committed id is
+        // u64::MAX must open instead of wrapping (release) or panicking
+        // (debug) on next(). Build that image by patching the primary commit
+        // slot and rewriting its checksum — self-verifying: the recomputed
+        // checksum over the untouched bytes must equal the stored one.
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("live.redb");
+        let copy = dir.path().join("copy.redb");
+        let fixture = write_history_store(&live);
+        std::fs::copy(&live, &copy).unwrap();
+        let mut bytes = file_bytes(&copy);
+
+        let primary = usize::from(bytes[GOD_BYTE_OFFSET] & PRIMARY_BIT != 0);
+        let slot = TRANSACTION_0_OFFSET + primary * TRANSACTION_SLOT_BYTES;
+        const TXID_OFFSET: usize = 104; // FREED_ROOT_OFFSET + BtreeHeader(32)
+        const SLOT_CHECKSUM_OFFSET: usize = 112; // TRANSACTION_SLOT_BYTES - 16
+        let stored = u128::from_le_bytes(
+            bytes[slot + SLOT_CHECKSUM_OFFSET..slot + TRANSACTION_SLOT_BYTES]
+                .try_into()
+                .unwrap(),
+        );
+        assert_eq!(
+            xxhash_rust::xxh3::xxh3_128(&bytes[slot..slot + SLOT_CHECKSUM_OFFSET]),
+            stored,
+            "fixture assumption: the commit slot checksum is xxh3-128 of the first 112 bytes"
+        );
+        bytes[slot + TXID_OFFSET..slot + TXID_OFFSET + 8]
+            .copy_from_slice(&u64::MAX.to_le_bytes());
+        let checksum = xxhash_rust::xxh3::xxh3_128(&bytes[slot..slot + SLOT_CHECKSUM_OFFSET]);
+        bytes[slot + SLOT_CHECKSUM_OFFSET..slot + TRANSACTION_SLOT_BYTES]
+            .copy_from_slice(&checksum.to_le_bytes());
+        std::fs::write(&copy, &bytes).unwrap();
+        let before = file_bytes(&copy);
+
+        let reader = CopiedStoreReader::open(&copy)
+            .expect("a clean v2 image with committed txid u64::MAX must open");
+        let history = reader
+            .admit_faithful_note_root_history_hybrid(
+                &fixture.anchor,
+                &fixture.committee,
+                &fixture.ml_dsa_committee,
+                fixture.threshold,
+                fixture.expected_head,
+            )
+            .unwrap();
+        assert_eq!(history.envelopes().len(), 1);
+        reader.close().unwrap();
+        assert_eq!(file_bytes(&copy), before);
     }
 
     #[test]

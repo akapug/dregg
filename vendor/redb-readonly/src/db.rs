@@ -319,10 +319,14 @@ impl ReadOnlyDatabase {
         let mem = Arc::new(TransactionalMemory::new_read_only(
             Box::new(backend), PAGE_SIZE, Builder::new().read_cache_size_bytes,
         )?);
-        let next_transaction_id = mem.get_last_committed_transaction_id()?.next();
+        // Read-only registration tracks the COMMITTED transaction id, not the
+        // next write id — a write transaction can never start on this handle,
+        // so the counter is dead state, and computing `.next()` on a committed
+        // id of u64::MAX would wrap (or panic in debug builds).
+        let last_committed = mem.get_last_committed_transaction_id()?;
         Ok(Self {
             mem,
-            transaction_tracker: Arc::new(TransactionTracker::new(next_transaction_id)),
+            transaction_tracker: Arc::new(TransactionTracker::new(last_committed)),
         })
     }
 

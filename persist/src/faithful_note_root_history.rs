@@ -756,15 +756,20 @@ impl PersistentStore {
         let read = self.db.begin_read()?;
         let table = read.open_table(tables::FAITHFUL_NOTE_ROOT_HISTORY)?;
         let metadata = read.open_table(tables::METADATA_BYTES)?;
-        let anchor_present = metadata
+        let anchor = metadata
             .get(tables::META_FAITHFUL_NOTE_ROOT_ANCHOR)?
-            .is_some();
+            .map(|guard| guard.value().to_vec());
         let seal = metadata
             .get(tables::META_FAITHFUL_NOTE_ROOT_HEAD)?
             .map(|guard| guard.value().to_vec());
-        match (anchor_present, seal) {
-            (false, None) if table.is_empty()? => Ok(None),
-            (true, Some(seal)) => {
+        match (anchor, seal) {
+            (None, None) if table.is_empty()? => Ok(None),
+            (Some(anchor), Some(seal)) => {
+                // Intact presence is not evidence: the stored anchor bytes must
+                // decode through the same gate the replay applies, or this
+                // surface reports a valid expectation over a malformed/foreign
+                // anchor. Same contract as the copied-store reader.
+                FaithfulNoteRootAnchorV1::from_bytes(&anchor).map_err(integrity)?;
                 let seal = HeadSealV1::from_bytes(&seal).map_err(integrity)?;
                 if table.len()? != seal.records {
                     return Err(integrity(FaithfulNoteRootHistoryError::SnapshotMismatch(
