@@ -91,7 +91,8 @@ pub use executor_consensus_state::{
     reactive_nullifier_commitment, reactive_registry_commitment,
 };
 pub use faithful_note_root_history::{
-    CanonicalFaithfulRoot, FaithfulNoteRootAnchorV1, FaithfulNoteRootEnvelopeV1,
+    AuthenticatedFaithfulNoteRootPrefix, CanonicalFaithfulRoot, FaithfulNoteRootAnchorV1,
+    FaithfulNoteRootAuditSealV1, FaithfulNoteRootEnvelopeV1,
     FaithfulNoteRootExpectationV1, FaithfulNoteRootHistoryError, FaithfulNoteRootHistoryV1,
     FaithfulNoteRootRecordV1, plan_faithful_note_root_transition_v1,
 };

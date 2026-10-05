@@ -233,6 +233,10 @@ pub const META_FAITHFUL_NOTE_ROOT_ANCHOR: &str = "faithful_note_root_anchor_v1";
 /// Transactionally updated exact count/head seal for truncation detection.
 pub const META_FAITHFUL_NOTE_ROOT_HEAD: &str = "faithful_note_root_head_v1";
 
+/// Quorum-signed digest of a history prefix whose every row was authenticated
+/// (`FaithfulNoteRootAuditSealV1`); lets a replay skip re-checking that prefix.
+pub const META_FAITHFUL_NOTE_ROOT_AUDIT: &str = "faithful_note_root_audit_v1";
+
 /// Key for the durable RECEIPT-INDEX HEAD anchor (stored in METADATA_BYTES).
 ///
 /// The served `/api/receipts/index/*` non-omission MMR is projected from the
