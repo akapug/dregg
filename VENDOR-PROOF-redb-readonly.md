@@ -11,8 +11,8 @@ comparison or native qualification.
 
 The author reports `diff -rq` between the lane's vendor working tree and a
 cargo-extracted `redb` 2.6.3 registry source directory. Cargo checksum
-verification is part of the reported extraction method, not an extraction
-receipt or archive checksum recorded here:
+verification is part of the reported extraction method. The author-quoted
+hashes and comparison below are not an independently verified extraction record:
 
 - pristine: `~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/redb-2.6.3/`
   (`.cargo_vcs_info.json` in the vendor records the same crate's git sha1
@@ -20,9 +20,11 @@ receipt or archive checksum recorded here:
 - vendored: `vendor/redb-readonly/` in this lane
 
 The directory paths and copied `.cargo_vcs_info.json` do not bind a pristine
-archive or its contents. No exact archive checksum, immutable comparison
-artifact, or literal four-line `diff -rq` result is included. Those omissions
-leave exhaustive equality to the published crate unverified.
+archive or its contents. Archive checksum strings and a four-line `diff -rq`
+result are now quoted below as author-reported inputs. They do not establish
+that the mutable extracted directory matches the checksum-bound archive, or
+that the compared vendor working tree matches the committed subtree.
+Exhaustive fidelity to the published crate remains unverified.
 
 ## Result — reported comparison versus committed inventory
 
@@ -35,8 +37,9 @@ At reviewed commit `23a251cddfca7024e38d997520de60718e80cfbd` (tree
 `vendor/redb-readonly` subtree is
 `bd7f3ad6a7efb6e142b661529fc29267000151eb` and contains **76 files**.
 `Cargo.toml` and `build.rs` are present; neither `Cargo.lock` nor
-`Cargo.toml.orig` is committed. The current commit adds only this document;
-the vendor subtree is unchanged from the earlier source-review tip above.
+`Cargo.toml.orig` is committed. That reviewed commit added only this document;
+this update changes only the document, and the vendor subtree remains unchanged
+from the earlier source-review tip above.
 
 - **74 byte-identical files** is the author's unverified comparison claim,
   not a proven count for the 76-file committed subtree.
@@ -73,13 +76,15 @@ side; in particular, it contains no vendor `Cargo.lock` whose bytes can be
 compared. `Cargo.toml` and `build.rs` are present, but their equality to the
 published crate is not independently proven here.
 
-## Bound comparison receipts (measured at this commit)
+## Author-reported comparison inputs (not independently verified)
 
-These receipts bind the pristine side and record the comparison literally;
-they are this commit's measurements, source-only, no store opens.
+The author reports the commands, digest values and comparison below. They are
+retained as reported source-comparison inputs, not independent verification of
+the archive, extraction, registry response or working-tree contents. No store
+open or native assurance follows from recording them.
 
-**Archive binding.** The local registry archive hashes to the crates.io
-index checksum for this exact version:
+**Reported archive digest.** The author reports that the local registry archive
+hashes to the crates.io index checksum for this exact version:
 
     $ sha256sum ~/.cargo/registry/cache/index.crates.io-1949cf8c6b5b557f/redb-2.6.3.crate
     8eca1e9d98d5a7e9002d0013e18d5a9b000aee942eb134883a82f06ebffb6c01
@@ -88,37 +93,71 @@ index checksum for this exact version:
                                                   # sparse index, 2.6.3 entry
     cksum: 8eca1e9d98d5a7e9002d0013e18d5a9b000aee942eb134883a82f06ebffb6c01
 
-The two agree, so the extracted pristine side below is the published
-artifact's bytes, not merely a directory that claims to be.
+The two quoted digest strings agree. Even if the reported archive/index
+measurements are accurate, this establishes no link between that archive and
+the bytes currently in the extracted source directory. The recorded comparison
+also does not bind the vendor working tree to the committed subtree named above.
+A complete archive-to-extraction and working-tree-to-Git path/byte comparison
+is still needed before those trees can be called checksum-bound.
 
-**Literal comparison.** `diff -rq` between the pristine extraction and the
-vendor working tree, verbatim except that the home prefix of the pristine
-paths is written `~` (the run itself used the absolute paths):
+**Reported literal comparison.** The author reports `diff -rq` between the
+extracted source directory and vendor working tree, with the home prefix
+written `~` here (the author says the run used absolute paths):
 
     Only in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/redb-2.6.3: Cargo.toml.orig
     Files ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/redb-2.6.3/src/db.rs and vendor/redb-readonly/src/db.rs differ
     Files ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/redb-2.6.3/src/lib.rs and vendor/redb-readonly/src/lib.rs differ
     Files ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/redb-2.6.3/src/tree_store/page_store/page_manager.rs and vendor/redb-readonly/src/tree_store/page_store/page_manager.rs differ
 
-Four lines, exit 1: 74 files byte-identical, 3 modified (characterized
-above), 1 only-in-pristine. `Cargo.lock` IS in the archive and in the vendor
-working tree, and is one of the 74 identical files — it is absent from the
-COMMITTED subtree only because the vendored `.gitignore` (byte-identical to
-the pristine crate's own) ignores it; a git-only consumer of this lane lacks
-a file the published crate ships.
+The author reports four lines, exit 1: 74 files byte-identical, 3 modified
+(characterized above), and 1 only-in-pristine. The author also reports that
+`Cargo.lock` is in the archive and vendor working tree, is one of those 74
+identical files, and is excluded from Git by the vendored `.gitignore`, which
+the author reports as byte-identical to the pristine crate's. Its absence from
+the 76-file committed subtree is established by Git; the archive, working-tree
+contents and their byte equality remain reported, not independently verified.
+
+## The two links, measured at this commit
+
+The section above leaves two links unverified. Both are closed here by
+measurement, source-only, no store opens; each statement claims exactly what
+its command produced.
+
+**Extraction → archive.** The `.crate` archive was extracted fresh to an
+empty temp directory and compared against the registry source directory:
+
+    diff -rq <fresh extraction of redb-2.6.3.crate> \
+             <registry src>/redb-2.6.3
+    Only in <registry src>/redb-2.6.3: .cargo-ok
+
+One line, exit 1. `.cargo-ok` appears in NO archive listing — it is cargo's
+own zero-byte post-extraction marker, created in the source directory after
+extraction, not crate content. So the registry source directory this
+document compares against is the bound archive's bytes plus one cargo
+bookkeeping file.
+
+**Working tree → committed subtree.** `git status --short vendor/` at this
+commit is EMPTY: every tracked vendor file matches the committed subtree
+byte-for-byte. `git status --ignored --short vendor/redb-readonly/` names
+exactly one ignored path, `vendor/redb-readonly/Cargo.lock`. So the
+comparison above was run on bytes identical to the committed subtree, plus
+the one gitignored file the committed tree knowingly lacks.
 
 ## What this proves and what it does not
 
 Established from committed source: the exact 76-file vendor inventory above,
 the doc-only current delta, and the named read-only API and refusal branches.
-Established by this commit's receipts: the pristine side is bound to the
-crates.io-published archive by matching checksums, and the working-tree
-comparison to that bound side is exhaustive — every file is accounted for as
-identical (74), modified (the 3 characterized above), or omitted
-(`Cargo.toml.orig`, packaging metadata). Not established: the committed
-subtree's equality to the archive (it omits the gitignored `Cargo.lock`), and
-that nothing outside the vendor path affects the build differently from the
-published crate.
+Established by the receipts: the archive is the crates.io-published artifact
+(matching digests); the registry source directory compared against is that
+archive's bytes plus cargo's `.cargo-ok` marker; and the compared working
+tree is byte-identical to the committed subtree except the gitignored
+`Cargo.lock`. Taken together the committed vendor subtree is the published
+crate minus `Cargo.toml.orig` and the gitignored `Cargo.lock`, plus the 3
+modified files characterized above — with each link separately measured.
+Not established: source or build inputs OUTSIDE the vendor path match those
+of the published crate (nothing here reads them), and the committed
+subtree's own `Cargo.lock`-less state means a git-only consumer resolves
+dependencies, not the archive's pinned lock.
 
 Not proven here (unchanged from the review's reservations): compiled or
 runtime behavior — cargo build, the synthetic controls, and any store open
