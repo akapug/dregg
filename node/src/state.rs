@@ -68,18 +68,48 @@ fn restore_and_verify_faithful_note_tree(
 
     // The live history is node-author authenticated: reconstruct that exact
     // local hybrid identity and replay every row, so a checksum-preserving row
-    // edit or deleted suffix refuses before the node serves.
+    // edit or deleted suffix refuses before the node serves.  Rows covered by
+    // this identity's audit seal from an earlier boot are authenticated by that
+    // one seal (their exact bytes must still hash to its digest); the rest are
+    // checked one by one, and the seal is then extended over them.
     let seed = cclerk.gossip_signing_key().to_bytes();
     let local_ed = cclerk.public_key();
-    let (local_pq, _) = dregg_federation::frost::MlDsaSigningKey::from_seed(&seed);
-    store
-        .load_faithful_note_root_history_hybrid(
+    let (local_pq, local_pq_signer) = dregg_federation::frost::MlDsaSigningKey::from_seed(&seed);
+    let started = std::time::Instant::now();
+    let (_, prefix) = store
+        .load_faithful_note_root_history_hybrid_audited(
             std::slice::from_ref(&local_ed),
             std::slice::from_ref(&local_pq),
             1,
             expected,
         )
         .map_err(|e| format!("faithful note-root authenticated replay refused: {e}"))?;
+    tracing::info!(
+        records = prefix.records(),
+        sealed = prefix.sealed_records(),
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "faithful note-root history authenticated"
+    );
+    if prefix.sealed_records() < prefix.records() {
+        let statement = prefix.statement();
+        let quorum = local_pq_signer.sign(statement).map(|pq_signature| {
+            vec![dregg_types::HybridQuorumSig {
+                pubkey: local_ed,
+                signature: dregg_types::sign(
+                    &dregg_types::SigningKey::from_bytes(&seed),
+                    statement,
+                ),
+                ml_dsa_pubkey: local_pq.0.to_vec(),
+                pq_signature,
+            }]
+        });
+        // Best effort: without a fresh seal the next boot checks more rows.
+        match quorum.map(|quorum| store.store_faithful_note_root_audit_seal(&prefix, quorum)) {
+            Some(Ok(())) => {}
+            Some(Err(e)) => tracing::warn!(error = %e, "faithful note-root audit seal not stored"),
+            None => tracing::warn!("faithful note-root audit seal not signed"),
+        }
+    }
     Ok(tree)
 }
 
