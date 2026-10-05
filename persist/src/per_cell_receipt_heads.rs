@@ -453,8 +453,9 @@ impl Drop for RewriteGuard<'_> {
 
 /// Advance `cached` to `cursor` by replaying only the appended records, with
 /// the same per-record checks as [`reconstruct_projection`], then require the
-/// durable `current` table to agree on size and on every advanced cell.
-/// `Ok(false)` means "not provably an append": the caller rebuilds in full.
+/// durable `current` table to equal the cached projection exactly — one
+/// O(cells) pass over the table, not a replay of history. `Ok(false)` means
+/// "not provably an append": the caller rebuilds in full.
 fn advance_cached_projection(
     read: &ReadTransaction,
     cached: &mut CachedProjection,
@@ -476,7 +477,6 @@ fn advance_cached_projection(
     if log.len()? != live {
         return Ok(false);
     }
-    let mut advanced = BTreeSet::new();
     let mut expected = cached.cursor;
     for entry in log.range(cached.cursor..cursor)? {
         let (key, bytes) =
@@ -491,7 +491,6 @@ fn advance_cached_projection(
         };
         for cell in record_participants(&record)? {
             cached.current.insert(cell, head);
-            advanced.insert(cell);
         }
         bounded_len(
             u64::try_from(cached.current.len()).unwrap_or(u64::MAX),
@@ -507,11 +506,10 @@ fn advance_cached_projection(
     if usize::try_from(durable.len()?).ok() != Some(cached.current.len()) {
         return Ok(false);
     }
-    for cell in &advanced {
-        let row = durable
-            .get(cell)?
-            .map(|encoded| decode_head(encoded.value()));
-        if row.as_ref() != cached.current.get(cell) {
+    for entry in durable.iter()? {
+        let (cell, encoded) =
+            entry.map_err(|error: redb::StorageError| StoreError::Database(error.to_string()))?;
+        if cached.current.get(cell.value()) != Some(&decode_head(encoded.value())) {
             return Ok(false);
         }
     }
@@ -522,12 +520,17 @@ fn advance_cached_projection(
 impl PersistentStore {
     /// The validated `current` per-cell receipt heads, sorted by cell.
     ///
-    /// Equal to `load_per_cell_receipt_head_recovery_v1()?.current` and refusing
-    /// whenever that refuses, but a call after only fresh commits replays just
-    /// the records appended since the previous call instead of decoding the
-    /// whole live commit log. The first call, and any call after a compaction,
-    /// truncation, index rebuild or failed incremental check, runs the full
-    /// validation.
+    /// Equal to `load_per_cell_receipt_head_recovery_v1()?.current` when it
+    /// succeeds, but a call after only fresh commits replays just the records
+    /// appended since the previous call instead of decoding the whole live
+    /// commit log, so it detects fewer corruptions than the full load. The
+    /// incremental check still compares the durable `current` table against
+    /// the cached projection in full — a forged, extra or missing row for any
+    /// cell falls back to the full validation and refuses — while corruption
+    /// of an OLD live commit-log record is detected only by the full path,
+    /// which re-decodes every record. The first call, and any call after a
+    /// compaction, truncation, index rebuild or failed incremental check,
+    /// runs the full validation.
     pub fn per_cell_receipt_heads_v1(&self) -> Result<Vec<DurablePerCellReceiptHead>> {
         let cache = &self.per_cell_head_cache;
         let mut slot = cache.projection.lock().unwrap_or_else(|poisoned| {
@@ -1032,6 +1035,38 @@ mod tests {
         overwrite_current_row(&store, b.id(), forged);
         assert!(full_current(&store).is_err());
         assert!(store.per_cell_receipt_heads_v1().is_err());
+    }
+
+    /// A forged durable `current` row for a cell NOT advanced since the cache
+    /// was warmed falls back to the full rebuild and refuses exactly as it
+    /// does; the incremental check must not accept it just because the forged
+    /// cell was not touched by the appended records.
+    #[test]
+    fn incremental_heads_fall_back_on_a_forged_row_for_a_non_advanced_cell() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        let a = cell(0x83);
+        let b = cell(0x84);
+        store
+            .commit_finalized_turn(
+                0,
+                &record(0, 0x94, vec![a.clone(), b.clone()], vec![]),
+            )
+            .unwrap();
+        store.per_cell_receipt_heads_v1().unwrap();
+        // Commit 1 advances only `a`, so `b` is not advanced since the warm.
+        store
+            .commit_finalized_turn(1, &record(1, 0x95, vec![a.clone()], vec![]))
+            .unwrap();
+        let forged = HeadValue {
+            writer_ordinal: 0,
+            receipt_hash: [0xEF; 32],
+        };
+        overwrite_current_row(&store, b.id(), forged);
+        assert!(full_current(&store).is_err());
+        let full = full_current(&store).unwrap_err().to_string();
+        let incremental = store.per_cell_receipt_heads_v1().unwrap_err().to_string();
+        assert_eq!(incremental, full);
+        assert!(incremental.contains("disagrees with compacted baseline plus live suffix"));
     }
 
     /// The warm path decodes only appended records: an undecodable OLD live
