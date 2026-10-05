@@ -472,4 +472,154 @@ mod tests {
         let on = ProvePool::spawn_with(state, config(&[("DREGG_PROVE_WORKERS", "1")]));
         assert!(on.is_enabled());
     }
+
+    // ── MEASURED: the thread width a real proof actually runs at ───────────────
+    //
+    // The complaint behind this file (helm task/3851) is that a signed send bursts
+    // across every logical CPU. The arms below run the SAME real proof the commit
+    // path enqueues — `prove_and_verify_finalized_turn` on a self-sovereign transfer
+    // — and COUNT THE THREADS IT CREATES from `/proc/self/task`, on the global rayon
+    // pool and inside the dedicated pool. Measured, not asserted: the number comes
+    // from the OS, not from the knob that configured it.
+
+    /// The exact proof the async commit path enqueues. Panics if it does not prove
+    /// and self-verify, so a green run is also evidence the bound did not break the
+    /// proof.
+    #[cfg(target_os = "linux")]
+    fn prove_a_real_transfer_turn() {
+        let bob = CellId::from_bytes([0xB2; 32]);
+        let pre_balance: u64 = 1000;
+        let pre_nonce: u64 = 0;
+        let before_cell = dregg_cell::Cell::with_balance([0xA1; 32], [0u8; 32], pre_balance as i64);
+        let alice = before_cell.id();
+        let amount: u64 = 100;
+        let mut after_cell = before_cell.clone();
+        after_cell.state.set_balance((pre_balance - amount) as i64);
+        let effects = vec![dregg_turn::Effect::Transfer {
+            from: alice,
+            to: bob,
+            amount,
+        }];
+        let turn_hash = [0x11u8; 32];
+        let receipt_hashes = [[0x11u8; 32]];
+        let rotation = crate::turn_proving::rotation_witness_for_self_sovereign(
+            pre_balance,
+            pre_nonce,
+            &before_cell,
+            &after_cell,
+            &receipt_hashes,
+            &effects,
+        );
+        let proven = crate::turn_proving::prove_and_verify_finalized_turn(
+            &alice,
+            pre_balance,
+            pre_nonce,
+            &effects,
+            turn_hash,
+            rotation,
+        )
+        .expect("a self-sovereign transfer turn proves and self-verifies");
+        assert!(
+            !proven.proof_bytes().is_empty(),
+            "the proof is real, non-empty wire bytes"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    fn live_thread_count() -> usize {
+        std::fs::read_dir("/proc/self/task")
+            .map(|d| d.count())
+            .unwrap_or(0)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn live_threads_named(prefix: &str) -> usize {
+        let Ok(entries) = std::fs::read_dir("/proc/self/task") else {
+            return 0;
+        };
+        entries
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                std::fs::read_to_string(e.path().join("comm"))
+                    .map(|c| c.trim_start().starts_with(prefix))
+                    .unwrap_or(false)
+            })
+            .count()
+    }
+
+    /// `(baseline, peak)` of `sample()` over a 1 ms sampler while `f` runs. The
+    /// baseline is read once the sampler thread is up, so the sampler is the only
+    /// thread this harness adds and it cancels out of the delta.
+    #[cfg(target_os = "linux")]
+    fn peak_while<F: Fn() -> usize + Send + Sync + 'static>(
+        f: impl FnOnce(),
+        sample: F,
+    ) -> (usize, usize) {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let sample = Arc::new(sample);
+        let stop = Arc::new(AtomicBool::new(false));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let (s, p, sm) = (Arc::clone(&stop), Arc::clone(&peak), Arc::clone(&sample));
+        let sampler = std::thread::Builder::new()
+            .name("thread-sampler".into())
+            .spawn(move || {
+                while !s.load(Ordering::Relaxed) {
+                    p.fetch_max(sm(), Ordering::Relaxed);
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            })
+            .expect("spawn sampler");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let base = sample();
+        f();
+        stop.store(true, Ordering::Relaxed);
+        sampler.join().expect("join sampler");
+        (base, peak.load(Ordering::Relaxed))
+    }
+
+    /// BEFORE vs AFTER on the SAME real proof. Before, the proof runs on the
+    /// process-global rayon pool (one thread per logical CPU — the 24-thread burst
+    /// of the diagnosis). After, it runs inside the dedicated pool of `N` threads,
+    /// and every thread it uses is named `dregg-prove-*`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_real_proof_runs_on_n_prover_threads_not_the_global_pools_every_cpu() {
+        let cpus = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+        let global = std::env::var("RAYON_NUM_THREADS")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .unwrap_or(cpus);
+
+        // BEFORE: no dedicated pool — the proof fans out across the global pool.
+        let (base, peak) = peak_while(prove_a_real_transfer_turn, live_thread_count);
+        let unbounded = peak - base;
+
+        // AFTER: the same proof, inside the dedicated pool of N threads. The pool
+        // is built BEFORE the baseline, so the count is the pool's width, not a delta.
+        const N: usize = 2;
+        let pool = prover_threads(N).expect("dedicated prover pool");
+        let (_base, named) = peak_while(
+            || pool.install(prove_a_real_transfer_turn),
+            || live_threads_named("dregg-prove-"),
+        );
+
+        println!(
+            "MEASURED real-proof thread width: unbounded spawned {unbounded} threads \
+             (global rayon pool = {global}, logical CPUs = {cpus}); bounded ({N}) spawned \
+             {named} threads named dregg-prove-*"
+        );
+
+        assert!(
+            unbounded >= global,
+            "the unbounded proof must fan out across the global pool: spawned {unbounded}, pool {global}"
+        );
+        assert_eq!(
+            named, N,
+            "a proof inside prover_threads({N}) must run on exactly {N} threads"
+        );
+    }
 }
