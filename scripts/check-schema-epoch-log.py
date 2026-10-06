@@ -31,6 +31,15 @@ WHAT IT CHECKS (each leg is a separate finding; none of them is a threshold that
       constant (that is the state of a bump commit being authored right now).
   L5  FLOORS. A reader that harvests nothing must not read as clean.
   L6  the in-crate twin still exists and still names both the constant and this log.
+  L7  the `when (UTC)` CELLS, against the commits the rows name. Every event row (its `repo
+      HEAD` cell) and ledger row (its `set by` cell) that resolves to a commit of this repo is
+      read against that commit's two clocks: its TRUE UTC and the local wall clock it was
+      authored under, the commit's own recorded offset. A cell equal to the local wall clock to
+      the second, on a commit that carries a non-UTC offset, is WHEN-UTC-DRIFT — a row stamped
+      with its author's clock instead of UTC. A cell equal to the TRUE UTC is clean; a cell
+      matching neither is commit-lag, hand-rounding or a delayed stamp — counted and reported,
+      never a finding. A sha that does not resolve is counted and skipped; a cell this leg
+      cannot check must never fail the checker.
 
 ⚠ FAIL-CLOSED IS THE POINT. A log with no parseable `epoch:N` row is a FAILURE, not a pass —
 otherwise the first malformed row silently disables the gate, which is a class this repo has
@@ -57,6 +66,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -72,25 +82,32 @@ SCOPE_ANSWERS = (
     "well-formed epoch cell with the LAST numeric one equal to that constant and the column "
     "never decreasing, a strictly-increasing ledger whose tail equals it and which has a row for "
     "every value `git log -p -- persist/src/lib.rs` shows the constant ever held, the row/ledger "
-    "harvest above its floors, and the in-crate twin schema_epoch_log_row still present?"
+    "harvest above its floors, the in-crate twin schema_epoch_log_row still present, and every "
+    "resolvable `when (UTC)` cell — each event row's `repo HEAD` and each ledger row's `set by` "
+    "named against that commit's own two clocks — a row stamped with its author's local wall "
+    "clock rather than UTC to be refused?"
 )
 SCOPE_DOES_NOT_ANSWER = (
     "whether any epoch bump was CORRECT, or whether what a row SAYS is true. Every comparison is "
     "on the numbers and the table shape; the prose cell naming what re-genesised and what now "
     "refuses to load is never read, so a row saying nothing changed satisfies this gate as fully "
     "as an accurate one. It also does not check that the persisted store or any descriptor "
-    "actually moved with the epoch — only that the constant and the record agree."
+    "actually moved with the epoch — only that the constant and the record agree. Nor does it "
+    "check every `when (UTC)` cell: leg 7 reads only the cells whose named commit resolves in "
+    "this repo; a sha that does not resolve is counted and skipped, never a failure."
 )
 SCOPE_ANSWERS_SELFTEST = (
-    "can this gate go RED — do twelve scenarios on SCRATCH COPIES (the constant bumped with no "
+    "can this gate go RED — do fourteen scenarios on SCRATCH COPIES (the constant bumped with no "
     "row, then the row appended; a truncated, corrupted and wholly-deleted epoch column; the "
     "ledger deleted and one ledger row holed; a non-monotone column; an empty log; the constant "
-    "absent; and the reconstructed state at 6441705e8, the bump this gate was written for) each "
-    "land on the verdict and the finding token they are declared to?"
+    "absent; the reconstructed state at 6441705e8, the bump this gate was written for; and the "
+    "retroactive row stamped with its commit's LOCAL wall clock, which leg 7 must refuse, "
+    "checked against the same row stamped TRUE UTC, which it must not) each land on the verdict "
+    "and the finding token they are declared to?"
 )
 SCOPE_DOES_NOT_ANSWER_SELFTEST = (
     "whether the tree is clean. Only its scenario 0 reads the real log and constant; the other "
-    "eleven run on temp-dir copies. It reds when the INSTRUMENT is broken — including when an "
+    "thirteen run on temp-dir copies. It reds when the INSTRUMENT is broken — including when an "
     "injection string stops matching, which is itself a refusal to report rather than a defect "
     "in the record."
 )
@@ -319,11 +336,75 @@ def check(log: Path, persist: Path, root: Path, as_of: str) -> list[str]:
             f"without ever running a gate script. Deleting it is not a cleanup."
         )
 
+    # ── L7 · the `when (UTC)` cells, against the commit each row names ─────────────────────
+    # A row names a commit — an event row in its `repo HEAD` cell, a ledger row in its `set by`
+    # cell. Read that commit's two clocks: its TRUE UTC (`%cI`) and the local wall clock it was
+    # authored under (the offset the commit itself records, so the answer is the same on any
+    # machine). A cell equal to the local wall clock to the second, on a commit that carries a
+    # non-UTC offset, was stamped with the author's clock instead of UTC. A cell that matches
+    # neither is commit-lag, hand-rounding or a delayed stamp — reported, never a finding. A
+    # sha that does not resolve, or a cell this leg cannot check, is skipped: this leg degrades,
+    # it does not fail.
+    utc_cell = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})Z$")
+    commit_cell = re.compile(r"^`?([0-9a-f]{7,40})`?$")
+    drift = clean = lag = unresolvable = 0
+    commit_clocks: dict[str, tuple[datetime, int, str] | None] = {}
+    for what, rows, widx, cidx in (("event", events, 0, 4), ("ledger", ledger, 2, 1)):
+        for row in rows:
+            when = utc_cell.match(row[widx]) if len(row) > widx else None
+            m = commit_cell.match(row[cidx]) if len(row) > cidx else None
+            if when is None or m is None:
+                unresolvable += 1
+                continue                                  # `(this commit)`, a placeholder sha
+            sha = m.group(1)
+            if sha not in commit_clocks:
+                probe = subprocess.run(
+                    ["git", "-C", str(root), "rev-parse", "--verify", sha + "^{commit}"],
+                    capture_output=True, text=True)
+                if probe.returncode != 0:
+                    commit_clocks[sha] = None
+                else:
+                    out = subprocess.run(
+                        ["git", "-C", str(root), "show", "-s", "--format=%cI",
+                         probe.stdout.strip()],
+                        capture_output=True, text=True)
+                    mc = re.fullmatch(
+                        r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})([+-]\d{2}:\d{2}|Z)",
+                        out.stdout.strip())
+                    if mc is None:
+                        commit_clocks[sha] = None
+                    else:
+                        off = 0 if mc.group(2) == "Z" else (
+                            1 if mc.group(2)[0] == "+" else -1) * (
+                            int(mc.group(2)[1:3]) * 60 + int(mc.group(2)[4:6]))
+                        commit_clocks[sha] = (datetime.fromisoformat(mc.group(1)), off,
+                                              mc.group(2))
+            clocks = commit_clocks[sha]
+            if clocks is None:
+                unresolvable += 1
+                continue                                  # not a commit of this repo
+            local_wall, off, offset = clocks
+            true_utc = local_wall - timedelta(minutes=off)
+            stated = datetime.fromisoformat(when.group(1))
+            if off and stated == local_wall:
+                drift += 1
+                findings.append(
+                    f"WHEN-UTC-DRIFT: {what} row `{when.group(1)}Z` names `{sha}` and that cell is "
+                    f"the commit's LOCAL wall clock ({local_wall.isoformat()}, authored at "
+                    f"offset {offset}), not its TRUE UTC ({true_utc.isoformat('T')}Z). "
+                    f"That is the defect: a row stamped with the author's clock instead of UTC. "
+                    f"Fix the cell to the TRUE UTC, or the drift is real and the row is wrong."
+                )
+            elif stated == true_utc:
+                clean += 1
+            else:
+                lag += 1
     print(
         f"check-schema-epoch-log: constant={epoch} · {len(events)} event rows "
         f"({len(numeric)} epoch-bearing, last={numeric[-1][0] if numeric else 'NONE'}) · "
         f"{len(lvals)} ledger rows · git history "
-        f"{'not read' if seen is None else str(len(set(seen))) + ' distinct values'}"
+        f"{'not read' if seen is None else str(len(set(seen))) + ' distinct values'} · "
+        f"{drift} drift, {clean} clean, {lag} lag, {unresolvable} unresolvable"
     )
     return findings
 
