@@ -939,26 +939,22 @@ impl PersistentStore {
         threshold: usize,
         expected: FaithfulNoteRootExpectationV1,
     ) -> StoreResult<FaithfulNoteRootHistoryV1> {
-        self.load_faithful_note_root_history_hybrid_audited(
-            committee,
-            ml_dsa_committee,
-            threshold,
-            expected,
-        )
-        .map(|(history, _)| history)
+        self.load_faithful_note_root_history_with(expected, |envelope| {
+            envelope.verify_hybrid(committee, ml_dsa_committee, threshold)
+        })
     }
 
     /// [`Self::load_faithful_note_root_history_hybrid`], also returning the
     /// store-minted [`AuthenticatedFaithfulNoteRootPrefix`] for the rows it
     /// authenticated, which the roster may sign into a new audit seal.
     ///
-    /// A stored [`FaithfulNoteRootAuditSealV1`] is honoured only when the SAME
-    /// roster and threshold that authenticate a row verify its quorum, and the
-    /// exact bytes of the rows it names still hash to its digest: whoever can
-    /// produce that quorum can produce one for any row, so the seal stands in
-    /// for exactly the checks it replaces.  A missing, stale, malformed, or
-    /// unverifiable seal is ignored and every row is checked, so it can only
-    /// skip work, never admit a row the per-row check would refuse.
+    /// A version-2 seal binds the threshold and ordered classical/PQ enrollment
+    /// policy captured when its private prefix was minted. Its complete signed
+    /// statement must match the current policy, anchor, row count, and exact
+    /// stored-byte digest, and its quorum must verify under that same policy.
+    /// Legacy, mismatched, malformed, or unverifiable seals fall back to rows.
+    /// The seal attests to a completed same-policy audit; it is not a proof
+    /// against a quorum deliberately signing a false audit assertion.
     pub fn load_faithful_note_root_history_hybrid_audited(
         &self,
         committee: &[PublicKey],
@@ -968,6 +964,7 @@ impl PersistentStore {
     ) -> StoreResult<(FaithfulNoteRootHistoryV1, AuthenticatedFaithfulNoteRootPrefix)> {
         self.load_faithful_note_root_history_audited_with(
             expected,
+            faithful_note_root_audit_policy(committee, ml_dsa_committee, threshold),
             |envelope| envelope.verify_hybrid(committee, ml_dsa_committee, threshold),
             |statement, quorum| {
                 dregg_federation::receipt::verify_hybrid_quorum_sigs(
@@ -989,6 +986,9 @@ impl PersistentStore {
         prefix: &AuthenticatedFaithfulNoteRootPrefix,
         hybrid_quorum: Vec<HybridQuorumSig>,
     ) -> StoreResult<()> {
+        if prefix.policy.is_none() {
+            return Err(integrity(FaithfulNoteRootHistoryError::AuthenticationFailed));
+        }
         let seal = FaithfulNoteRootAuditSealV1 {
             statement: prefix.statement,
             hybrid_quorum,
@@ -1008,19 +1008,18 @@ impl PersistentStore {
         expected: FaithfulNoteRootExpectationV1,
         authenticate: impl Fn(&FaithfulNoteRootEnvelopeV1) -> bool + Sync,
     ) -> StoreResult<FaithfulNoteRootHistoryV1> {
-        self.load_faithful_note_root_history_audited_with(expected, authenticate, |_, _| false)
+        self.load_faithful_note_root_history_audited_with(expected, None, authenticate, |_, _| false)
             .map(|(history, _)| history)
     }
 
-    /// Replay order and refusals are exactly a serial row-by-row loop's: the
-    /// first row in key order that fails decoding, its height key, its
-    /// authentication, or structural extension decides the error.  Rows a
-    /// verified audit seal covers count as authenticated; the signature checks
-    /// of the rest run on several threads (they are independent per row), and
-    /// the decision over their verdicts stays serial.
+    /// Consume decoded rows and structural/authentication verdicts in key order.
+    /// Only an exact policy-bound seal substitutes for covered row checks.
+    /// Uncovered rows authenticate in parallel but their verdicts are consumed
+    /// serially; ignored seals leave every row on that existing refusal path.
     fn load_faithful_note_root_history_audited_with(
         &self,
         expected: FaithfulNoteRootExpectationV1,
+        policy: Option<[u8; 32]>,
         authenticate: impl Fn(&FaithfulNoteRootEnvelopeV1) -> bool + Sync,
         authenticate_seal: impl Fn(&[u8], &[HybridQuorumSig]) -> bool,
     ) -> StoreResult<(FaithfulNoteRootHistoryV1, AuthenticatedFaithfulNoteRootPrefix)> {
@@ -1081,21 +1080,19 @@ impl PersistentStore {
             }
         }
 
-        let sealed = match (&audit_seal, sealed_digest) {
-            (Some(seal), Some(prefix_digest))
-                if seal.statement == audit_statement(&anchor, seal.records(), &prefix_digest)
+        let sealed = match (&audit_seal, sealed_digest, policy) {
+            (Some(seal), Some(prefix_digest), Some(policy))
+                if seal.statement
+                    == audit_statement(&anchor, seal.records(), &prefix_digest, &policy)
                     && authenticate_seal(&seal.statement, &seal.hybrid_quorum) =>
             {
                 rows.len().min(seal.records() as usize)
             }
             _ => 0,
         };
+        let records = rows.len() as u64;
         let mut authentic = vec![true; sealed];
         authentic.extend(authenticate_rows(&rows[sealed..], &authenticate));
-        let prefix = AuthenticatedFaithfulNoteRootPrefix {
-            statement: audit_statement(&anchor, rows.len() as u64, digest.finalize().as_bytes()),
-            sealed_records: sealed as u64,
-        };
         let mut history = FaithfulNoteRootHistoryV1::new(anchor);
         for (envelope, authentic) in rows.into_iter().zip(authentic) {
             if !authentic {
@@ -1114,35 +1111,80 @@ impl PersistentStore {
             )));
         }
         history.verify_exact_snapshot(expected).map_err(integrity)?;
+        let prefix = AuthenticatedFaithfulNoteRootPrefix {
+            statement: audit_statement(
+                &anchor,
+                records,
+                digest.finalize().as_bytes(),
+                &policy.unwrap_or([0; 32]),
+            ),
+            policy,
+            sealed_records: sealed as u64,
+        };
         Ok((history, prefix))
     }
 }
 
 const AUDIT_MAGIC: [u8; 4] = *b"FNHS";
-/// `magic(4) || version(2) || reserved(2) || anchor(128) || records(8) || digest(32)`.
-pub const FAITHFUL_NOTE_ROOT_AUDIT_V1_BYTES: usize = 176;
+const AUDIT_VERSION_V2: u16 = 2;
+/// `magic(4) || version(2) || reserved(2) || anchor(128) || records(8) || digest(32) || policy(32)`.
+pub const FAITHFUL_NOTE_ROOT_AUDIT_V2_BYTES: usize = 208;
 
 /// The fixed-width statement an audit seal's quorum signs: the first `records`
 /// rows of the segment starting at `anchor`, whose exact stored bytes hash to
-/// `digest`, were each authenticated.  Its magic keeps it apart from a row's
-/// `FNHR` signing message.
+/// `digest`, were each authenticated under `policy`. Its magic keeps it
+/// apart from a row's `FNHR` signing message.
 fn audit_statement(
     anchor: &FaithfulNoteRootAnchorV1,
     records: u64,
     digest: &[u8; 32],
-) -> [u8; FAITHFUL_NOTE_ROOT_AUDIT_V1_BYTES] {
-    let mut out = [0u8; FAITHFUL_NOTE_ROOT_AUDIT_V1_BYTES];
+    policy: &[u8; 32],
+) -> [u8; FAITHFUL_NOTE_ROOT_AUDIT_V2_BYTES] {
+    let mut out = [0u8; FAITHFUL_NOTE_ROOT_AUDIT_V2_BYTES];
     out[0..4].copy_from_slice(&AUDIT_MAGIC);
-    out[4..6].copy_from_slice(&VERSION_V1.to_le_bytes());
+    out[4..6].copy_from_slice(&AUDIT_VERSION_V2.to_le_bytes());
     out[6..8].copy_from_slice(&RESERVED_ZERO.to_le_bytes());
     out[8..136].copy_from_slice(&anchor.to_bytes());
     out[136..144].copy_from_slice(&records.to_le_bytes());
     out[144..176].copy_from_slice(digest);
+    out[176..208].copy_from_slice(policy);
     out
 }
 
 fn audit_prefix_hasher() -> blake3::Hasher {
     blake3::Hasher::new_derive_key("dregg faithful note-root history audit prefix v1")
+}
+
+/// Exact cache policy: threshold followed by ordered classical/PQ pairs.
+/// Duplicate classical identities are not cache-eligible; no set normalization.
+/// Ineligible policies fall back to row authentication, not an early error.
+fn faithful_note_root_audit_policy(
+    committee: &[PublicKey],
+    ml_dsa_committee: &[MlDsaPublicKey],
+    threshold: usize,
+) -> Option<[u8; 32]> {
+    if threshold == 0
+        || threshold > committee.len()
+        || committee.len() != ml_dsa_committee.len()
+    {
+        return None;
+    }
+    let threshold = u64::try_from(threshold).ok()?;
+    let members = u64::try_from(committee.len()).ok()?;
+    let mut seen = std::collections::HashSet::new();
+    let mut policy =
+        blake3::Hasher::new_derive_key("dregg faithful note-root history audit policy v2");
+    policy.update(&threshold.to_le_bytes());
+    policy.update(&members.to_le_bytes());
+    for (classical, pq) in committee.iter().zip(ml_dsa_committee) {
+        if !seen.insert(classical.0) {
+            return None;
+        }
+        policy.update(&classical.0);
+        policy.update(&(pq.0.len() as u64).to_le_bytes());
+        policy.update(&pq.0);
+    }
+    Some(*policy.finalize().as_bytes())
 }
 
 /// Bind each row's key and exact stored bytes, length-prefixed, in key order.
@@ -1152,10 +1194,10 @@ fn absorb_audit_row(hasher: &mut blake3::Hasher, height: u64, bytes: &[u8]) {
     hasher.update(bytes);
 }
 
-/// A roster quorum over an [`audit_statement`].
+/// A roster quorum over the policy-bound version-2 [`audit_statement`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FaithfulNoteRootAuditSealV1 {
-    statement: [u8; FAITHFUL_NOTE_ROOT_AUDIT_V1_BYTES],
+    statement: [u8; FAITHFUL_NOTE_ROOT_AUDIT_V2_BYTES],
     hybrid_quorum: Vec<HybridQuorumSig>,
 }
 
@@ -1178,21 +1220,21 @@ impl FaithfulNoteRootAuditSealV1 {
             )));
         }
         Ok(postcard::to_stdvec(&AuditSealWireV1 {
-            version: VERSION_V1,
+            version: AUDIT_VERSION_V2,
             statement: self.statement.to_vec(),
             hybrid_quorum: self.hybrid_quorum.clone(),
         })?)
     }
 
-    /// `None` for anything that is not exactly one v1 seal; a load then checks
-    /// every row.
+    /// Only a version-2 policy-bound seal is cache evidence. Legacy version-1
+    /// seals and malformed values return `None`, so a load checks every row.
     fn from_bytes(bytes: &[u8]) -> Option<Self> {
         if bytes.len() > MAX_ENVELOPE_BYTES {
             return None;
         }
         let (wire, remainder): (AuditSealWireV1, &[u8]) = postcard::take_from_bytes(bytes).ok()?;
         if !remainder.is_empty()
-            || wire.version != VERSION_V1
+            || wire.version != AUDIT_VERSION_V2
             || wire.hybrid_quorum.len() > MAX_QUORUM_SIGNERS
         {
             return None;
@@ -1204,13 +1246,14 @@ impl FaithfulNoteRootAuditSealV1 {
     }
 }
 
-/// Store-minted evidence that a full replay authenticated every row of the
-/// current history, carrying the [`audit_statement`] for those rows.  Not
-/// constructible outside this module, so a seal can only be written over rows a
-/// load actually authenticated.
+/// Store-minted evidence from a completed replay, bound to that replay's exact
+/// cache-eligible policy. Private fields prevent a caller changing mint policy.
+/// A replay without an eligible policy may return evidence, but it cannot be
+/// persisted as an audit seal.
 #[derive(Debug)]
 pub struct AuthenticatedFaithfulNoteRootPrefix {
-    statement: [u8; FAITHFUL_NOTE_ROOT_AUDIT_V1_BYTES],
+    statement: [u8; FAITHFUL_NOTE_ROOT_AUDIT_V2_BYTES],
+    policy: Option<[u8; 32]>,
     sealed_records: u64,
 }
 
@@ -2198,6 +2241,7 @@ mod tests {
         let loaded = store
             .load_faithful_note_root_history_audited_with(
                 expected,
+                faithful_note_root_audit_policy(&committee, &pq_committee, 1),
                 |envelope| {
                     checked.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     envelope.verify_hybrid(&committee, &pq_committee, 1)
@@ -2214,6 +2258,144 @@ mod tests {
             )
             .map(|(_, prefix)| prefix);
         (loaded, checked.into_inner())
+    }
+
+    #[test]
+    fn audit_policy_never_promotes_a_weaker_minted_prefix() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        let signers = [0x77, 0x78, 0x79].map(HybridSigner::new);
+        let committee = signers.each_ref().map(|signer| signer.ed_pk);
+        let pq_committee = signers.each_ref().map(|signer| signer.pq_pk.clone());
+        let (tree, anchor) = empty_anchor();
+        store.initialize_faithful_note_root_history(&anchor).unwrap();
+        let envelope = signed_planned(&signers[0], &tree, &anchor, 0x36, &[[0x36; 32]]);
+        assert!(envelope.verify_hybrid(&committee, &pq_committee, 1));
+        assert!(!envelope.verify_hybrid(&committee, &pq_committee, 3));
+        store.append_faithful_note_root_verified(&envelope).unwrap();
+        let expected = store.faithful_note_root_expectation().unwrap().unwrap();
+        let (_, prefix) = store
+            .load_faithful_note_root_history_hybrid_audited(&committee, &pq_committee, 1, expected)
+            .unwrap();
+        let quorum: Vec<HybridQuorumSig> = signers
+            .iter()
+            .flat_map(|signer| seal_quorum(signer, prefix.statement()))
+            .collect();
+        assert!(dregg_federation::receipt::verify_hybrid_quorum_sigs(
+            &quorum, prefix.statement(), &committee, &pq_committee, 3,
+        ));
+        store.store_faithful_note_root_audit_seal(&prefix, quorum).unwrap();
+        let refusal = store
+            .load_faithful_note_root_history_hybrid(&committee, &pq_committee, 3, expected)
+            .unwrap_err();
+        assert_eq!(
+            refusal.to_string(),
+            integrity(FaithfulNoteRootHistoryError::AuthenticationFailed).to_string()
+        );
+        for threshold in [0, 3, 4] {
+            let refusal = store
+                .load_faithful_note_root_history_hybrid_audited(&committee, &pq_committee, threshold, expected)
+                .unwrap_err();
+            assert_eq!(
+                refusal.to_string(),
+                integrity(FaithfulNoteRootHistoryError::AuthenticationFailed).to_string()
+            );
+        }
+        let (_, healthy) = store
+            .load_faithful_note_root_history_hybrid_audited(&committee, &pq_committee, 1, expected)
+            .unwrap();
+        assert_eq!(healthy.sealed_records(), 1);
+        let mut reordered = committee;
+        let mut reordered_pq = pq_committee.clone();
+        reordered.reverse();
+        reordered_pq.reverse();
+        let (_, rechecked) = store
+            .load_faithful_note_root_history_hybrid_audited(&reordered, &reordered_pq, 1, expected)
+            .unwrap();
+        assert_eq!(rechecked.sealed_records(), 0);
+        let mut substituted_pq = pq_committee.clone();
+        substituted_pq.swap(0, 1);
+        assert!(store
+            .load_faithful_note_root_history_hybrid_audited(&committee, &substituted_pq, 1, expected)
+            .is_err());
+        store
+            .store_faithful_note_root_audit_seal(&prefix, seal_quorum(&signers[0], prefix.statement()))
+            .unwrap();
+        let replacement = HybridSigner::new(0x7a);
+        let replaced = [committee[0], committee[1], replacement.ed_pk];
+        let replaced_pq = [pq_committee[0].clone(), pq_committee[1].clone(), replacement.pq_pk.clone()];
+        let (_, rechecked) = store
+            .load_faithful_note_root_history_hybrid_audited(&replaced, &replaced_pq, 1, expected)
+            .unwrap();
+        assert_eq!(rechecked.sealed_records(), 0);
+        let duplicated = [committee[0], committee[0], committee[2]];
+        let duplicated_pq = [pq_committee[0].clone(), pq_committee[0].clone(), pq_committee[2].clone()];
+        let (_, ineligible) = store
+            .load_faithful_note_root_history_hybrid_audited(&duplicated, &duplicated_pq, 1, expected)
+            .unwrap();
+        assert_eq!(ineligible.sealed_records(), 0);
+        assert!(store
+            .store_faithful_note_root_audit_seal(&ineligible, seal_quorum(&signers[0], ineligible.statement()))
+            .is_err());
+    }
+
+    #[test]
+    fn audit_policy_value_identity_and_invalid_descriptors() {
+        let signers = [0x7b, 0x7c, 0x7d].map(HybridSigner::new);
+        let committee = signers.each_ref().map(|signer| signer.ed_pk);
+        let pq_committee = signers.each_ref().map(|signer| signer.pq_pk.clone());
+        let policy = faithful_note_root_audit_policy(&committee, &pq_committee, 1).unwrap();
+        assert_ne!(Some(policy), faithful_note_root_audit_policy(&committee, &pq_committee, 2));
+        let mut repeated_pq = pq_committee.clone();
+        repeated_pq[1] = repeated_pq[0].clone();
+        assert_ne!(Some(policy), faithful_note_root_audit_policy(&committee, &repeated_pq, 1));
+        assert!(faithful_note_root_audit_policy(&committee, &pq_committee[..2], 1).is_none());
+        assert!(faithful_note_root_audit_policy(&[], &[], 1).is_none());
+        assert!(faithful_note_root_audit_policy(&committee, &pq_committee, 0).is_none());
+        assert!(faithful_note_root_audit_policy(&committee, &pq_committee, 4).is_none());
+        let duplicated = [committee[0], committee[0], committee[2]];
+        let duplicated_pq = [pq_committee[0].clone(), pq_committee[0].clone(), pq_committee[2].clone()];
+        assert!(faithful_note_root_audit_policy(&duplicated, &duplicated_pq, 1).is_none());
+    }
+
+    #[test]
+    fn policy_bound_audit_survives_reopen_and_legacy_seal_falls_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit-policy.redb");
+        let signer = HybridSigner::new(0x7e);
+        let (tree, anchor) = empty_anchor();
+        let envelope = signed_planned(&signer, &tree, &anchor, 0x39, &[[0x39; 32]]);
+        let legacy = {
+            let store = PersistentStore::open(&path).unwrap();
+            store.initialize_faithful_note_root_history(&anchor).unwrap();
+            store.append_faithful_note_root_verified(&envelope).unwrap();
+            let (prefix, checked) = audited_load(&store, &signer);
+            let prefix = prefix.unwrap();
+            assert_eq!((prefix.records(), prefix.sealed_records(), checked), (1, 0, 1));
+            store
+                .store_faithful_note_root_audit_seal(&prefix, seal_quorum(&signer, prefix.statement()))
+                .unwrap();
+            let mut statement = prefix.statement()[..176].to_vec();
+            statement[4..6].copy_from_slice(&VERSION_V1.to_le_bytes());
+            let hybrid_quorum = seal_quorum(&signer, &statement);
+            postcard::to_stdvec(&AuditSealWireV1 {
+                version: VERSION_V1,
+                statement,
+                hybrid_quorum,
+            })
+            .unwrap()
+        };
+        let reopened = PersistentStore::open(&path).unwrap();
+        let (prefix, checked) = audited_load(&reopened, &signer);
+        assert_eq!((prefix.unwrap().sealed_records(), checked), (1, 0));
+        assert!(FaithfulNoteRootAuditSealV1::from_bytes(&legacy).is_none());
+        let write = reopened.db.begin_write().unwrap();
+        {
+            let mut metadata = write.open_table(tables::METADATA_BYTES).unwrap();
+            metadata.insert(tables::META_FAITHFUL_NOTE_ROOT_AUDIT, legacy.as_slice()).unwrap();
+        }
+        write.commit().unwrap();
+        let (prefix, checked) = audited_load(&reopened, &signer);
+        assert_eq!((prefix.unwrap().sealed_records(), checked), (0, 1));
     }
 
     /// An audit seal from the row roster stands in for the per-row checks of
