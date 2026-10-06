@@ -380,26 +380,26 @@ def self_test() -> int:
 
     # 1 — THE ORIGIN STORY: bump the constant, write no row.
     bumped = mutate(persist0,
-                    "pub const CANONICAL_STATE_SCHEMA_EPOCH: u64 = 22;",
-                    "pub const CANONICAL_STATE_SCHEMA_EPOCH: u64 = 23;")
+                    "pub const CANONICAL_STATE_SCHEMA_EPOCH: u64 = 27;",
+                    "pub const CANONICAL_STATE_SCHEMA_EPOCH: u64 = 28;")
     scenario("bump the constant, no row", log0, bumped, want_red=True, want_token="EPOCH-UNLOGGED")
 
     # 2 — ...then write the row. Green again, and that is what makes leg 2 a gate and not a wall.
     rowed = log0.rstrip("\n") + (
         "\n| 2026-08-02T00:00:00Z | selftest@scratch | schema-epoch (no emit) | " + "0" * 40
-        + " | " + "0" * 40 + " | no | SELF-TEST ROW | epoch:23 |\n"
+        + " | " + "0" * 40 + " | no | SELF-TEST ROW | epoch:28 |\n"
     )
     rowed = mutate(
         rowed,
-        "| 22 | `6342defa2` |",
-        "| 23 | `(uncommitted)` | 2026-08-02T00:00:00Z | self-test scratch row. |\n| 22 | `6342defa2` |",
+        "| 27 | `89238335a` |",
+        "| 28 | `(uncommitted)` | 2026-08-02T00:00:00Z | self-test scratch row. |\n| 27 | `89238335a` |",
     )
     # ledger rows are commit-ordered, so the new one goes last, not first
     rowed = rowed.replace(
-        "| 23 | `(uncommitted)` | 2026-08-02T00:00:00Z | self-test scratch row. |\n| 22 | `6342defa2` |",
-        "| 22 | `6342defa2` |", 1)
-    rowed = re.sub(r"(\| 22 \| `6342defa2` \|[^\n]*\n)",
-                   r"\1| 23 | `(uncommitted)` | 2026-08-02T00:00:00Z | self-test scratch row. |\n",
+        "| 28 | `(uncommitted)` | 2026-08-02T00:00:00Z | self-test scratch row. |\n| 27 | `89238335a` |",
+        "| 27 | `89238335a` |", 1)
+    rowed = re.sub(r"(\| 27 \| `89238335a` \|[^\n]*\n)",
+                   r"\1| 28 | `(uncommitted)` | 2026-08-02T00:00:00Z | self-test scratch row. |\n",
                    rowed, count=1)
     scenario("...then append the row + ledger row", rowed, bumped, want_red=False)
 
@@ -447,7 +447,7 @@ def self_test() -> int:
 
     # 11 — the constant deleted / duplicated.
     scenario("constant absent", log0, persist0.replace(
-        "pub const CANONICAL_STATE_SCHEMA_EPOCH: u64 = 22;", "// gone", 1),
+        "pub const CANONICAL_STATE_SCHEMA_EPOCH: u64 = 27;", "// gone", 1),
         want_red=True, want_token="0 definitions")
 
     # 12 — ⚑ ANTI-VACUITY. Reconstruct the state at `6441705e8` — the bump this gate was written
