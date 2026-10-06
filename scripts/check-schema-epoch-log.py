@@ -452,9 +452,10 @@ def self_test() -> int:
 
     # 12 — ⚑ ANTI-VACUITY. Reconstruct the state at `6441705e8` — the bump this gate was written
     # for — and require the gate to catch it. A gate that cannot catch its own origin story is
-    # decoration. The log is truncated to the rows that existed then (the MapAbsent row, which
-    # said "Schema epoch UNCHANGED at 20", is last) and the ledger to the values git could see
-    # at that commit; the constant is read from that commit's own `persist/src/lib.rs`.
+    # decoration. The rows that postdate `6441705e8` are dropped by name — the MapAbsent row,
+    # which said "Schema epoch UNCHANGED at 20", the retroactive row for the 20 -> 21 bump itself
+    # (written 2026-08-01, after the bump it documents), and the ledger rows the ledger had not
+    # yet earned at that commit; the constant is read from that commit's own `persist/src/lib.rs`.
     hist_persist = subprocess.run(
         ["git", "-C", str(ROOT), "show", "6441705e8:persist/src/lib.rs"],
         capture_output=True, text=True)
@@ -462,7 +463,7 @@ def self_test() -> int:
         raise SystemExit("self-test: cannot read persist/src/lib.rs at 6441705e8.")
     keep = []
     for l in log0.splitlines():
-        if l.startswith("| 2026-08-01T13:20:41Z") or l.startswith("| 2026-08-01T20:40:00Z"):
+        if l.startswith("| 2026-08-01T17:20:41Z") or l.startswith("| 2026-08-01T20:40:00Z"):
             continue                                   # written AFTER 6441705e8
         if l.startswith("| 21 | `6441705e8`") or l.startswith("| 22 | `6342defa2`"):
             continue                                   # the ledger did not exist yet
@@ -471,6 +472,22 @@ def self_test() -> int:
     scenario("⚑ reconstructed state at 6441705e8 (the bump that motivated this gate)",
              hist_log, hist_persist.stdout, want_red=True, want_token="EPOCH-UNLOGGED",
              as_of="6441705e8")
+
+    # 13 — ⚑ WHEN-UTC-DRIFT, both arms. The retroactive row's commit was authored at a non-UTC
+    # offset (6441705e8 carries -04:00), so its local wall clock (13:20:41) and its TRUE UTC
+    # (17:20:41Z) are four hours apart — exactly the defect a `date`-stamped row would leave.
+    # MUTATION arm: stamp the row with the local wall clock and require WHEN-UTC-DRIFT to fire.
+    # CONTROL arm: the as-is cell (TRUE UTC) must stay green for that row — the leg must not
+    # read a clean row as a finding, or it is a wall.
+    drifted = mutate(
+        log0,
+        "| 2026-08-01T17:20:41Z | ember@nextop.local |",
+        "| 2026-08-01T13:20:41Z | ember@nextop.local |",
+    )
+    scenario("⚑ retroactive row stamped with its commit's LOCAL wall clock",
+             drifted, persist0, want_red=True, want_token="WHEN-UTC-DRIFT")
+    scenario("⚑ the same row stamped TRUE UTC (the as-is cell) stays clean",
+             log0, persist0, want_red=False)
 
     print(f"\ncheck-schema-epoch-log --self-test: {'OK' if bad == 0 else str(bad) + ' SCENARIO(S) WRONG'}")
     return 1 if bad else 0
