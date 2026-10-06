@@ -237,6 +237,44 @@ fn pair_tag(pair: &AttestedPair) -> String {
     format!("{}/{}", short_tag(ledger), stream)
 }
 
+/// ROSTER-DISTINCTNESS GUARD (task/4896) — refuse a PQ roster where one
+/// ML-DSA-65 authority occupies multiple classical committee slots.
+///
+/// The live tally counts DISTINCT ED25519 signers (`signers.len()` feeds the
+/// quorum), and `record` fetches each voter's PQ key only to VERIFY its vote —
+/// nothing compared PQ values ACROSS voters. Two distinct members enrolled
+/// with the same ML-DSA key therefore both counted, and one PQ authority
+/// filled two quorum slots: a quorum assembled live was accepted while the
+/// same quorum reconstructed from the restart anchor
+/// (`dregg_federation::receipt::verify_hybrid_quorum_sigs`, which checks the
+/// WHOLE enrolled roster pairwise) was refused — live and restart diverged.
+///
+/// The fix refuses the shape where the roster is BUILT: keep the FIRST holder
+/// of each distinct ML-DSA key in ascending ed25519-key order (deterministic —
+/// every node drops the same holder, so the rosters cannot fork), and drop
+/// every later duplicate. A dropped member has NO PQ key, and a vote without
+/// one never counts ([`Self::record`] fail-closes on it) — the duplicate
+/// holder simply cannot contribute to quorum. Returns the distinct roster and
+/// the dropped members' ed25519 keys (for the caller's log line).
+pub(crate) fn dedup_pq_roster(
+    pq_committee: HashMap<[u8; 32], MlDsaPublicKey>,
+) -> (HashMap<[u8; 32], MlDsaPublicKey>, Vec<[u8; 32]>) {
+    let mut order: Vec<[u8; 32]> = pq_committee.keys().copied().collect();
+    order.sort_unstable();
+    let mut distinct = HashMap::with_capacity(pq_committee.len());
+    let mut seen: HashSet<Vec<u8>> = HashSet::with_capacity(pq_committee.len());
+    let mut dropped = Vec::new();
+    for creator in order {
+        let pk = &pq_committee[&creator];
+        if seen.insert(pk.0.to_vec()) {
+            distinct.insert(creator, pk.clone());
+        } else {
+            dropped.push(creator);
+        }
+    }
+    (distinct, dropped)
+}
+
 /// **What a quorum has to AGREE ON** — the finalized ledger root together with
 /// the receipt stream the block committed.
 ///
@@ -427,11 +465,27 @@ pub enum RecordOutcome {
 impl VoteCollector {
     /// Build a collector for the given committee (ed25519 signer set + aligned
     /// ML-DSA-65 key map) and quorum threshold.
+    ///
+    /// ⚑ ROSTER-DISTINCTNESS (task/4896): a `pq_committee` where one ML-DSA-65
+    /// key is enrolled under MULTIPLE members is refused at the duplicate
+    /// holders — they are dropped (fail-closed: no PQ key, no counted votes),
+    /// so one PQ authority can never fill two quorum slots. See
+    /// [`dedup_pq_roster`].
     pub fn new(
         committee: impl IntoIterator<Item = [u8; 32]>,
         pq_committee: HashMap<[u8; 32], MlDsaPublicKey>,
         quorum_threshold: usize,
     ) -> Self {
+        let (pq_committee, duplicate_pq) = dedup_pq_roster(pq_committee);
+        if !duplicate_pq.is_empty() {
+            tracing::error!(
+                duplicates = duplicate_pq.len(),
+                members = ?duplicate_pq.iter().map(short_tag).collect::<Vec<_>>(),
+                "pq_committee enrolled one ML-DSA key under multiple members — the duplicate \
+                 holders are DROPPED (fail-closed): one PQ authority must not fill two quorum \
+                 slots (task/4896)"
+            );
+        }
         VoteCollector {
             committee: committee.into_iter().collect(),
             pq_committee,
@@ -662,6 +716,20 @@ impl VoteCollector {
         quorum_threshold: usize,
     ) -> DrainReport {
         let incoming: HashSet<[u8; 32]> = committee.into_iter().collect();
+        // ⚑ ROSTER-DISTINCTNESS (task/4896): the incoming PQ roster is refused at
+        // duplicate holders exactly like [`Self::new`] — an epoch transition must
+        // not install a roster where one ML-DSA authority fills two slots.
+        let (pq_committee, duplicate_pq) = dedup_pq_roster(pq_committee);
+        if !duplicate_pq.is_empty() {
+            tracing::error!(
+                config_seq = self.config_seq + 1,
+                duplicates = duplicate_pq.len(),
+                members = ?duplicate_pq.iter().map(short_tag).collect::<Vec<_>>(),
+                "reconfigure was handed a pq_committee with one ML-DSA key enrolled under \
+                 multiple members — the duplicate holders are DROPPED (fail-closed) \
+                 (task/4896)"
+            );
+        }
         // The change-set, derived from the two rosters so it cannot disagree with
         // them (Lean `LeaveDrain.departed old new = old.roster \ new.roster`).
         let departed: HashSet<[u8; 32]> = self.committee.difference(&incoming).copied().collect();
@@ -875,6 +943,21 @@ impl VoteCollector {
         let Some(pq_pubkey) = self.pq_committee.get(&vote.voter) else {
             return RecordOutcome::Rejected;
         };
+        // ⚑ ROSTER-DISTINCTNESS (task/4896): the voter's ML-DSA key must be its
+        // ALONE — another member holding the SAME PQ key means one PQ authority
+        // is enrolled in two slots, and counting both voters would let it fill
+        // two quorum positions (the live tally counts distinct ed25519 signers
+        // and never compared PQ values across them). Refuse the vote
+        // fail-closed; `new`/`reconfigure` drop duplicate holders at the build
+        // site, so this arm only fires for a roster installed by a path that
+        // bypassed them (e.g. the test-only `set_committee`).
+        if self
+            .pq_committee
+            .iter()
+            .any(|(other, pk)| other != &vote.voter && pk.0 == pq_pubkey.0)
+        {
+            return RecordOutcome::Rejected;
+        }
 
         // ⚑ AN ALREADY-COUNTED (block, voter) PAIR IS INERT — DO NOT PAY FOR IT AGAIN.
         //
@@ -1334,6 +1417,104 @@ mod tests {
         );
         assert_eq!(col.vote_count(&blk), 0);
         assert!(!col.is_consensus_attested(&blk));
+    }
+
+    /// THE LIVE ROSTER-DISTINCTNESS ARM (task/4896): two DISTINCT ed25519
+    /// committee members enrolled with the SAME ML-DSA key must not both count
+    /// — one PQ authority cannot fill two slots of the live tally. Before the
+    /// guard this block crossed quorum LIVE on a single PQ authority while the
+    /// restart anchor (`verify_hybrid_quorum_sigs`, the roster-group half)
+    /// refuses the same quorum — live and restart diverge.
+    #[test]
+    fn duplicate_pq_key_cannot_fill_two_live_slots() {
+        let (eds, mut pq) = committee_of(&[1, 2]);
+        // Member2 is enrolled with member1's ML-DSA key: one PQ authority
+        // occupying two classical slots.
+        let (shared_pk, shared_sk) = pq_keypair(1);
+        pq.insert(pk(&keypair(2)), shared_pk);
+
+        let mut col = VoteCollector::new(eds, pq, 2);
+        let blk = BlockId([7; 32]);
+
+        // Both members sign honestly — each PQ half verifies under the SHARED
+        // enrolled key, so before the guard both count and the block crosses
+        // quorum on one PQ authority.
+        let v1 = signed_vote(1, blk, FinalityLevel::Attested, TEST_ROOT);
+        let v2 = FinalizationVote::sign(
+            &keypair(2),
+            &shared_sk,
+            blk,
+            FinalityLevel::Attested,
+            TEST_ROOT,
+            TEST_STREAM,
+        )
+        .expect("hedged ML-DSA signing fails only on an OS-entropy failure");
+        let o1 = col.record(&v1);
+        let o2 = col.record(&v2);
+        assert!(
+            !matches!(
+                o2,
+                RecordOutcome::ReachedQuorum { .. } | RecordOutcome::AlreadyQuorum { .. }
+            ),
+            "a second slot filled by the same PQ authority must not complete a \
+             quorum (o1={o1:?}, o2={o2:?})"
+        );
+        assert!(
+            !col.is_consensus_attested(&blk),
+            "the live tally must not attest a quorum one PQ authority filled twice"
+        );
+    }
+
+    /// The guard's BUILD-SITE arm: `reconfigure` refuses a PQ roster with a
+    /// duplicated ML-DSA key the same way `new` does — the duplicate holder is
+    /// dropped fail-closed and cannot contribute to quorum after the install.
+    #[test]
+    fn reconfigure_drops_a_duplicate_pq_roster_holder() {
+        let (eds, pq) = committee_of(&[1, 2, 3]);
+        let mut col = VoteCollector::new(eds.clone(), pq, 2);
+
+        // Member4 joins, enrolled with member1's ML-DSA key: one PQ authority
+        // occupying two classical slots in the incoming roster.
+        let (eds4, pq4) = committee_of(&[4]);
+        let mut incoming_pq = pq4;
+        incoming_pq.insert(eds4[0], pq_keypair(1).0);
+        let mut incoming_eds = eds.clone();
+        incoming_eds.push(eds4[0]);
+
+        let _drain = col.reconfigure(incoming_eds, incoming_pq, 3);
+        // Fail-closed: exactly ONE member may hold the shared PQ key after the
+        // install — the other was dropped and its votes can never count.
+        let k1 = col.pq_key(&eds[0]).map(|k| k.0);
+        let k4 = col.pq_key(&eds4[0]).map(|k| k.0);
+        assert!(
+            !(k1.is_some() && k4.is_some()),
+            "one PQ authority must not hold two slots after the install (k1={k1:?}, k4={k4:?})"
+        );
+    }
+
+    /// The `record`-level arm (defense in depth): even when a duplicate PQ
+    /// roster is installed by a path that BYPASSED the constructors (here the
+    /// test-only `set_committee`), a vote whose ML-DSA key another member also
+    /// holds is refused — one PQ authority cannot fill two slots.
+    #[test]
+    fn record_refuses_a_vote_whose_pq_key_another_member_holds() {
+        let (eds, mut pq) = committee_of(&[1, 2]);
+        let (shared_pk, _) = pq_keypair(1);
+        pq.insert(pk(&keypair(2)), shared_pk);
+
+        let mut col = VoteCollector::new(eds.clone(), HashMap::new(), 2);
+        // Bypass the constructor guard on purpose: install the duplicate
+        // roster directly.
+        col.set_committee(eds, pq);
+
+        let blk = BlockId([7; 32]);
+        let v1 = signed_vote(1, blk, FinalityLevel::Attested, TEST_ROOT);
+        assert_eq!(
+            col.record(&v1),
+            RecordOutcome::Rejected,
+            "a vote whose PQ key another member holds must not count, however it verifies"
+        );
+        assert_eq!(col.vote_count(&blk), 0);
     }
 
     #[test]

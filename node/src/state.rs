@@ -2883,6 +2883,21 @@ impl NodeStateInner {
                 .get(idx)
                 .is_some_and(|existing| *existing == ml_dsa);
         }
+        // ⚑ ROSTER-DISTINCTNESS (task/4896): refuse to learn an ML-DSA key that
+        // ANOTHER member already holds — one PQ authority must not fill two
+        // committee slots. This is the UPSTREAM builder the vote collector's
+        // roster is fed from (a live-joined member's ratified Join payload);
+        // refusing here keeps the duplicate out of every downstream roster, not
+        // just the collector's. Fail-closed: the member's PQ half stays
+        // unlearned, so its votes cannot count toward quorum.
+        if self.known_federation_ml_dsa_keys.iter().any(|k| *k == ml_dsa) {
+            tracing::error!(
+                ed25519 = ?ed25519,
+                "refusing to learn an ML-DSA key already held by another committee member — \
+                 one PQ authority must not fill two roster slots (task/4896)"
+            );
+            return false;
+        }
         self.known_federation_keys
             .push(dregg_types::PublicKey(*ed25519));
         self.known_federation_ml_dsa_keys.push(ml_dsa);
@@ -5486,5 +5501,41 @@ mod crash_recovery_overlay_tests {
             err.contains("convergence"),
             "the refusal must name the convergence failure; got: {err}"
         );
+    }
+}
+
+#[cfg(test)]
+mod roster_distinctness_tests {
+    //! ROSTER-DISTINCTNESS (task/4896): one ML-DSA authority must not fill two
+    //! committee slots — refused where the roster is BUILT, upstream of the
+    //! vote collector.
+
+    use super::*;
+
+    /// `learn_committee_member_hybrid_key` refuses an ML-DSA key ANOTHER member
+    /// already holds (fail-closed: the member's PQ half stays unlearned, its
+    /// votes cannot count), while a genuinely fresh key is still learned.
+    #[tokio::test]
+    async fn learn_refuses_an_ml_dsa_key_another_member_holds() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state =
+            NodeState::with_cclerk(tmp.path(), vec![], [7u8; 32]).expect("create node state");
+        let mut s = state.write().await;
+        let ed1 = [1u8; 32];
+        let ed2 = [2u8; 32];
+        let (pk1, _) = dregg_federation::frost::MlDsaSigningKey::from_seed(&[9u8; 32]);
+        let (pk2, _) = dregg_federation::frost::MlDsaSigningKey::from_seed(&[10u8; 32]);
+        s.set_federation_keys_hybrid(vec![dregg_types::PublicKey(ed1)], vec![pk1.clone()]);
+
+        assert!(
+            !s.learn_committee_member_hybrid_key(&ed2, pk1.clone()),
+            "an ML-DSA key another member holds must not be learned into a second slot"
+        );
+        assert_eq!(s.known_federation_keys.len(), 1, "nothing was appended");
+        assert!(
+            s.learn_committee_member_hybrid_key(&ed2, pk2),
+            "a genuinely fresh ML-DSA key is still learned"
+        );
+        assert_eq!(s.known_federation_keys.len(), 2);
     }
 }

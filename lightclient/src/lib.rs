@@ -578,6 +578,20 @@ impl FinalityCert {
         if ml_dsa_committee.len() != committee.len() {
             return 0;
         }
+        // ⚑ ROSTER-DISTINCTNESS (task/4896): the enrolled roster must also be
+        // PAIRWISE DISTINCT — one ML-DSA authority must not fill two committee
+        // slots. Compare the WHOLE roster (including slots this certificate's
+        // signer subset does not use), the same rule
+        // `dregg_federation::receipt::verify_hybrid_quorum_sigs` enforces on the
+        // restart-anchor side, so a quorum the live path assembled cannot be
+        // one a restart (or a light client) refuses.
+        if ml_dsa_committee
+            .iter()
+            .enumerate()
+            .any(|(i, key)| ml_dsa_committee[..i].contains(key))
+        {
+            return 0;
+        }
         let msg = self.signing_message();
         // Map each trusted committee member to its ENROLLED index once per call
         // (the per-vote membership + roster lookup is then O(1)).
@@ -1089,6 +1103,35 @@ mod tests {
         // EMPTY committee: nothing is anchored, so nothing is a quorum.
         assert_eq!(honest.distinct_committee_signers(&[], &[]), 0);
         assert!(!honest.has_committee_quorum(&[], &[]));
+    }
+
+    /// **ROSTER-DISTINCTNESS (task/4896, the light-client carrier).** An
+    /// enrolled ML-DSA roster where one PQ authority fills TWO committee slots
+    /// counts NO signer — fail-closed, the same whole-roster rule
+    /// `dregg_federation::receipt::verify_hybrid_quorum_sigs` (the restart
+    /// anchor) enforces — so a quorum the live path assembled on a duplicated
+    /// roster is never one a light client accepts.
+    #[test]
+    fn duplicate_enrolled_pq_roster_counts_no_signers() {
+        let root = wide_root(555_555);
+        let n = 4usize; // supermajority threshold 3
+        let trusted: Vec<[u8; 32]> = (0..n as u8)
+            .map(|i| validator_key(i).verifying_key().to_bytes())
+            .collect();
+        // Roster slot 1 duplicates slot 0 — one PQ authority, two slots.
+        let mut roster = committee_ml_dsa(4);
+        roster[1] = roster[0].clone();
+        let cert = FinalityCert {
+            votes: (0..3u8).map(|i| signed_vote(i, root, n)).collect(),
+            participant_count: n,
+            finalized_root: root,
+        };
+        assert_eq!(
+            cert.distinct_committee_signers(&trusted, &roster),
+            0,
+            "a duplicated enrolled roster must count no signer, however valid the votes"
+        );
+        assert!(!cert.has_committee_quorum(&trusted, &roster));
     }
 
     /// **THE HYBRID (POST-QUANTUM) QUORUM TOOTH (fold-free unit).** The off-node light client counts a

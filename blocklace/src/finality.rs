@@ -1095,7 +1095,30 @@ impl Blocklace {
     /// (genesis / membership committee roster); the block never carries its own
     /// PQ key. Re-enrolling replaces the key (committee rotation). The enrollable
     /// key is [`Block::pq_public_key`] on the creator's ed25519 signing key.
+    ///
+    /// ⚑ ROSTER-DISTINCTNESS (task/4896): a PQ key already held by a DIFFERENT
+    /// creator is REFUSED — the enrollment is a no-op and the condition is
+    /// logged loudly. One ML-DSA authority must not occupy two creators' roster
+    /// slots: the live finality path pins blocks per creator and the quorum
+    /// counts distinct ed25519 signers, so a duplicated key would let one PQ
+    /// authority act as two members — a roster the restart anchor
+    /// (`verify_hybrid_quorum_sigs`) refuses. Re-enrolling the SAME creator
+    /// (idempotent or rotation) is unaffected.
     pub fn enroll_pq(&mut self, creator: [u8; 32], pubkey: crate::pq::MlDsaPublicKey) {
+        if let Some((holder, _)) = self
+            .pq_roster
+            .iter()
+            .find(|(c, k)| **c != creator && k.0 == pubkey.0)
+        {
+            tracing::error!(
+                creator = ?creator,
+                holder = ?holder,
+                "refusing to enroll an ML-DSA key already held by another creator — one PQ \
+                 authority must not fill two roster slots (task/4896); the second creator stays \
+                 UNENROLLED and its blocks fail closed"
+            );
+            return;
+        }
         self.pq_roster.insert(creator, pubkey);
     }
 
@@ -3104,5 +3127,40 @@ mod pq_hybrid_tests {
         let mut lace = Blocklace::new(key_for(1), 3);
         assert!(lace.receive_block(block).is_ok());
         assert_eq!(lace.len(), 1);
+    }
+
+    /// ROSTER-DISTINCTNESS (task/4896): a PQ key already held by a DIFFERENT
+    /// creator is refused at enroll — the second creator stays UNENROLLED (its
+    /// blocks then fail closed at `receive_block_pinned`) and the first
+    /// holder's entry is untouched. Same-creator re-enroll (idempotent or
+    /// rotation) is unaffected.
+    #[test]
+    fn enroll_pq_refuses_a_key_already_held_by_another_creator() {
+        let mut lace = Blocklace::new(key_for(1), 3);
+        let k1 = key_for(1);
+        let k2 = key_for(2);
+        let pk1 = Block::pq_public_key(&k1);
+        let pk2 = Block::pq_public_key(&k2);
+        let id1 = Block::hybrid_id(&k1);
+        let id2 = Block::hybrid_id(&k2);
+
+        lace.enroll_pq(id1, pk1.clone());
+        // A different creator presenting the held key: REFUSED.
+        lace.enroll_pq(id2, pk1.clone());
+        assert!(
+            !lace.pq_roster().contains_key(&id2),
+            "the second creator must stay unenrolled — one PQ authority must not fill two slots"
+        );
+        assert_eq!(lace.pq_roster()[&id1], pk1, "the first holder is untouched");
+
+        // Same-creator paths are unaffected: idempotent re-enroll, then rotation.
+        lace.enroll_pq(id1, pk1.clone());
+        lace.enroll_pq(id1, pk2.clone());
+        assert_eq!(lace.pq_roster()[&id1], pk2, "same-creator rotation still applies");
+
+        // And once the key is free again (rotated away), a different creator
+        // may hold it.
+        lace.enroll_pq(id2, pk1.clone());
+        assert_eq!(lace.pq_roster()[&id2], pk1);
     }
 }

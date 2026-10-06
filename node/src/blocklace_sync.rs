@@ -3810,6 +3810,22 @@ impl BlocklaceHandle {
         pq_committee: HashMap<[u8; 32], dregg_federation::frost::MlDsaPublicKey>,
         threshold: usize,
     ) {
+        // ⚑ ROSTER-DISTINCTNESS (task/4896): refuse a PQ roster where one
+        // ML-DSA-65 key is enrolled under multiple members BEFORE it feeds the
+        // enroll loop or the vote collector — one PQ authority must not fill two
+        // quorum slots. Duplicate holders are dropped fail-closed
+        // (deterministically, so every node drops the same one); `reconfigure`
+        // re-checks downstream.
+        let (pq_committee, duplicate_pq) =
+            crate::finalization_votes::dedup_pq_roster(pq_committee);
+        if !duplicate_pq.is_empty() {
+            error!(
+                duplicates = duplicate_pq.len(),
+                members = ?duplicate_pq.iter().map(|k| k[..4].iter().map(|b| format!("{b:02x}")).collect::<String>()).collect::<Vec<_>>(),
+                "committee change carried a pq_committee with one ML-DSA key enrolled under \
+                 multiple members — the duplicate holders are DROPPED (fail-closed) (task/4896)"
+            );
+        }
         // 1. Enroll the new committee's ML-DSA-65 keys into the finality
         //    Blocklace's PQ roster across the epoch transition, so the live wire
         //    ingest (`receive_block_pinned`) accepts a rotated-in validator's
@@ -5188,6 +5204,26 @@ pub(crate) async fn run_blocklace_sync_with_membership_policy(
     // (fail-closed; never an ed25519-only downgrade).
     let mut pq_committee = pq_committee_for_participants(&state, &participants).await;
     pq_committee.insert(self_key, pq_public_key.clone());
+    // ⚑ ROSTER-DISTINCTNESS (task/4896): refuse a boot PQ roster where one
+    // ML-DSA-65 key is enrolled under multiple members BEFORE it feeds the
+    // enroll loop or the vote collector — one PQ authority must not fill two
+    // quorum slots (the live tally counts distinct ed25519 signers and never
+    // compared PQ values across them, while the restart anchor refuses the
+    // duplicate roster). Duplicate holders are dropped fail-closed,
+    // deterministically, so every node drops the same one and the rosters
+    // cannot fork. `VoteCollector::new` re-checks downstream.
+    let (pq_committee, duplicate_pq) = crate::finalization_votes::dedup_pq_roster(pq_committee);
+    if !duplicate_pq.is_empty() {
+        tracing::error!(
+            duplicates = duplicate_pq.len(),
+            members = ?duplicate_pq
+                .iter()
+                .map(|k| k[..4].iter().map(|b| format!("{b:02x}")).collect::<String>())
+                .collect::<Vec<_>>(),
+            "boot pq_committee enrolled one ML-DSA key under multiple members — the duplicate \
+             holders are DROPPED (fail-closed) (task/4896)"
+        );
+    }
     // HYBRID-PQ pinning (GAP #1b live-wiring): enroll every committee member's
     // ML-DSA-65 public key into the finality Blocklace's PQ roster, so the live
     // wire ingest (`catchup::apply_with_buffering` → `receive_block_pinned`) PINS
