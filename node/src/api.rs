@@ -4931,16 +4931,12 @@ pub(crate) enum HttpWitnessOutcome {
 }
 
 impl HttpWitnessOutcome {
-    /// The honest committed-turn `proof_status` for this outcome, paired with the
-    /// job (if any) to hand the async prove pool.
-    ///
-    /// ONE place, called by all four commit sites (`/turns/submit`,
-    /// `/turns/submit-signed`, `/turns/submit-encrypted`, the faucet). Each used to
-    /// carry its own pair of `match`es over this enum, which is the same
-    /// duplicated-decision shape as the projector twin this gate just lost.
+    /// The disposition before enqueue, paired with any job to offer the pool.
+    /// Preparing material is not acceptance: a rotatable turn is still
+    /// unattested until the queue actually takes it.
     pub(crate) fn split(self, turn_hash: &str) -> (ActivityProofStatus, Option<RotatableTurn>) {
         match self {
-            Self::Rotatable(rotatable) => (ActivityProofStatus::ProofPending, Some(rotatable)),
+            Self::Rotatable(rotatable) => (ActivityProofStatus::Unattested, Some(rotatable)),
             Self::NotRequired => (ActivityProofStatus::NotRequired, None),
             Self::Unprovable(why) => {
                 tracing::warn!(
@@ -4952,6 +4948,25 @@ impl HttpWitnessOutcome {
                 );
                 (ActivityProofStatus::ProofGenerationFailed, None)
             }
+        }
+    }
+
+    /// Resolve the HTTP disposition OFF the write lock from actual queue acceptance.
+    async fn enqueue(
+        self,
+        state: &NodeState,
+        receipt: dregg_turn::TurnReceipt,
+        receipt_hash: [u8; 32],
+        turn_hash: &str,
+    ) -> ActivityProofStatus {
+        let (status, pending) = self.split(turn_hash);
+        let Some(rotatable) = pending else {
+            return status;
+        };
+        if enqueue_async_proof(state, rotatable, receipt, receipt_hash, turn_hash.to_string()).await {
+            ActivityProofStatus::ProofPending
+        } else {
+            status
         }
     }
 }
@@ -5133,11 +5148,8 @@ pub(crate) fn prepare_rotatable_turn(
 /// committed-but-unattested — sound, since the authoritative executor already
 /// validated + committed the state; the proof is additive attestation.
 ///
-/// Returns whether a job was actually ACCEPTED into the queue. The HTTP callers
-/// discard it (their `proof_status` is decided by [`HttpWitnessOutcome::split`]
-/// before this runs, and reports `proof_pending` even when no pool is installed —
-/// a named residual of this surface, not something the MCP caller should inherit);
-/// the MCP callers report the returned truth instead of the intention.
+/// Returns whether a job was actually ACCEPTED into the queue. HTTP and MCP
+/// callers report that truth, not merely the existence of prepared material.
 pub(crate) async fn enqueue_async_proof(
     state: &NodeState,
     rotatable: RotatableTurn,
@@ -5157,8 +5169,10 @@ pub(crate) async fn enqueue_async_proof(
             receipt_hash,
             turn_hash_hex,
         };
+        // Serialize accepted marking with worker completion/failure cleanup:
+        // a fast worker must not clear pending before the producer installs it.
+        let mut s = state.write().await;
         if pool.enqueue(job) {
-            let mut s = state.write().await;
             s.mark_proof_pending(receipt_hash);
             return true;
         }
@@ -5458,16 +5472,11 @@ async fn post_submit_turn(
                         error = %err,
                         "could not prepare rotated attestation; receipt committed-but-unattested"
                     );
-                    HttpWitnessOutcome::NotRequired
+                    HttpWitnessOutcome::Unprovable(err)
                 }
             };
-            // The receipt is committed; its attestation is pending if there is a
-            // transition to prove (ProofPending), NotRequired if no effect touches
-            // the actor, ProofGenerationFailed if the turn is outside the AIR domain.
-            // The async prove pool attaches the WitnessedReceipt (and gossips its
-            // artifact) off the lock when proving completes; the raw turn block
-            // is gossiped immediately below so consensus ordering is not delayed.
-            let (proof_status, pending_proof) = witness_outcome.split(&turn_hash);
+            // Resolve attestation only after the pool accepts a job off the lock.
+            // The raw turn still enters consensus whether or not proving is available.
             let bundle_witnessed: Vec<Vec<u8>> = Vec::new();
             let receipt_artifact = postcard::to_stdvec(&receipt).ok();
             let witness_count = s.witnessed_receipt_count(&receipt_hash);
@@ -5486,32 +5495,24 @@ async fn post_submit_turn(
             } else {
                 kinds
             };
+            // Serialize the full SignedTurn for gossip (postcard format).
+            let turn_data = postcard::to_stdvec(&signed).expect("SignedTurn serialization");
+
+            drop(s);
+
+            // F-DOS-1: hand proving to the async pool OFF the lock, without
+            // waiting for proof generation. Event and response share the result.
+            let proof_status = witness_outcome
+                .enqueue(&state, receipt.clone(), receipt_hash, &turn_hash)
+                .await;
             push_committed_event_enriched(
-                &mut s,
+                &mut *state.write().await,
                 turn_hash.clone(),
                 agent,
                 kinds,
                 summaries,
                 proof_status,
             );
-
-            // Serialize the full SignedTurn for gossip (postcard format).
-            let turn_data = postcard::to_stdvec(&signed).expect("SignedTurn serialization");
-
-            drop(s);
-
-            // F-DOS-1: hand proving to the async pool OFF the lock. Returns a
-            // fast ack (ProofPending) without waiting for the ~750 ms prover.
-            if let Some(rotatable) = pending_proof {
-                enqueue_async_proof(
-                    &state,
-                    rotatable,
-                    receipt.clone(),
-                    receipt_hash,
-                    turn_hash.clone(),
-                )
-                .await;
-            }
 
             // Emit receipt event to WebSocket subscribers.
             state.emit(crate::state::NodeEvent::Receipt {
@@ -5827,39 +5828,30 @@ async fn submit_signed_turn(
                         error = %err,
                         "could not prepare rotated attestation; receipt committed-but-unattested"
                     );
-                    HttpWitnessOutcome::NotRequired
+                    HttpWitnessOutcome::Unprovable(err)
                 }
             };
             // The async prove pool attaches the WitnessedReceipt off the lock.
-            let (proof_status, pending_proof) = witness_outcome.split(&turn_hash);
             let bundle_witnessed: Vec<Vec<u8>> = Vec::new();
             let receipt_artifact = postcard::to_stdvec(&receipt).ok();
             let witness_count = s.witnessed_receipt_count(&receipt_hash);
-
-            push_committed_event(
-                &mut s,
-                turn_hash.clone(),
-                agent,
-                vec![format!("signed_turn:{action_count}")],
-                proof_status,
-            );
 
             let turn_data = postcard::to_stdvec(&signed_for_gossip)
                 .expect("SignedTurn serialization after successful decode");
 
             drop(s);
 
-            // F-DOS-1: prove off the lock; fast ProofPending ack.
-            if let Some(rotatable) = pending_proof {
-                enqueue_async_proof(
-                    &state,
-                    rotatable,
-                    receipt.clone(),
-                    receipt_hash,
-                    turn_hash.clone(),
-                )
+            // F-DOS-1: enqueue off the lock; report acceptance, not intention.
+            let proof_status = witness_outcome
+                .enqueue(&state, receipt.clone(), receipt_hash, &turn_hash)
                 .await;
-            }
+            push_committed_event(
+                &mut *state.write().await,
+                turn_hash.clone(),
+                agent,
+                vec![format!("signed_turn:{action_count}")],
+                proof_status,
+            );
 
             state.emit(crate::state::NodeEvent::Receipt {
                 hash: turn_hash.clone(),
@@ -6334,33 +6326,23 @@ async fn post_submit_encrypted_turn(
                         error = %err,
                         "could not prepare rotated attestation; receipt committed-but-unattested"
                     );
-                    HttpWitnessOutcome::NotRequired
+                    HttpWitnessOutcome::Unprovable(err)
                 }
             };
-            let (proof_status, pending_proof) = witness_outcome.split(&turn_hash);
             let witness_count = s.witnessed_receipt_count(&receipt_hash);
+            drop(s);
 
+            // F-DOS-1: enqueue off the lock; report acceptance, not intention.
+            let proof_status = witness_outcome
+                .enqueue(&state, receipt.clone(), receipt_hash, &turn_hash)
+                .await;
             push_committed_event(
-                &mut s,
+                &mut *state.write().await,
                 turn_hash.clone(),
                 agent,
                 vec!["encrypted_turn_committed".to_string()],
                 proof_status,
             );
-
-            drop(s);
-
-            // F-DOS-1: prove off the lock.
-            if let Some(rotatable) = pending_proof {
-                enqueue_async_proof(
-                    &state,
-                    rotatable,
-                    receipt.clone(),
-                    receipt_hash,
-                    turn_hash.clone(),
-                )
-                .await;
-            }
 
             // Emit receipt event (same surface as cleartext-turn commits).
             state.emit(crate::state::NodeEvent::Receipt {
@@ -7197,7 +7179,7 @@ async fn get_starbridge_actions(
 async fn get_starbridge_identity_events(
     Query(params): Query<StarbridgeQuery>,
     State(state): State<NodeState>,
-) -> Json<Vec<StarbridgeIdentityEventInfo>> {
+) -> Result<Json<Vec<StarbridgeIdentityEventInfo>>, StatusCode> {
     let limit = starbridge_limit(params.limit);
     let since_height = params.since_height;
     let s = state.read().await;
@@ -7223,7 +7205,7 @@ async fn get_starbridge_identity_events(
             finality: None,
         });
         if out.len() >= limit {
-            return Json(out);
+            return Ok(Json(out));
         }
     }
 
@@ -7251,22 +7233,22 @@ async fn get_starbridge_identity_events(
                 topic: Some(serde_json::to_value(event.topic).unwrap_or(serde_json::Value::Null)),
                 data: Some(serde_json::to_value(&event.data).unwrap_or(serde_json::Value::Null)),
                 effects: Vec::new(),
-                proof_status: receipt_proof_status(&s, receipt),
+                proof_status: receipt_proof_status(&s, receipt)?,
                 finality: Some(format!("{:?}", receipt.finality).to_lowercase()),
             });
             if out.len() >= limit {
-                return Json(out);
+                return Ok(Json(out));
             }
         }
     }
 
-    Json(out)
+    Ok(Json(out))
 }
 
 async fn get_starbridge_identity_credentials(
     Query(params): Query<StarbridgeQuery>,
     State(state): State<NodeState>,
-) -> Json<Vec<StarbridgeIdentityCredentialInfo>> {
+) -> Result<Json<Vec<StarbridgeIdentityCredentialInfo>>, StatusCode> {
     let limit = starbridge_limit(params.limit);
     let s = state.read().await;
     let chain = s.cclerk.receipt_chain();
@@ -7294,7 +7276,7 @@ async fn get_starbridge_identity_credentials(
                 .collect();
             subject_cells.sort();
             subject_cells.dedup();
-            StarbridgeIdentityCredentialInfo {
+            Ok(StarbridgeIdentityCredentialInfo {
                 source: "receipt_chain",
                 chain_index: chain_index as u64,
                 receipt_hash: hex_encode(&receipt_hash),
@@ -7305,18 +7287,18 @@ async fn get_starbridge_identity_credentials(
                 effects_hash: hex_encode(&receipt.effects_hash),
                 event_count: receipt.emitted_events.len(),
                 derivation_record_count: receipt.derivation_records.len(),
-                proof_status: receipt_proof_status(&s, receipt),
+                proof_status: receipt_proof_status(&s, receipt)?,
                 finality: format!("{:?}", receipt.finality).to_lowercase(),
-            }
+            })
         })
-        .collect();
-    Json(credentials)
+        .collect::<Result<Vec<_>, StatusCode>>()?;
+    Ok(Json(credentials))
 }
 
 async fn get_starbridge_identity_proof_checkpoints(
     Query(params): Query<StarbridgeQuery>,
     State(state): State<NodeState>,
-) -> Json<Vec<StarbridgeIdentityProofCheckpointInfo>> {
+) -> Result<Json<Vec<StarbridgeIdentityProofCheckpointInfo>>, StatusCode> {
     let limit = starbridge_limit(params.limit);
     let s = state.read().await;
     let checkpoints = s
@@ -7329,7 +7311,7 @@ async fn get_starbridge_identity_proof_checkpoints(
         .take(limit)
         .map(|(chain_index, receipt)| {
             let receipt_hash = receipt.receipt_hash();
-            StarbridgeIdentityProofCheckpointInfo {
+            Ok(StarbridgeIdentityProofCheckpointInfo {
                 source: "receipt_chain",
                 chain_index: chain_index as u64,
                 receipt_hash: hex_encode(&receipt_hash),
@@ -7339,14 +7321,14 @@ async fn get_starbridge_identity_proof_checkpoints(
                 effects_hash: hex_encode(&receipt.effects_hash),
                 pre_state: hex_encode(&receipt.pre_state_hash),
                 post_state: hex_encode(&receipt.post_state_hash),
-                proof_status: receipt_proof_status(&s, receipt),
+                proof_status: receipt_proof_status(&s, receipt)?,
                 executor_signed: receipt.executor_signature.is_some(),
                 witness_count: s.witnessed_receipt_count(&receipt_hash),
                 finality: format!("{:?}", receipt.finality).to_lowercase(),
-            }
+            })
         })
-        .collect();
-    Json(checkpoints)
+        .collect::<Result<Vec<_>, StatusCode>>()?;
+    Ok(Json(checkpoints))
 }
 
 fn select_committed_events(
@@ -9624,19 +9606,9 @@ async fn post_faucet(
                         "faucet turn attestation prep failed; receipt stays \
                          committed-but-unattested (has_proof will not flip)"
                     );
-                    HttpWitnessOutcome::NotRequired
+                    HttpWitnessOutcome::Unprovable(err)
                 }
             };
-            let (proof_status, pending_proof) = witness_outcome.split(&turn_hash_hex);
-
-            push_committed_event(
-                &mut s,
-                tx_hash.clone(),
-                req.recipient.clone(),
-                vec![format!("faucet_transfer:{}", req.amount)],
-                proof_status,
-            );
-
             // Replicate through gossip + blocklace consensus.
             let turn_data = postcard::to_stdvec(&signed).expect("SignedTurn serialization");
             drop(s);
@@ -9645,16 +9617,16 @@ async fn post_faucet(
             // has_proof once the pool lands the proof. `push_witnessed_receipt` is
             // keyed by receipt hash, not by a position in the receipt log, so this
             // is well-defined before finalization appends the canonical receipt.
-            if let Some(rotatable) = pending_proof {
-                enqueue_async_proof(
-                    &state,
-                    rotatable,
-                    receipt.clone(),
-                    receipt_hash,
-                    turn_hash_hex.clone(),
-                )
+            let proof_status = witness_outcome
+                .enqueue(&state, receipt.clone(), receipt_hash, &turn_hash_hex)
                 .await;
-            }
+            push_committed_event(
+                &mut *state.write().await,
+                tx_hash.clone(),
+                req.recipient.clone(),
+                vec![format!("faucet_transfer:{}", req.amount)],
+                proof_status,
+            );
 
             let turn_data_for_gossip = turn_data.clone();
             if let Some(gossip) = state.gossip().await {
@@ -10525,24 +10497,36 @@ fn identity_scoped_params(params: &StarbridgeQuery) -> StarbridgeQuery {
 /// `witness_count` in ONE object, where the first was definitionally equal to the
 /// second and could read `Proved` beside a `witness_count` of 0.
 ///
-/// The two states are now distinguishable, which is the whole point of the enum:
-/// material attached ⇒ `Proved`; committed with an executor signature but no
-/// attestation yet ⇒ `ProofPending` (the prove pool is asynchronous — `state.rs`
-/// documents exactly this state); neither ⇒ `NotRequired`.
+/// Material attached ⇒ `Proved`; recorded failure ⇒ `ProofGenerationFailed`;
+/// an actually pending job ⇒ `ProofPending`; none of these ⇒ `Unattested`.
+/// An executor signature says nothing about queue acceptance. An unreadable
+/// proof record is an unavailable response, never evidence of an absent proof.
 fn receipt_proof_status(
     s: &crate::state::NodeStateInner,
     receipt: &dregg_turn::TurnReceipt,
-) -> ActivityProofStatus {
+) -> Result<ActivityProofStatus, StatusCode> {
     let receipt_hash = receipt.receipt_hash();
-    let has_material = s.witnessed_receipt_count(&receipt_hash) > 0
-        || stored_full_turn_proof_exists(s, &hex_encode(&receipt.turn_hash));
-    if has_material {
-        ActivityProofStatus::Proved
-    } else if receipt.executor_signature.is_some() {
+    if s.witnessed_receipt_count(&receipt_hash) > 0 {
+        return Ok(ActivityProofStatus::Proved);
+    }
+    let turn_hash = hex_encode(&receipt.turn_hash);
+    let read = |key: &str| {
+        s.store.get_config(key).map_err(|err| {
+            tracing::error!(turn_hash = %turn_hash, error = %err, "proof disposition unavailable");
+            StatusCode::SERVICE_UNAVAILABLE
+        })
+    };
+    if read(&crate::turn_proving::turn_proof_config_key(&turn_hash))?.is_some() {
+        return Ok(ActivityProofStatus::Proved);
+    }
+    if read(&crate::turn_proving::turn_proof_failure_config_key(&turn_hash))?.is_some() {
+        return Ok(ActivityProofStatus::ProofGenerationFailed);
+    }
+    Ok(if s.is_proof_pending(&receipt_hash) {
         ActivityProofStatus::ProofPending
     } else {
-        ActivityProofStatus::NotRequired
-    }
+        ActivityProofStatus::Unattested
+    })
 }
 
 fn identity_receipt_matches(receipt: &dregg_turn::TurnReceipt, params: &StarbridgeQuery) -> bool {
@@ -14209,6 +14193,7 @@ mod tests {
                     "application/json",
                     serde_json::to_vec(&serde_json::json!({
                         "agent": hex_encode(&agent.0),
+                        "nonce": 0,
                         "fee": 1000,
                         "actions": [{ "effects": [{ "kind": "increment_nonce" }] }],
                     }))
@@ -14294,6 +14279,67 @@ mod tests {
         producer_controls!("/api/faucet", faucet_absent, faucet_off, faucet_full, faucet_accepted);
 
         #[tokio::test]
+        async fn accepted_mark_cannot_be_overtaken_by_worker_cleanup() {
+            use std::future::Future;
+            use std::task::Poll;
+
+            let tmp = tempfile::tempdir().unwrap();
+            let state = NodeState::new(tmp.path(), vec![]).unwrap();
+            let pool = ProvePool::spawn_with(
+                state.clone(),
+                ProveConfig { workers: 1, queue_depth: 1, threads: Some(1) },
+            );
+            state.set_prove_pool(pool.clone()).await;
+            let job = || RotatableTurn {
+                agent: CellId([0xa1; 32]),
+                pre_balance: 1000,
+                pre_nonce: 0,
+                effects: vec![],
+                turn_hash: [0x11; 32],
+                rotation: None,
+            };
+            let guard = state.write().await;
+            let mut enqueue = Box::pin(enqueue_async_proof(
+                &state, job(), dregg_turn::TurnReceipt::default(), [0x22; 32], "11".repeat(32),
+            ));
+            std::future::poll_fn(|cx| {
+                assert!(matches!(enqueue.as_mut().poll(cx), Poll::Pending));
+                Poll::Ready(())
+            }).await;
+            // While the producer cannot install pending, it must not have made
+            // a job runnable. Under the old send-before-lock order this slot is full.
+            let rotatable = job();
+            assert!(pool.enqueue(crate::prove_pool::ProveJob {
+                agent: rotatable.agent,
+                pre_balance: rotatable.pre_balance,
+                pre_nonce: rotatable.pre_nonce,
+                effects: rotatable.effects,
+                turn_hash: rotatable.turn_hash,
+                rotation: rotatable.rotation,
+                receipt: dregg_turn::TurnReceipt::default(),
+                receipt_hash: [0x33; 32],
+                turn_hash_hex: "11".repeat(32),
+            }), "the blocked producer must not publish a job before it can mark pending");
+            drop(enqueue);
+            assert!(!guard.is_proof_pending(&[0x22; 32]));
+        }
+
+        #[tokio::test]
+        async fn no_transition_and_unprovable_dispositions_remain_distinct() {
+            let tmp = tempfile::tempdir().unwrap();
+            let state = NodeState::new(tmp.path(), vec![]).unwrap();
+            let receipt = dregg_turn::TurnReceipt::default();
+            let hash = receipt.receipt_hash();
+            assert_eq!(HttpWitnessOutcome::NotRequired.enqueue(
+                &state, receipt.clone(), hash, "synthetic",
+            ).await, ActivityProofStatus::NotRequired);
+            assert_eq!(HttpWitnessOutcome::Unprovable("synthetic refusal".into()).enqueue(
+                &state, receipt, hash, "synthetic",
+            ).await, ActivityProofStatus::ProofGenerationFailed);
+            assert!(!state.read().await.is_proof_pending(&hash));
+        }
+
+        #[tokio::test]
         async fn identity_gets_follow_actual_pending_and_proof_material() {
             let tmp = tempfile::tempdir().unwrap();
             let state = NodeState::new(tmp.path(), vec![]).unwrap();
@@ -14360,14 +14406,14 @@ mod tests {
                 ..Default::default()
             };
             let mut s = state.write().await;
-            let status = serde_json::to_value(receipt_proof_status(&s, &receipt)).unwrap();
+            let status = serde_json::to_value(receipt_proof_status(&s, &receipt).unwrap()).unwrap();
             assert_eq!(status, "unattested", "a signature is not an accepted proof job");
             s.mark_proof_pending(receipt.receipt_hash());
-            assert_eq!(receipt_proof_status(&s, &receipt), ActivityProofStatus::ProofPending);
+            assert_eq!(receipt_proof_status(&s, &receipt).unwrap(), ActivityProofStatus::ProofPending);
             s.clear_proof_pending(&receipt.receipt_hash());
             let key = crate::turn_proving::turn_proof_failure_config_key(&hex_encode(&receipt.turn_hash));
             s.store.set_config(&key, b"synthetic proving refusal").unwrap();
-            assert_eq!(receipt_proof_status(&s, &receipt), ActivityProofStatus::ProofGenerationFailed);
+            assert_eq!(receipt_proof_status(&s, &receipt).unwrap(), ActivityProofStatus::ProofGenerationFailed);
         }
     }
 

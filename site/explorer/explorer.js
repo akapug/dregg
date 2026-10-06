@@ -268,7 +268,7 @@ function renderPosture(status, producer) {
  * The typed proof status, rendered without laundering.
  *
  * `node/src/state.rs` is explicit that "null/absent proof material must not be
- * read as proved", and the enum has six variants — only ONE of which is
+ * read as proved", and only ONE variant is
  * `proved`. Collapsing them into a "verified" tick is precisely the claim this
  * repo keeps deleting, so each variant gets its own words.
  */
@@ -277,7 +277,9 @@ function proofStatusPill(s) {
     case "proved":
       return '<span class="pill ok" title="a STARK attestation is attached to this committed turn">proved</span>';
     case "proof_pending":
-      return '<span class="pill warn" title="committed and witness-revalidated inline; the succinct attestation is still being generated off the commit path">proof pending</span>';
+      return '<span class="pill warn" title="an async proof job was accepted; its attestation is not attached yet">proof pending</span>';
+    case "unattested":
+      return '<span class="pill warn" title="no attestation is attached and no async proof job was accepted">unattested</span>';
     case "not_required":
       return '<span class="pill mute" title="this node does not require a proof for this turn">not required</span>';
     case "missing_pre_state":

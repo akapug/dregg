@@ -1196,13 +1196,12 @@ pub enum ActivityStatus {
 #[serde(rename_all = "snake_case")]
 pub enum ActivityProofStatus {
     Proved,
-    /// The turn is COMMITTED and was witness-revalidated inline (sound), but its
-    /// succinct STARK attestation is being generated asynchronously off the
-    /// commit path (F-DOS-1). The receipt is final/Tentative as usual; only the
-    /// proof artifact is in flight and will be attached when the prove pool
-    /// finishes. Light-clients/cross-trust peers poll the witnessed-receipt
-    /// endpoint until the attestation lands.
+    /// An async proof job was accepted; its attestation has not yet attached.
+    /// This is queue acceptance, not a promise that proof generation will succeed.
     ProofPending,
+    /// No attestation is attached and no async proof job was accepted. The
+    /// executor's successful commit/admission is unchanged; no proof is in flight.
+    Unattested,
     NotRequired,
     MissingPreState,
     ProofGenerationFailed,

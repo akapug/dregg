@@ -312,7 +312,7 @@ pub(super) fn require_effect_cells_for_commit(
 /// | `proof_status`            | means | HTTP twin ([`crate::state::ActivityProofStatus`]) |
 /// |---|---|---|
 /// | `attestation_pending`     | job ACCEPTED by the async prove pool; the WitnessedReceipt attaches when it lands | `proof_pending` |
-/// | `attestation_unattested`  | there IS a transition to attest but no pool took it (none installed, or queue full) | *(none — HTTP reports `proof_pending` here regardless, a named residual of that surface)* |
+/// | `attestation_unattested`  | there IS a transition to attest but no pool took it (absent, disabled, or queue full) | `unattested` |
 /// | `attestation_not_required`| no effect in the turn touches the ACTOR cell, so there is no actor transition to prove | `not_required` |
 /// | `attestation_unprovable`  | the CHECKED producer projection refuses this turn BY NAME (a verb with no AIR row, or a `SetField` key wider than the u32 index lane) | `proof_generation_failed` |
 ///
