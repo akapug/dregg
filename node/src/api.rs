@@ -14108,6 +14108,208 @@ mod tests {
         }
     }
 
+    mod http_proof_enqueue_tests {
+        use super::*;
+        use crate::prove_pool::{ProveConfig, ProvePool};
+
+        #[derive(Clone, Copy, Debug)]
+        enum PoolMode {
+            Absent,
+            Off,
+            Full,
+            Accepting,
+        }
+
+        // Current-thread tests do not poll the spawned worker before these ready
+        // lock/router futures return. Full is a real one-slot queue filled through
+        // enqueue_async_proof; accepting checks admission, not proof completion.
+        async fn producer(route: &str, mode: PoolMode) {
+            let tmp = tempfile::tempdir().expect("synthetic node directory");
+            let state = NodeState::new(tmp.path(), vec![]).expect("synthetic node");
+            let (agent, turn, signed, unsealer) = {
+                let mut s = state.write().await;
+                s.unlocked = true;
+                let token = crate::executor_setup::default_token_id();
+                let operator = dregg_cell::Cell::with_hybrid_balance(
+                    s.cclerk.public_key().0,
+                    &s.cclerk.ml_dsa_public_bytes(),
+                    token,
+                    1_000_000,
+                )
+                .expect("synthetic operator identity");
+                let agent = operator.id();
+                s.ledger.insert_cell(operator).expect("seed operator");
+                let faucet = dregg_sdk::AgentCipherclerk::from_key_bytes(
+                    zeroize::Zeroizing::new(faucet_signing_key().to_bytes()),
+                );
+                s.ledger
+                    .insert_cell(
+                        dregg_cell::Cell::with_hybrid_balance(
+                            faucet.public_key().0,
+                            &faucet.ml_dsa_public_bytes(),
+                            token,
+                            1_000_000,
+                        )
+                        .expect("synthetic faucet identity"),
+                    )
+                    .expect("seed faucet");
+                let mut turn = projectable_http_test_turn(agent);
+                turn.valid_until = crate::executor_setup::default_valid_until(&s);
+                let action = s.cclerk.sign_action_hybrid(
+                    turn.call_forest.roots[0].action.clone(),
+                    &crate::executor_setup::federation_id_for_executor(&s),
+                    turn.nonce,
+                );
+                turn.call_forest = CallForest::new();
+                turn.call_forest.add_root(action);
+                let signed = s.cclerk.sign_turn(&turn);
+                let secret = s.cclerk.derive_symmetric_key(TURN_UNSEALER_DOMAIN);
+                let unsealer = x25519_dalek::PublicKey::from(
+                    &x25519_dalek::StaticSecret::from(secret),
+                );
+                (agent, turn, signed, unsealer)
+            };
+            if !matches!(mode, PoolMode::Absent) {
+                let pool = ProvePool::spawn_with(
+                    state.clone(),
+                    ProveConfig {
+                        workers: usize::from(!matches!(mode, PoolMode::Off)),
+                        queue_depth: 1,
+                        threads: Some(1),
+                    },
+                );
+                assert_eq!(pool.is_enabled(), !matches!(mode, PoolMode::Off));
+                state.set_prove_pool(pool).await;
+            }
+            if matches!(mode, PoolMode::Full) {
+                assert!(enqueue_async_proof(
+                    &state,
+                    RotatableTurn {
+                        agent,
+                        pre_balance: 1_000_000,
+                        pre_nonce: 0,
+                        effects: vec![Effect::IncrementNonce { cell: agent }],
+                        turn_hash: [0xee; 32],
+                        rotation: None,
+                    },
+                    dregg_turn::TurnReceipt::default(),
+                    [0xee; 32],
+                    hex_encode(&[0xee; 32]),
+                )
+                .await);
+                assert!(state.read().await.is_proof_pending(&[0xee; 32]));
+            }
+            let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+            let app = router(state.clone(), true, recorder.handle());
+            let (content_type, body) = match route {
+                "/turn/submit" => (
+                    "application/json",
+                    serde_json::to_vec(&serde_json::json!({
+                        "agent": hex_encode(&agent.0),
+                        "fee": 1000,
+                        "actions": [{ "effects": [{ "kind": "increment_nonce" }] }],
+                    }))
+                    .unwrap(),
+                ),
+                "/turns/submit" => (
+                    "application/octet-stream",
+                    postcard::to_stdvec(&signed).unwrap(),
+                ),
+                "/turns/submit-encrypted" => {
+                    let encrypted = state
+                        .read()
+                        .await
+                        .cclerk
+                        .make_encrypted_turn(&turn, unsealer.as_bytes(), 1_700_000_000)
+                        .expect("authenticated synthetic encrypted turn");
+                    (
+                        "application/octet-stream",
+                        postcard::to_stdvec(&encrypted).unwrap(),
+                    )
+                }
+                "/api/faucet" => (
+                    "application/json",
+                    serde_json::to_vec(&serde_json::json!({
+                        "recipient": hex_encode(&agent.0), "amount": 7,
+                    }))
+                    .unwrap(),
+                ),
+                _ => unreachable!(),
+            };
+            let (code, response) = post_bytes(&app, route, Some(content_type), body).await;
+            assert_eq!(code, StatusCode::OK, "{route} {mode:?}: {response}");
+            let success = if route == "/api/faucet" { "success" } else { "accepted" };
+            assert_eq!(response[success], true, "{route} {mode:?}: {response}");
+            assert!(response["error"].is_null(), "{response}");
+            assert!(response["turn_hash"].is_string(), "{response}");
+            let expected = if matches!(mode, PoolMode::Accepting) {
+                "proof_pending"
+            } else {
+                "unattested"
+            };
+            let s = state.read().await;
+            assert_eq!(s.event_log.len(), 1, "{route}: commit event must not be lost");
+            let event = serde_json::to_value(s.event_log.back().unwrap()).unwrap();
+            assert_eq!(event["proof_status"], expected, "{route} {mode:?}: {event}");
+            assert!(!event["effects"].as_array().unwrap().is_empty());
+            if route != "/api/faucet" {
+                assert_eq!(response["proof_status"], expected, "{route} {mode:?}: {response}");
+                assert_eq!(response["has_witness"], false);
+                assert_eq!(response["witness_count"], 0);
+            } else {
+                assert_eq!(response["amount"], 7);
+                assert!(response["tx_hash"].is_string());
+            }
+            if route == "/turns/submit-encrypted" {
+                assert_eq!(response["was_encrypted"], true);
+                let receipt = s.cclerk.receipt_chain().last().expect("encrypted receipt retained");
+                assert_eq!(
+                    s.is_proof_pending(&receipt.receipt_hash()),
+                    matches!(mode, PoolMode::Accepting),
+                );
+                assert_eq!(s.ledger.get(&agent).unwrap().state.nonce(), 2);
+            } else {
+                assert_eq!(s.ledger.get(&agent).unwrap().state.nonce(), 0);
+            }
+        }
+
+        macro_rules! producer_controls {
+            ($route:literal, $absent:ident, $off:ident, $full:ident, $on:ident) => {
+                #[tokio::test]
+                async fn $absent() { producer($route, PoolMode::Absent).await; }
+                #[tokio::test]
+                async fn $off() { producer($route, PoolMode::Off).await; }
+                #[tokio::test]
+                async fn $full() { producer($route, PoolMode::Full).await; }
+                #[tokio::test]
+                async fn $on() { producer($route, PoolMode::Accepting).await; }
+            };
+        }
+        producer_controls!("/turn/submit", thin_absent, thin_off, thin_full, thin_accepted);
+        producer_controls!("/turns/submit", signed_absent, signed_off, signed_full, signed_accepted);
+        producer_controls!("/turns/submit-encrypted", encrypted_absent, encrypted_off, encrypted_full, encrypted_accepted);
+        producer_controls!("/api/faucet", faucet_absent, faucet_off, faucet_full, faucet_accepted);
+
+        #[tokio::test]
+        async fn signed_receipt_is_pending_only_when_a_job_is_pending() {
+            let tmp = tempfile::tempdir().unwrap();
+            let state = NodeState::new(tmp.path(), vec![]).unwrap();
+            let receipt = dregg_turn::TurnReceipt {
+                executor_signature: Some(vec![0; 64]),
+                ..Default::default()
+            };
+            let mut s = state.write().await;
+            let status = serde_json::to_value(receipt_proof_status(&s, &receipt)).unwrap();
+            assert_eq!(status, "unattested", "a signature is not an accepted proof job");
+            s.mark_proof_pending(receipt.receipt_hash());
+            assert_eq!(receipt_proof_status(&s, &receipt), ActivityProofStatus::ProofPending);
+            s.clear_proof_pending(&receipt.receipt_hash());
+            let key = crate::turn_proving::turn_proof_failure_config_key(&hex_encode(&receipt.turn_hash));
+            s.store.set_config(&key, b"synthetic proving refusal").unwrap();
+            assert_eq!(receipt_proof_status(&s, &receipt), ActivityProofStatus::ProofGenerationFailed);
+        }
+    }
+
     #[test]
     fn http_submit_prepare_rotatable_carries_real_actor_and_rotation() {
         let public_key = [0x23; 32];
