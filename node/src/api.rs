@@ -14339,6 +14339,84 @@ mod tests {
             assert!(!state.read().await.is_proof_pending(&hash));
         }
 
+        async fn preparation_failure_is_retained(case: &str) {
+            let tmp = tempfile::tempdir().unwrap();
+            let state = NodeState::new(tmp.path(), vec![]).unwrap();
+            let pk = [0x61; 32];
+            let token = crate::executor_setup::default_token_id();
+            let cell = dregg_cell::Cell::with_balance(pk, token, -1);
+            let agent = cell.id();
+            let mut turn = projectable_http_test_turn(agent);
+            if case == "projection" {
+                turn.call_forest.roots[0].action.effects = vec![Effect::SetField {
+                    cell: agent,
+                    index: (u32::MAX as u64) + 1,
+                    value: dregg_cell::field_from_u64(7),
+                }];
+            }
+            let receipt = dregg_turn::TurnReceipt {
+                agent,
+                turn_hash: turn.hash(),
+                emitted_events: vec![dregg_turn::EmittedEvent {
+                    cell: agent, topic: [0x62; 32], data: vec![],
+                }],
+                ..Default::default()
+            };
+            let hash = receipt.receipt_hash();
+            let prepared = prepare_rotatable_turn(
+                &turn,
+                if case == "missing" { None } else { Some(&cell) },
+                Some(&cell),
+                hash,
+            );
+            let (planned, cause) = match prepared {
+                Err(cause) => (HttpWitnessOutcome::Unprovable(cause.clone()), cause),
+                Ok(HttpWitnessOutcome::Unprovable(cause)) => {
+                    (HttpWitnessOutcome::Unprovable(cause.clone()), cause)
+                }
+                _ => panic!("{case} must fail actual preparation"),
+            };
+            assert!(cause.contains(match case {
+                "missing" => "missing local pre-state",
+                "negative" => "balance is negative",
+                "projection" => "SetField",
+                _ => unreachable!(),
+            }), "{case}: {cause}");
+            state.write().await.cclerk.append_receipt(receipt.clone()).unwrap();
+            let turn_hash = hex_encode(&receipt.turn_hash);
+            assert_eq!(planned.enqueue(&state, receipt, hash, &turn_hash).await,
+                ActivityProofStatus::ProofGenerationFailed);
+            let s = state.read().await;
+            assert_eq!(s.store.get_config(
+                &crate::turn_proving::turn_proof_failure_config_key(&turn_hash),
+            ).unwrap(), Some(cause.as_bytes().to_vec()), "actual cause must survive {case}");
+            assert!(!s.is_proof_pending(&hash));
+            assert_eq!(receipt_proof_status(&s, &s.cclerk.receipt_chain()[0]).unwrap(),
+                ActivityProofStatus::ProofGenerationFailed);
+            drop(s);
+            let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+            let app = router(state, false, recorder.handle());
+            for route in ["events", "credentials", "proof-checkpoints"] {
+                let (code, body) = get_json(&app, &format!("/api/starbridge/identity/{route}")).await;
+                assert_eq!(code, StatusCode::OK);
+                assert_eq!(body.as_array().unwrap().len(), 1);
+                assert_eq!(body[0]["proof_status"], "proof_generation_failed", "{case}/{route}: {body}");
+            }
+        }
+
+        #[tokio::test]
+        async fn missing_pre_state_failure_retains_its_actual_cause() {
+            preparation_failure_is_retained("missing").await;
+        }
+        #[tokio::test]
+        async fn negative_pre_balance_failure_retains_its_actual_cause() {
+            preparation_failure_is_retained("negative").await;
+        }
+        #[tokio::test]
+        async fn projection_refusal_retains_its_actual_cause() {
+            preparation_failure_is_retained("projection").await;
+        }
+
         #[tokio::test]
         async fn identity_gets_follow_actual_pending_and_proof_material() {
             let tmp = tempfile::tempdir().unwrap();
