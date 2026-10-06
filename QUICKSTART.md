@@ -292,10 +292,17 @@ curl -s -X POST http://localhost:8421/api/turns/submit \
        \"actions\":[{\"effects\":[{\"kind\":\"set_field\",\"index\":0,\"value\":\"42\"}]}]}"
 ```
 
+When an async proof job is accepted, the response is:
+
 ```json
 {"accepted":true,"turn_hash":"8dae2ff1…","proof_status":"proof_pending",
  "has_witness":false,"witness_count":0,"error":null}
 ```
+
+If the async pool is absent, disabled (`DREGG_PROVE_WORKERS=0`), or rejects the
+job because its bounded queue is full, the successful response instead reports
+`"proof_status":"unattested"`: no proof job is pending. This does not change
+`accepted`, the turn hash, or the executor's admission/commit result.
 
 Watch the receipt land:
 
@@ -303,6 +310,8 @@ Watch the receipt land:
 curl -s http://localhost:8421/api/receipts          # the chain, newest first
 dregg turn status 8dae2ff1…
 ```
+
+If attestation material attaches, the receipt read may report:
 
 ```text
 === Turn Receipt ===
@@ -315,15 +324,17 @@ dregg turn status 8dae2ff1…
   Witnessed: yes
 ```
 
-The receipt — committed, chained, witnessed — IS your proof the turn ran on the
-verified path; `dregg turn status` reads `Proof: present`, `Witnessed: yes`. With
-`full_turn_proving` off, the witness lands immediately and the proof stays
-`proof_pending`. Start the node with `--prove-turns` and a worker attaches a real
-per-turn STARK to the committed receipt a moment later (the `Proof: present`,
-`Witness count: 1` you then read). Note the per-cell pre/post state roots in the
-receipt are only populated when proving is on — a non-proving node leaves them as
-placeholders (the cell state itself updates either way; read it back with
-`dregg cell inspect`).
+The executor's verified admission/commit and the optional STARK attestation are
+distinct facts. `proof_pending` means the async pool actually accepted a job; it
+does not promise that proving will succeed. `unattested` means no attestation is
+attached and no job is recorded as pending, never that a witness landed
+immediately. The `full_turn_proving` / `--prove-turns` finalization setting does
+not itself establish HTTP async queue acceptance. Only attached proof material
+makes `Proof: present` / `Witnessed: yes` true; missing or unrepresentable
+pre-state and checked projection refusals report `proof_generation_failed` with
+the actual cause retained. The executor result stands either way. Read the
+committed cell state with `dregg cell inspect`; do not infer attestation from an
+executor signature or placeholder pre/post roots.
 
 The federation-attested read surface a *light client* fetches — `GET
 /federation/roots` (committee-signed state roots), `GET /checkpoint/latest`

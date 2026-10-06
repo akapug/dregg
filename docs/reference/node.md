@@ -253,14 +253,22 @@ height set to `Next` (`node/src/executor_setup.rs:262`).
 
 ### Proof status
 
-Proving runs **off the commit path** (F-DOS-1). After commit the handler builds the rotatable
-turn and reports `ActivityProofStatus::ProofPending` if witness material was produced,
-`NotRequired` otherwise. `enqueue_async_proof` hands a `ProveJob` to the prove pool and marks
-the receipt proof-pending; if no pool is installed the committed receipt is left unattested
-(the executor already validated + committed it, so the commit is sound,
-`node/src/api.rs:2934`–`:2963`). `ActivityProofStatus` variants: `Proved`, `ProofPending`,
-`NotRequired`, `MissingPreState`, `ProofGenerationFailed`, `NotCommitted`
-(`node/src/state.rs:622`).
+Proving runs **off the commit path** (F-DOS-1). Preparing witness material is not
+queue acceptance: `ProofPending` is reported only when the async pool accepts the
+`ProveJob`. An absent or disabled pool, or a full queue, leaves the successful
+admission/commit `Unattested`; `NotRequired` means no effect touches the actor
+cell. Missing/unrepresentable pre-state and checked projection refusals report
+`ProofGenerationFailed`, retaining the actual cause under the turn's failure key.
+Enqueue, accepted pending marking, and the HTTP committed event share one brief
+state-write guard; proving itself never runs under that guard.
+
+The identity events, credentials and proof-checkpoints endpoints derive status
+from attached material (`Proved`), recorded failure (`ProofGenerationFailed`),
+actual pending bookkeeping (`ProofPending`), or none (`Unattested`), not from an
+executor signature. An unreadable proof record returns unavailable rather than
+claiming absence. `ActivityProofStatus` variants (`node/src/state.rs`): `Proved`,
+`ProofPending`, `Unattested`, `NotRequired`, `MissingPreState`,
+`ProofGenerationFailed`, `NotCommitted`.
 
 ### `/turn/submit` — the operator's thin local path
 

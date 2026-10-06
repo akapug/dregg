@@ -4915,11 +4915,10 @@ pub(crate) enum HttpWitnessOutcome {
     /// No effect in this turn touches the ACTOR cell, so the producer projection is
     /// the lone-`NoOp` sentinel: there is no actor transition to attest.
     NotRequired,
-    /// The CHECKED producer projection REFUSES this turn BY NAME: the turn
-    /// carries a verb whose authority plane has no AIR row (the PQ identity
-    /// verbs) or a `SetField` key wider than the AIR's u32 index lane. An
-    /// attestation is REQUIRED here and CANNOT be produced, which is a different
-    /// fact from [`Self::NotRequired`] and must not be reported as it.
+    /// An attestation is required but could not be prepared. The cause may be
+    /// missing/unrepresentable local pre-state, or the CHECKED projection refusing
+    /// an unsupported verb or field index by name. Preserve that actual cause;
+    /// neither case is [`Self::NotRequired`].
     ///
     /// Reporting it as `NotRequired` is what the old hand-rolled twin did, and it
     /// was worse than cosmetic: the twin projected a wide `SetField` key through
@@ -4942,16 +4941,59 @@ impl HttpWitnessOutcome {
                 tracing::warn!(
                     turn_hash = %turn_hash,
                     refusal = %why,
-                    "committed turn is OUTSIDE the EffectVM AIR domain; NO attestation can be \
-                     produced for it — reported as proof_generation_failed, never as \
-                     not_required (the commit itself stands: the executor is the authority)"
+                    "could not prepare the committed turn's attestation — reported as \
+                     proof_generation_failed with its actual cause, never as not_required \
+                     (the commit itself stands: the executor is the authority)"
                 );
                 (ActivityProofStatus::ProofGenerationFailed, None)
             }
         }
     }
 
-    /// Resolve the HTTP disposition OFF the write lock from actual queue acceptance.
+    /// Enqueue, retain any actual preparation failure, and record the HTTP event
+    /// under ONE brief guard. No proof generation runs under the guard.
+    async fn enqueue_and_record(
+        self,
+        state: &NodeState,
+        receipt: dregg_turn::TurnReceipt,
+        receipt_hash: [u8; 32],
+        turn_hash: &str,
+        record: impl FnOnce(&mut crate::state::NodeStateInner, ActivityProofStatus),
+    ) -> ActivityProofStatus {
+        let failure = match &self {
+            Self::Unprovable(cause) => Some(cause.clone()),
+            _ => None,
+        };
+        let (status, pending) = self.split(turn_hash);
+        let pool = state.prove_pool().await;
+        let mut s = state.write().await;
+        let status = match pending {
+            Some(rotatable) => {
+                if enqueue_proof_under_guard(
+                    &mut s, pool.as_ref(), rotatable, receipt, receipt_hash, turn_hash.to_string(),
+                ) {
+                    ActivityProofStatus::ProofPending
+                } else {
+                    status
+                }
+            }
+            None => status,
+        };
+        if let Some(cause) = failure {
+            if let Err(err) = s.store.set_config(
+                &crate::turn_proving::turn_proof_failure_config_key(turn_hash),
+                cause.as_bytes(),
+            ) {
+                tracing::error!(turn_hash = %turn_hash, cause = %cause, error = %err,
+                    "could not retain the actual attestation preparation failure; \
+                     the event and response still report failure, admission/replication continue");
+            }
+        }
+        record(&mut s, status);
+        status
+    }
+
+    #[cfg(test)]
     async fn enqueue(
         self,
         state: &NodeState,
@@ -4959,15 +5001,8 @@ impl HttpWitnessOutcome {
         receipt_hash: [u8; 32],
         turn_hash: &str,
     ) -> ActivityProofStatus {
-        let (status, pending) = self.split(turn_hash);
-        let Some(rotatable) = pending else {
-            return status;
-        };
-        if enqueue_async_proof(state, rotatable, receipt, receipt_hash, turn_hash.to_string()).await {
-            ActivityProofStatus::ProofPending
-        } else {
-            status
-        }
+        self.enqueue_and_record(state, receipt, receipt_hash, turn_hash, |_, _| {})
+            .await
     }
 }
 
@@ -5157,34 +5192,43 @@ pub(crate) async fn enqueue_async_proof(
     receipt_hash: [u8; 32],
     turn_hash_hex: String,
 ) -> bool {
-    if let Some(pool) = state.prove_pool().await {
-        let job = crate::prove_pool::ProveJob {
-            agent: rotatable.agent,
-            pre_balance: rotatable.pre_balance,
-            pre_nonce: rotatable.pre_nonce,
-            effects: rotatable.effects,
-            turn_hash: rotatable.turn_hash,
-            rotation: rotatable.rotation,
-            receipt,
-            receipt_hash,
-            turn_hash_hex,
-        };
-        // Serialize accepted marking with worker completion/failure cleanup:
-        // a fast worker must not clear pending before the producer installs it.
-        let mut s = state.write().await;
-        if pool.enqueue(job) {
-            s.mark_proof_pending(receipt_hash);
-            return true;
-        }
-        false
-    } else {
-        tracing::warn!(
-            turn_hash = %turn_hash_hex,
-            "no async prove pool installed; committed receipt left unattested (the executor \
-             already validated + committed the state, so the commit is sound)"
-        );
-        false
+    let pool = state.prove_pool().await;
+    let mut s = state.write().await;
+    enqueue_proof_under_guard(
+        &mut s, pool.as_ref(), rotatable, receipt, receipt_hash, turn_hash_hex,
+    )
+}
+
+/// The HTTP and MCP enqueue paths share acceptance and pending bookkeeping.
+/// The caller holds the guard before a job can become runnable.
+fn enqueue_proof_under_guard(
+    s: &mut crate::state::NodeStateInner,
+    pool: Option<&crate::prove_pool::ProvePool>,
+    rotatable: RotatableTurn,
+    receipt: dregg_turn::TurnReceipt,
+    receipt_hash: [u8; 32],
+    turn_hash_hex: String,
+) -> bool {
+    let Some(pool) = pool else {
+        tracing::warn!(turn_hash = %turn_hash_hex,
+            "no async prove pool installed; admitted/committed receipt left unattested");
+        return false;
+    };
+    let accepted = pool.enqueue(crate::prove_pool::ProveJob {
+        agent: rotatable.agent,
+        pre_balance: rotatable.pre_balance,
+        pre_nonce: rotatable.pre_nonce,
+        effects: rotatable.effects,
+        turn_hash: rotatable.turn_hash,
+        rotation: rotatable.rotation,
+        receipt,
+        receipt_hash,
+        turn_hash_hex,
+    });
+    if accepted {
+        s.mark_proof_pending(receipt_hash);
     }
+    accepted
 }
 
 /// Build a 200-with-error `SubmitTurnResponse` for a malformed action/effect
@@ -5470,7 +5514,7 @@ async fn post_submit_turn(
                     tracing::warn!(
                         turn_hash = %turn_hash,
                         error = %err,
-                        "could not prepare rotated attestation; receipt committed-but-unattested"
+                        "could not prepare rotated attestation; retaining the actual preparation failure"
                     );
                     HttpWitnessOutcome::Unprovable(err)
                 }
@@ -5503,16 +5547,12 @@ async fn post_submit_turn(
             // F-DOS-1: hand proving to the async pool OFF the lock, without
             // waiting for proof generation. Event and response share the result.
             let proof_status = witness_outcome
-                .enqueue(&state, receipt.clone(), receipt_hash, &turn_hash)
+                .enqueue_and_record(&state, receipt.clone(), receipt_hash, &turn_hash, |s, status| {
+                    push_committed_event_enriched(
+                        s, turn_hash.clone(), agent, kinds, summaries, status,
+                    );
+                })
                 .await;
-            push_committed_event_enriched(
-                &mut *state.write().await,
-                turn_hash.clone(),
-                agent,
-                kinds,
-                summaries,
-                proof_status,
-            );
 
             // Emit receipt event to WebSocket subscribers.
             state.emit(crate::state::NodeEvent::Receipt {
@@ -5826,7 +5866,7 @@ async fn submit_signed_turn(
                     tracing::warn!(
                         turn_hash = %turn_hash,
                         error = %err,
-                        "could not prepare rotated attestation; receipt committed-but-unattested"
+                        "could not prepare rotated attestation; retaining the actual preparation failure"
                     );
                     HttpWitnessOutcome::Unprovable(err)
                 }
@@ -5843,15 +5883,12 @@ async fn submit_signed_turn(
 
             // F-DOS-1: enqueue off the lock; report acceptance, not intention.
             let proof_status = witness_outcome
-                .enqueue(&state, receipt.clone(), receipt_hash, &turn_hash)
+                .enqueue_and_record(&state, receipt.clone(), receipt_hash, &turn_hash, |s, status| {
+                    push_committed_event(
+                        s, turn_hash.clone(), agent, vec![format!("signed_turn:{action_count}")], status,
+                    );
+                })
                 .await;
-            push_committed_event(
-                &mut *state.write().await,
-                turn_hash.clone(),
-                agent,
-                vec![format!("signed_turn:{action_count}")],
-                proof_status,
-            );
 
             state.emit(crate::state::NodeEvent::Receipt {
                 hash: turn_hash.clone(),
@@ -6324,7 +6361,7 @@ async fn post_submit_encrypted_turn(
                     tracing::warn!(
                         turn_hash = %turn_hash,
                         error = %err,
-                        "could not prepare rotated attestation; receipt committed-but-unattested"
+                        "could not prepare rotated attestation; retaining the actual preparation failure"
                     );
                     HttpWitnessOutcome::Unprovable(err)
                 }
@@ -6334,15 +6371,12 @@ async fn post_submit_encrypted_turn(
 
             // F-DOS-1: enqueue off the lock; report acceptance, not intention.
             let proof_status = witness_outcome
-                .enqueue(&state, receipt.clone(), receipt_hash, &turn_hash)
+                .enqueue_and_record(&state, receipt.clone(), receipt_hash, &turn_hash, |s, status| {
+                    push_committed_event(
+                        s, turn_hash.clone(), agent, vec!["encrypted_turn_committed".to_string()], status,
+                    );
+                })
                 .await;
-            push_committed_event(
-                &mut *state.write().await,
-                turn_hash.clone(),
-                agent,
-                vec!["encrypted_turn_committed".to_string()],
-                proof_status,
-            );
 
             // Emit receipt event (same surface as cleartext-turn commits).
             state.emit(crate::state::NodeEvent::Receipt {
@@ -9603,8 +9637,8 @@ async fn post_faucet(
                     tracing::warn!(
                         turn_hash = %turn_hash_hex,
                         error = %err,
-                        "faucet turn attestation prep failed; receipt stays \
-                         committed-but-unattested (has_proof will not flip)"
+                        "faucet turn attestation prep failed; retaining the actual cause, \
+                         admission and replication stand"
                     );
                     HttpWitnessOutcome::Unprovable(err)
                 }
@@ -9618,15 +9652,13 @@ async fn post_faucet(
             // keyed by receipt hash, not by a position in the receipt log, so this
             // is well-defined before finalization appends the canonical receipt.
             let proof_status = witness_outcome
-                .enqueue(&state, receipt.clone(), receipt_hash, &turn_hash_hex)
+                .enqueue_and_record(&state, receipt.clone(), receipt_hash, &turn_hash_hex, |s, status| {
+                    push_committed_event(
+                        s, tx_hash.clone(), req.recipient.clone(),
+                        vec![format!("faucet_transfer:{}", req.amount)], status,
+                    );
+                })
                 .await;
-            push_committed_event(
-                &mut *state.write().await,
-                tx_hash.clone(),
-                req.recipient.clone(),
-                vec![format!("faucet_transfer:{}", req.amount)],
-                proof_status,
-            );
 
             let turn_data_for_gossip = turn_data.clone();
             if let Some(gossip) = state.gossip().await {
@@ -12074,7 +12106,7 @@ mod tests {
     //      any arm of the producer — or re-introducing a hand-rolled twin in the
     //      gate — flips that variant's observed class and reds this test by name.
     //
-    // Cross-check worth stating: the 29 / 5 / 3 split below is EXACTLY the
+    // Cross-check worth stating: the 29 / 5 / 4 split below is EXACTLY the
     // Descriptor / NamedResidual / RefusedResidual split of
     // `circuit/tests/effect_enum_descriptor_residual_gate.rs`, arrived at from the
     // other end (that gate reads descriptor rungs; this one runs the projector). A
@@ -14337,6 +14369,21 @@ mod tests {
                 &state, receipt, hash, "synthetic",
             ).await, ActivityProofStatus::ProofGenerationFailed);
             assert!(!state.read().await.is_proof_pending(&hash));
+        }
+
+        #[test]
+        fn producer_events_do_not_reacquire_a_second_write_guard() {
+            let source = include_str!("api.rs");
+            for name in ["post_submit_turn", "submit_signed_turn", "post_submit_encrypted_turn", "post_faucet"] {
+                let start = source.find(&format!("\nasync fn {name}(" )).unwrap();
+                let tail = &source[start + 1..];
+                let end = ["\nasync fn ", "\nfn ", "\npub(crate) fn "]
+                    .iter().filter_map(|marker| tail.find(marker)).min().unwrap();
+                let body = &tail[..end];
+                assert_eq!(body.matches("state.write().await").count(), 1,
+                    "{name} must keep only its original guard and record through the enqueue guard");
+                assert!(body.contains(".enqueue_and_record("), "{name}");
+            }
         }
 
         async fn preparation_failure_is_retained(case: &str) {
