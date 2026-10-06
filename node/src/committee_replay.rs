@@ -121,6 +121,20 @@ fn aligned_roster(
             None => return Vec::new(),
         }
     }
+    // ⚑ ROSTER-DISTINCTNESS (task/4952): a roster where one ML-DSA key fills
+    // TWO slots is REFUSED, not installed — empty (the existing fail-closed
+    // signal), so the restart anchor re-verifies nothing built on a duplicated
+    // roster. One PQ authority must not fill two restart-anchor roster slots.
+    let mut seen = HashSet::new();
+    if roster.iter().any(|k| !seen.insert(k.0)) {
+        tracing::error!(
+            slots = roster.len(),
+            "derived PQ roster holds one ML-DSA key under multiple members — REFUSED \
+             (empty): one PQ authority must not fill two restart-anchor roster slots \
+             (task/4952)"
+        );
+        return Vec::new();
+    }
     roster
 }
 
@@ -341,7 +355,25 @@ pub fn derive_from_lace(
                 // the live path learns it from. First binding wins; a later
                 // Join claiming a different key for the same identity does not
                 // rebind.
-                pq_by_ed.entry(*node_id).or_insert(ml_dsa_pubkey.clone());
+                //
+                // ⚑ ROSTER-DISTINCTNESS (task/4952): refuse to learn an ML-DSA
+                // key another member ALREADY holds — one PQ authority must not
+                // fill two roster slots. The pure twin of the live path's
+                // `state::learn_committee_member_hybrid_key` duplicate refusal.
+                // Fail-closed: the joiner's PQ half stays unlearned, so
+                // `aligned_roster` refuses every roster that would have needed
+                // it.
+                if pq_by_ed.values().any(|k| k.0 == ml_dsa_pubkey.0) {
+                    tracing::warn!(
+                        node_id = ?node_id,
+                        "a ratified Join carries an ML-DSA key another member already holds — \
+                         NOT learned: one PQ authority must not fill two restart-anchor roster \
+                         slots (task/4952); every roster needing this member's key is refused \
+                         (empty)"
+                    );
+                } else {
+                    pq_by_ed.entry(*node_id).or_insert(ml_dsa_pubkey.clone());
+                }
             }
             if fold_membership_block(&mut cm, id, creator, &action) {
                 amendments += 1;
@@ -523,6 +555,90 @@ mod tests {
             derived.ml_dsa_history[1][d_idx],
             pq_placeholder(),
             "D's enrolled key is the one its ratified Join block carried"
+        );
+    }
+
+    /// ROSTER-DISTINCTNESS (task/4952 — the restart-anchor feeder): a roster
+    /// where one ML-DSA authority fills TWO slots is REFUSED by
+    /// `aligned_roster`, not installed — it comes out EMPTY (the same
+    /// fail-closed signal a missing key already produces), so the restart
+    /// anchor re-verifies nothing built on a duplicated roster.
+    #[test]
+    fn aligned_roster_refuses_a_duplicated_pq_roster() {
+        let a = [1u8; 32];
+        let b = [2u8; 32];
+        let marker = |v: u8| dregg_blocklace::pq::MlDsaPublicKey([v; dregg_blocklace::pq::PK_LEN]);
+        let mut pq_by_ed = HashMap::new();
+        pq_by_ed.insert(a, marker(0xA1));
+        pq_by_ed.insert(b, marker(0xA1)); // B enrolled with A's key.
+
+        assert!(
+            aligned_roster(&[a, b], &pq_by_ed).is_empty(),
+            "a duplicated PQ roster must be refused (empty), never installed"
+        );
+        assert_eq!(
+            aligned_roster(&[a], &pq_by_ed).len(),
+            1,
+            "a distinct roster still installs"
+        );
+        let mut distinct = HashMap::new();
+        distinct.insert(a, marker(0xA1));
+        distinct.insert(b, marker(0xB1));
+        assert_eq!(
+            aligned_roster(&[a, b], &distinct).len(),
+            2,
+            "two distinct authorities still fill two slots"
+        );
+    }
+
+    /// ROSTER-DISTINCTNESS (task/4952), through `derive_from_lace` itself: a
+    /// genesis PQ roster carrying a duplicate is refused — the derived
+    /// history's roster comes out empty, never installed with one PQ
+    /// authority in two slots. (The JOIN-carried duplicate is refused at the
+    /// learn point — the pure twin of the live
+    /// `learn_committee_member_hybrid_key` guard; note that on this base the
+    /// constitution fold currently admits NO join in this hand-built shape at
+    /// all — `quorum_join_survives_replay` fails on the pristine base with
+    /// `amendments 0` — so the join-carried shape cannot be observed end-to-
+    /// end here; the learn-point refusal covers it regardless of the fold.)
+    #[test]
+    fn derive_from_lace_refuses_a_duplicated_genesis_pq_roster() {
+        let (a, b, c) = (keypair(1), keypair(2), keypair(3));
+        let signers = [&a, &b, &c];
+        let genesis: Vec<[u8; 32]> = vec![pk(&a), pk(&b), pk(&c)];
+
+        // A lace carrying SOME membership payload (so the roster history is
+        // built); whether the fold admits it is irrelevant to the genesis
+        // roster's refusal.
+        let mut lace = lace_for(&a, supermajority_threshold(3));
+        let r1 = round(&mut lace, &signers, 0, &[], &[]);
+        let join_payload = Payload::MembershipVote {
+            action: MembershipAction::Join {
+                node_id: pk(&keypair(4)),
+                ml_dsa_pubkey: pq_placeholder(),
+            },
+        };
+        let _ = round(&mut lace, &signers, 1, &r1, &[(0, join_payload)]);
+
+        // The genesis roster itself carries the duplicate: B enrolled with
+        // A's ML-DSA key — one PQ authority, two slots.
+        let marker = |v: u8| dregg_blocklace::pq::MlDsaPublicKey([v; dregg_blocklace::pq::PK_LEN]);
+        let genesis_pq = vec![
+            (pk(&a), marker(0xA1)),
+            (pk(&b), marker(0xA1)),
+            (pk(&c), marker(0xC1)),
+        ];
+
+        let (derived, _cm) = derive_from_lace(&lace, &genesis, &genesis_pq, 1000);
+        assert!(
+            !derived.ml_dsa_history.is_empty(),
+            "the history is built (the lace carries a membership payload)"
+        );
+        assert!(
+            derived.ml_dsa_history[0].is_empty(),
+            "a duplicated genesis PQ roster must be refused (empty), not installed \
+             (got {} slots)",
+            derived.ml_dsa_history[0].len()
         );
     }
 

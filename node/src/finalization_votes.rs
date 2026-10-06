@@ -244,10 +244,12 @@ fn pair_tag(pair: &AttestedPair) -> String {
 /// quorum), and `record` fetches each voter's PQ key only to VERIFY its vote —
 /// nothing compared PQ values ACROSS voters. Two distinct members enrolled
 /// with the same ML-DSA key therefore both counted, and one PQ authority
-/// filled two quorum slots: a quorum assembled live was accepted while the
-/// same quorum reconstructed from the restart anchor
-/// (`dregg_federation::receipt::verify_hybrid_quorum_sigs`, which checks the
-/// WHOLE enrolled roster pairwise) was refused — live and restart diverged.
+/// filled two quorum slots: a quorum assembled live was accepted while a
+/// verifier that checks the WHOLE enrolled roster pairwise refuses it — the
+/// restart-anchor half of the roster-distinctness property (the roster-group
+/// chain's `verify_hybrid_quorum_sigs` plus its duplicate refusal; note that
+/// in THIS tree `verify_hybrid_quorum_sigs` counts distinct ED25519 signers
+/// only and does not yet refuse a duplicated roster). Live and restart diverge.
 ///
 /// The fix refuses the shape where the roster is BUILT: keep the FIRST holder
 /// of each distinct ML-DSA key in ascending ed25519-key order (deterministic —
@@ -1422,9 +1424,9 @@ mod tests {
     /// THE LIVE ROSTER-DISTINCTNESS ARM (task/4896): two DISTINCT ed25519
     /// committee members enrolled with the SAME ML-DSA key must not both count
     /// — one PQ authority cannot fill two slots of the live tally. Before the
-    /// guard this block crossed quorum LIVE on a single PQ authority while the
-    /// restart anchor (`verify_hybrid_quorum_sigs`, the roster-group half)
-    /// refuses the same quorum — live and restart diverge.
+    /// guard this block crossed quorum LIVE on a single PQ authority while a
+    /// whole-roster-verifying restart anchor (the roster-group half) refuses
+    /// the same quorum — live and restart diverge.
     #[test]
     fn duplicate_pq_key_cannot_fill_two_live_slots() {
         let (eds, mut pq) = committee_of(&[1, 2]);

@@ -581,10 +581,12 @@ impl FinalityCert {
         // ⚑ ROSTER-DISTINCTNESS (task/4896): the enrolled roster must also be
         // PAIRWISE DISTINCT — one ML-DSA authority must not fill two committee
         // slots. Compare the WHOLE roster (including slots this certificate's
-        // signer subset does not use), the same rule
-        // `dregg_federation::receipt::verify_hybrid_quorum_sigs` enforces on the
-        // restart-anchor side, so a quorum the live path assembled cannot be
-        // one a restart (or a light client) refuses.
+        // signer subset does not use). This refusal lives HERE:
+        // `dregg_federation::receipt::verify_hybrid_quorum_sigs` counts
+        // distinct ED25519 signers only and does NOT refuse a duplicated
+        // roster in this tree — so this gate is what stops a quorum the live
+        // path assembled on a duplicated roster from being accepted by a
+        // light client.
         if ml_dsa_committee
             .iter()
             .enumerate()
@@ -1107,10 +1109,10 @@ mod tests {
 
     /// **ROSTER-DISTINCTNESS (task/4896, the light-client carrier).** An
     /// enrolled ML-DSA roster where one PQ authority fills TWO committee slots
-    /// counts NO signer — fail-closed, the same whole-roster rule
-    /// `dregg_federation::receipt::verify_hybrid_quorum_sigs` (the restart
-    /// anchor) enforces — so a quorum the live path assembled on a duplicated
-    /// roster is never one a light client accepts.
+    /// counts NO signer — fail-closed — so a quorum the live path assembled on
+    /// a duplicated roster is never one a light client accepts. (The whole-
+    /// roster duplicate refusal lives HERE; `verify_hybrid_quorum_sigs` counts
+    /// distinct ED25519 signers only.)
     #[test]
     fn duplicate_enrolled_pq_roster_counts_no_signers() {
         let root = wide_root(555_555);

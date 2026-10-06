@@ -1101,9 +1101,11 @@ impl Blocklace {
     /// logged loudly. One ML-DSA authority must not occupy two creators' roster
     /// slots: the live finality path pins blocks per creator and the quorum
     /// counts distinct ed25519 signers, so a duplicated key would let one PQ
-    /// authority act as two members — a roster the restart anchor
-    /// (`verify_hybrid_quorum_sigs`) refuses. Re-enrolling the SAME creator
-    /// (idempotent or rotation) is unaffected.
+    /// authority act as two members — a roster the whole-roster-verifying
+    /// restart-anchor side refuses (the roster-group chain's duplicate check;
+    /// `verify_hybrid_quorum_sigs` in this tree counts distinct ED25519
+    /// signers only). Re-enrolling the SAME creator (idempotent or rotation)
+    /// is unaffected.
     pub fn enroll_pq(&mut self, creator: [u8; 32], pubkey: crate::pq::MlDsaPublicKey) {
         if let Some((holder, _)) = self
             .pq_roster

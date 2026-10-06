@@ -5208,10 +5208,11 @@ pub(crate) async fn run_blocklace_sync_with_membership_policy(
     // ML-DSA-65 key is enrolled under multiple members BEFORE it feeds the
     // enroll loop or the vote collector — one PQ authority must not fill two
     // quorum slots (the live tally counts distinct ed25519 signers and never
-    // compared PQ values across them, while the restart anchor refuses the
-    // duplicate roster). Duplicate holders are dropped fail-closed,
-    // deterministically, so every node drops the same one and the rosters
-    // cannot fork. `VoteCollector::new` re-checks downstream.
+    // compared PQ values across them, while the whole-roster-verifying
+    // restart-anchor side refuses the duplicated roster). Duplicate holders
+    // are dropped fail-closed, deterministically, so every node drops the
+    // same one and the rosters cannot fork. `VoteCollector::new` re-checks
+    // downstream.
     let (pq_committee, duplicate_pq) = crate::finalization_votes::dedup_pq_roster(pq_committee);
     if !duplicate_pq.is_empty() {
         tracing::error!(
