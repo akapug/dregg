@@ -1559,8 +1559,13 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use dregg_cell::CellId;
     use dregg_turn::{Action, Authorization, CallForest, DelegationMode, turn::Turn};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::sync::Mutex;
 
     use super::*;
 
@@ -2697,11 +2702,18 @@ mod tests {
         url.rsplit(':').next().unwrap_or("0").to_string()
     }
 
+    /// The bearer is read from a FILE, never argv, so the fixture writes the
+    /// one the mock node accepts and hands the client its path.
     fn transfer_flags(url: &str, to: &str) -> Flags {
+        let bearer = std::env::temp_dir().join(format!(
+            "dregg-client-sign-test-bearer-{}",
+            listener_port(url)
+        ));
+        std::fs::write(&bearer, "test-bearer").expect("write the fixture's bearer file");
         Flags {
             node_url: url.trim_end_matches('/').to_string(),
             profile: Some("hc2-transfer-test".to_string()),
-            token: Some("test-bearer".to_string()),
+            token_file: Some(bearer.to_string_lossy().into_owned()),
             topic: "client-sign".to_string(),
             to: Some(to.to_string()),
             fund: 5000,
