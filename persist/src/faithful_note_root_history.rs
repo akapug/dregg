@@ -2327,15 +2327,10 @@ mod tests {
             .load_faithful_note_root_history_hybrid_audited(&replaced, &replaced_pq, 1, expected)
             .unwrap();
         assert_eq!(rechecked.sealed_records(), 0);
-        let duplicated = [committee[0], committee[0], committee[2]];
-        let duplicated_pq = [pq_committee[0].clone(), pq_committee[0].clone(), pq_committee[2].clone()];
-        let (_, ineligible) = store
-            .load_faithful_note_root_history_hybrid_audited(&duplicated, &duplicated_pq, 1, expected)
-            .unwrap();
-        assert_eq!(ineligible.sealed_records(), 0);
-        assert!(store
-            .store_faithful_note_root_audit_seal(&ineligible, seal_quorum(&signers[0], ineligible.statement()))
-            .is_err());
+        // A duplicated roster is refused during row authentication by
+        // `federation::receipt::verify_hybrid_quorum_sigs` (task/4721), so no
+        // `policy: None` prefix is minted here and the seal guard is
+        // unreachable.  See the retired arm further down this module.
     }
 
     #[test]
@@ -2548,39 +2543,27 @@ mod tests {
         assert_eq!(changed_prefix.sealed_records(), 0);
     }
 
-    /// Control (invalid policy): a roster that cannot define a cache policy
-    /// (here a duplicated classical identity) still authenticates the rows, but
-    /// its prefix must NOT be sealable.  The old code persisted it regardless.
-    #[test]
-    fn a_prefix_without_a_bindable_policy_cannot_be_sealed() {
-        let signers = [0x89, 0x8a, 0x8b].map(HybridSigner::new);
-        let (store, expected) = one_row_history(&signers, 0x89);
-        let duplicated = [signers[0].ed_pk, signers[0].ed_pk, signers[2].ed_pk];
-        let duplicated_pq = [
-            signers[0].pq_pk.clone(),
-            signers[0].pq_pk.clone(),
-            signers[2].pq_pk.clone(),
-        ];
-        let (_, prefix) = store
-            .load_faithful_note_root_history_hybrid_audited(
-                &duplicated,
-                &duplicated_pq,
-                1,
-                expected,
-            )
-            .unwrap();
-        assert_eq!(prefix.sealed_records(), 0);
-        let refusal = store
-            .store_faithful_note_root_audit_seal(
-                &prefix,
-                seal_quorum(&signers[0], prefix.statement()),
-            )
-            .unwrap_err();
-        assert_eq!(
-            refusal.to_string(),
-            integrity(FaithfulNoteRootHistoryError::AuthenticationFailed).to_string()
-        );
-    }
+    // RETIRED (task/4180).  This arm asserted that a roster which cannot define
+    // a cache policy (a duplicated classical identity) still authenticates its
+    // rows, so only `store_faithful_note_root_audit_seal`'s `policy.is_none()`
+    // check kept its prefix unsealable.  That premise is refuted on
+    // `origin/main`: a duplicated enrolled roster is refused during row
+    // authentication, before a `policy: None` prefix can be minted, by
+    // `federation::receipt::verify_hybrid_quorum_sigs` (task/4721, 0da3639f8),
+    // whose whole-roster PQ-distinctness guard the arms' `[pq0, pq0, pq2]`
+    // trips; a duplicated CLASSICAL identity with distinct PQ slots trips its
+    // enrolled-index pin instead (the collided `index_of` resolves the signer
+    // to the later slot's key, so the PQ half fails).  Every input
+    // that makes `faithful_note_root_audit_policy` return `None` (threshold 0,
+    // threshold > len, length mismatch, duplicated classical) is refused the
+    // same way, so the property is subsumed: no public-API input reaches the
+    // seal guard.  The policy's `None` set stays covered by
+    // `audit_policy_value_identity_and_invalid_descriptors`; the roster
+    // refusals by `federation::receipt::hybrid_quorum_rejects_duplicate_
+    // enrolled_pq_keys` (task/4721), the `verify_pq_quorum_half` controls
+    // (task/4847), and `durable_hybrid_append_rejects_duplicate_enrolled_pq_keys`
+    // here.  The `store_faithful_note_root_audit_seal` guard itself now has no
+    // test: nothing can reach it from the public API.
 
     /// Control (reopen + legacy seal): a version-1 seal written to disk must be
     /// ignored after a reopen, so every row is re-authenticated.  The old reader
