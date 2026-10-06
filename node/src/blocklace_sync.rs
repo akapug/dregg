@@ -20079,6 +20079,337 @@ mod tests {
             );
         }
     }
+
+    // ─── Checkpoint bootstrap admission (task/4116) ──────────────────────────
+    //
+    // The seam: `bootstrap_from_checkpoint` used to compare the PEER's ledger
+    // against the PEER's own recomputed hash and return whatever came back —
+    // the peer fully self-asserted what bootstrap trusted. These tests pin the
+    // admission contract: no independent authority ⇒ refuse; evidence that
+    // does not bind the peer-claimed frontier ⇒ refuse; a genuinely signed
+    // checkpoint under genuinely pinned keys ⇒ admit.
+
+    /// Serve `body` once over a test-local HTTP endpoint and return its URL.
+    /// (`fetch_checkpoint_http` is a raw HTTP/1.1 client, so the fixture is a
+    /// raw HTTP/1.1 responder — one request, one canned response.)
+    async fn serve_checkpoint_body_once(body: Vec<u8>) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = sock.read(&mut buf).await;
+            let mut out = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .into_bytes();
+            out.extend_from_slice(&body);
+            let _ = sock.write_all(&out).await;
+            let _ = sock.shutdown().await;
+        });
+        format!("http://{addr}")
+    }
+
+    /// A well-formed peer checkpoint response: a real signature-authenticating
+    /// DAG, a real ledger snapshot, and self-consistent hashes — everything
+    /// the OLD seam needed to say yes, and none of it authority.
+    struct PeerCheckpointFixture {
+        url: String,
+        peer_height: u64,
+        cells: Vec<(dregg_cell::CellId, dregg_cell::Cell)>,
+        ledger_root: [u8; 32],
+    }
+
+    async fn serve_well_formed_peer_checkpoint() -> PeerCheckpointFixture {
+        let (lace, _sk, _blocks) = deep_chain_lace(4);
+        let checkpoint_data = lace.checkpoint();
+        let blocklace_data = postcard::to_stdvec(&checkpoint_data).unwrap();
+
+        let mut ledger = dregg_cell::Ledger::new();
+        ledger
+            .insert_cell(dregg_cell::Cell::with_balance([0xA1; 32], [0x02; 32], 700))
+            .unwrap();
+        ledger
+            .insert_cell(dregg_cell::Cell::with_balance([0xB2; 32], [0x02; 32], 900))
+            .unwrap();
+        let cells: Vec<(dregg_cell::CellId, dregg_cell::Cell)> =
+            ledger.iter().map(|(id, c)| (*id, c.clone())).collect();
+        let ledger_root = dregg_persist::canonical_ledger_root(&ledger);
+        let ledger_data = postcard::to_stdvec(&cells).unwrap();
+
+        let peer_height = 8u64;
+        let response = BlocklaceCheckpointResponse {
+            height: peer_height,
+            blocklace: hex_encode(&compress_checkpoint_data(&blocklace_data)),
+            ledger: hex_encode(&compress_checkpoint_data(&ledger_data)),
+            blocklace_hash: hex_encode(blake3::hash(&blocklace_data).as_bytes()),
+            ledger_hash: hex_encode(blake3::hash(&ledger_data).as_bytes()),
+        };
+        let body = serde_json::to_vec(&response).unwrap();
+        let url = serve_checkpoint_body_once(body).await;
+        PeerCheckpointFixture {
+            url,
+            peer_height,
+            cells,
+            ledger_root,
+        }
+    }
+
+    /// A genuinely signed federation checkpoint over `(height, ledger_root)`,
+    /// signed by `threshold` DISTINCT members of a pinned roster, plus the
+    /// roster pins themselves.
+    fn signed_federation_checkpoint_for(
+        height: u64,
+        ledger_root: [u8; 32],
+        signers: &[ed25519_dalek::SigningKey],
+        threshold: usize,
+    ) -> (
+        dregg_federation::checkpoint::Checkpoint,
+        Vec<dregg_federation::types::NodeIdentity>,
+    ) {
+        let committee: Vec<dregg_federation::types::PublicKey> = signers
+            .iter()
+            .map(|sk| dregg_federation::types::PublicKey(sk.verifying_key().to_bytes()))
+            .collect();
+        let nodes: Vec<dregg_federation::types::NodeIdentity> = committee
+            .iter()
+            .enumerate()
+            .map(|(i, pk)| dregg_federation::types::NodeIdentity {
+                name: format!("validator-{i}"),
+                id: i,
+                public_key: *pk,
+            })
+            .collect();
+        let mut checkpoint = dregg_federation::checkpoint::create_checkpoint(
+            height,
+            ledger_root,
+            [0u8; 32],
+            [0u8; 32],
+            [0u8; 32],
+            committee,
+            0,
+        );
+        let content_hash = checkpoint.content_hash();
+        let message =
+            dregg_federation::types::QuorumCertificate::vote_message(&content_hash, height, 0);
+        let votes: Vec<(usize, dregg_federation::types::Signature)> = signers
+            .iter()
+            .enumerate()
+            .take(threshold)
+            .map(|(i, sk)| {
+                (
+                    i,
+                    dregg_federation::types::sign(
+                        &dregg_federation::types::SigningKey::from_bytes(&sk.to_bytes()),
+                        &message,
+                    ),
+                )
+            })
+            .collect();
+        checkpoint.qc = dregg_federation::types::QuorumCertificate {
+            block_hash: content_hash,
+            height,
+            view: 0,
+            aggregate_qc: None,
+            votes,
+            threshold,
+        };
+        (checkpoint, nodes)
+    }
+
+    fn federation_authority(
+        checkpoint: dregg_federation::checkpoint::Checkpoint,
+        nodes: Vec<dregg_federation::types::NodeIdentity>,
+    ) -> BootstrapFinalizedAuthority {
+        BootstrapFinalizedAuthority::SignedFederationCheckpoint {
+            checkpoint,
+            nodes,
+            ml_dsa_committee: Vec::new(),
+            threshold: 2,
+        }
+    }
+
+    /// THE REFUSAL CONTRACT: a peer checkpoint that is perfectly self-consistent
+    /// (its own hash over its own cells, every block signature authentic) is
+    /// still refused when the caller holds NO independent finalized authority.
+    /// This is the arm that used to read RED: the old seam returned the decoded
+    /// state on exactly this input.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn checkpoint_bootstrap_refuses_peer_self_asserted_state_without_independent_authority()
+    {
+        // The consensus-time-v1 deployment coordinate must be present so the
+        // flow REACHES the admission gate — the refusal under test must be the
+        // missing authority, not a missing env coordinate.
+        // SAFETY: test-only process-global coordinate; no other test in this
+        // binary reads these two variables (the live loop reads them only via
+        // `run_blocklace_sync`, whose tests use the explicit-policy variant).
+        unsafe {
+            std::env::set_var(
+                crate::genesis::CONSENSUS_GENESIS_UNIX_SECONDS_ENV,
+                "1700000000",
+            );
+            std::env::set_var(
+                crate::genesis::CONSENSUS_TIME_V1_MODE_ENV,
+                crate::genesis::CONSENSUS_TIME_V1_DEVNET_CAUSAL_MODE,
+            );
+        }
+        let fixture = serve_well_formed_peer_checkpoint().await;
+        let self_key = ed25519_dalek::SigningKey::from_bytes(&[0x77u8; 32]);
+        let restored = bootstrap_from_checkpoint(
+            &fixture.url,
+            self_key,
+            1,
+            None,
+        )
+        .await;
+        assert!(
+            restored.is_none(),
+            "a peer-self-asserted checkpoint (no independent authority) must not \
+             bootstrap: the peer's height/ledger/order are unauthenticated"
+        );
+    }
+
+    /// ADMISSION: a genuinely signed checkpoint under genuinely pinned keys —
+    /// at the peer's claimed height, over the decoded ledger's canonical root —
+    /// admits; every weaker shape refuses. Each arm serves its OWN fixture so a
+    /// refusal can only be the admission gate, never a dead fixture socket.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn checkpoint_bootstrap_admits_only_an_authority_bound_frontier() {
+        // The consensus-time-v1 deployment coordinate must be present so the
+        // flow REACHES the admission gate, not stop at the env check.
+        // SAFETY: test-only process-global coordinate (see the refusal test).
+        unsafe {
+            std::env::set_var(
+                crate::genesis::CONSENSUS_GENESIS_UNIX_SECONDS_ENV,
+                "1700000000",
+            );
+            std::env::set_var(
+                crate::genesis::CONSENSUS_TIME_V1_MODE_ENV,
+                crate::genesis::CONSENSUS_TIME_V1_DEVNET_CAUSAL_MODE,
+            );
+        }
+        let signers: Vec<ed25519_dalek::SigningKey> = (0..3)
+            .map(|i| {
+                let mut seed = [0u8; 32];
+                seed[0] = 0x40 + i;
+                ed25519_dalek::SigningKey::from_bytes(&seed)
+            })
+            .collect();
+        let self_key = ed25519_dalek::SigningKey::from_bytes(&[0x77u8; 32]);
+
+        // GREEN: signed at the peer's height over the decoded ledger's root.
+        let fixture = serve_well_formed_peer_checkpoint().await;
+        let (checkpoint, nodes) =
+            signed_federation_checkpoint_for(fixture.peer_height, fixture.ledger_root, &signers, 2);
+        let authority = federation_authority(checkpoint, nodes);
+        let restored = bootstrap_from_checkpoint(
+            &fixture.url,
+            self_key.clone(),
+            1,
+            Some(&authority),
+        )
+        .await;
+        let (lace, cells) = restored
+            .expect("a signed, height-matched, root-matched checkpoint admits");
+        assert_eq!(cells.len(), 2, "the admitted ledger is the decoded one");
+        assert!(
+            !lace.is_empty(),
+            "the admitted DAG is the signature-authenticated one"
+        );
+
+        // REFUSAL: evidence signed for a DIFFERENT height does not bind the
+        // peer-claimed executed frontier.
+        let fixture = serve_well_formed_peer_checkpoint().await;
+        let (checkpoint, nodes) = signed_federation_checkpoint_for(
+            fixture.peer_height + 1,
+            fixture.ledger_root,
+            &signers,
+            2,
+        );
+        let authority = federation_authority(checkpoint, nodes);
+        assert!(
+            bootstrap_from_checkpoint(&fixture.url, self_key.clone(), 1, Some(&authority))
+                .await
+                .is_none(),
+            "an unbound execution frontier must refuse"
+        );
+
+        // REFUSAL: evidence over a different ledger root (the peer's own blake3
+        // ledger_hash is NOT the binding — the canonical root is).
+        let fixture = serve_well_formed_peer_checkpoint().await;
+        let other_root = {
+            let mut ledger = dregg_cell::Ledger::new();
+            ledger
+                .insert_cell(dregg_cell::Cell::with_balance([0xC3; 32], [0x02; 32], 5))
+                .unwrap();
+            dregg_persist::canonical_ledger_root(&ledger)
+        };
+        let (checkpoint, nodes) =
+            signed_federation_checkpoint_for(fixture.peer_height, other_root, &signers, 2);
+        let authority = federation_authority(checkpoint, nodes);
+        assert!(
+            bootstrap_from_checkpoint(&fixture.url, self_key.clone(), 1, Some(&authority))
+                .await
+                .is_none(),
+            "a decoded ledger diverging from the signed root must refuse"
+        );
+
+        // REFUSAL: a WEAKER tuple-quorum. The served `qc.threshold` is not
+        // hash-covered, so a served checkpoint can lower it freely; admission
+        // enforces the CALLER's threshold instead of trusting the served one.
+        let fixture = serve_well_formed_peer_checkpoint().await;
+        let (checkpoint, nodes) =
+            signed_federation_checkpoint_for(fixture.peer_height, fixture.ledger_root, &signers, 2);
+        let BootstrapFinalizedAuthority::SignedFederationCheckpoint {
+            mut checkpoint,
+            nodes,
+            ..
+        } = federation_authority(checkpoint, nodes)
+        else {
+            unreachable!()
+        };
+        checkpoint.qc.votes.truncate(1);
+        checkpoint.qc.threshold = 1;
+        let authority = federation_authority(checkpoint, nodes);
+        assert!(
+            bootstrap_from_checkpoint(&fixture.url, self_key.clone(), 1, Some(&authority))
+                .await
+                .is_none(),
+            "a served checkpoint that lowers its own quorum below the admission \
+             threshold must refuse, not mint a weaker tuple-quorum into proof"
+        );
+
+        // REFUSAL: a signature from a key that is NOT on the pinned roster.
+        // Voter slot 2 is pinned to signer 2; an outsider's signature in that
+        // slot fails against the pinned key.
+        let fixture = serve_well_formed_peer_checkpoint().await;
+        let (checkpoint, nodes) =
+            signed_federation_checkpoint_for(fixture.peer_height, fixture.ledger_root, &signers, 2);
+        let outsider = ed25519_dalek::SigningKey::from_bytes(&[0x5F; 32]);
+        let mut checkpoint = checkpoint;
+        let content_hash = checkpoint.content_hash();
+        let message = dregg_federation::types::QuorumCertificate::vote_message(
+            &content_hash,
+            fixture.peer_height,
+            0,
+        );
+        checkpoint.qc.votes.push((
+            2,
+            dregg_federation::types::sign(
+                &dregg_federation::types::SigningKey::from_bytes(&outsider.to_bytes()),
+                &message,
+            ),
+        ));
+        let authority = federation_authority(checkpoint, nodes);
+        assert!(
+            bootstrap_from_checkpoint(&fixture.url, self_key, 1, Some(&authority))
+                .await
+                .is_none(),
+            "a non-member signature must not count toward the admission quorum"
+        );
+    }
 }
 
 // ─── Periodic Ledger Checkpointing ─────────────────────────────────────────
@@ -20314,6 +20645,131 @@ pub struct BlocklaceCheckpointQuery {
     pub height: Option<u64>,
 }
 
+/// Independent finalized authority for checkpoint bootstrap admission (task/4116).
+///
+/// ⚑ EVERY field here comes from the CALLER's own authenticated deployment
+/// configuration — the peer being bootstrapped from contributes nothing. A
+/// checkpoint served with NO authority of this kind is exactly the
+/// peer-self-asserted trust the old seam ran on: the peer recomputed its own
+/// hash over its own cells and the bootstrap admitted whatever came back.
+/// `bootstrap_from_checkpoint` takes this as `Option` and REFUSES `None` —
+/// fail closed — so a caller that has not wired independent authority cannot
+/// silently fall back to peer trust.
+///
+/// What the admitted evidence binds (and what it does not): a signed
+/// federation Checkpoint binds the LEDGER ROOT and the checkpoint HEIGHT it
+/// signs, under the caller's independent historical roster pins. It does NOT
+/// bind the remote DAG block ids or the tau order — those stay authenticated
+/// block-by-block (signature/closure/equivocation via `from_checkpoint`) and
+/// are never finality-attested by this evidence. The second evidence type the
+/// admission contract names — a signed PoA compact checkpoint anchor — is NOT
+/// constructible here yet: persist's capsule audit is store-coupled and
+/// `pub(crate)`, and admitting an anchor on signature alone (without its dense
+/// certificate-history audit) would mint exactly the weaker proof this
+/// contract forbids.
+pub enum BootstrapFinalizedAuthority {
+    /// A signed federation checkpoint, verified inside admission under these
+    /// independent historical pins.
+    SignedFederationCheckpoint {
+        checkpoint: dregg_federation::checkpoint::Checkpoint,
+        /// Independent Ed25519 roster pins, index-aligned with the QC's voter
+        /// ids. Never the peer's roster.
+        nodes: Vec<dregg_federation::types::NodeIdentity>,
+        /// Independent ML-DSA roster pins for the hybrid PQ path; empty on a
+        /// classical-only federation (then the classical QC path is used).
+        ml_dsa_committee: Vec<dregg_federation::frost::MlDsaPublicKey>,
+        /// The minimum distinct-signer quorum admission accepts. The
+        /// peer-asserted `qc.threshold` is NEVER trusted for this count (the
+        /// content hash does not cover it, so a served checkpoint can lower it
+        /// freely).
+        threshold: usize,
+    },
+}
+
+/// FINALIZED ADMISSION (task/4116): decide whether a decoded peer checkpoint
+/// may be admitted, under independent authority. The peer's bytes were already
+/// decoded UNTRUSTED before this gate runs; this is the only thing that turns
+/// them into a returned bootstrap. Fail-closed edges:
+///
+///   * no authority at all — refused by the caller (`None` ⇒ `None`);
+///   * evidence whose quorum does not verify under the CALLER's pins — refuse;
+///   * evidence whose signed height is not exactly the peer-claimed executed
+///     frontier H — refuse (an unbound execution frontier);
+///   * decoded ledger whose canonical root is not the SIGNED ledger root —
+///     refuse. The response's self-asserted blake3 `ledger_hash` is never the
+///     binding: the signed root is over the canonical ledger reconstruction
+///     (`dregg_persist::canonical_ledger_root`), the same root the finalized
+///     producer binds on publication.
+fn admit_checkpoint_to_finalized_authority(
+    authority: &BootstrapFinalizedAuthority,
+    peer_height: u64,
+    cells: &[(dregg_cell::CellId, dregg_cell::Cell)],
+) -> Result<(), String> {
+    let BootstrapFinalizedAuthority::SignedFederationCheckpoint {
+        checkpoint,
+        nodes,
+        ml_dsa_committee,
+        threshold,
+    } = authority;
+    if *threshold == 0 {
+        return Err("admission threshold is zero".to_string());
+    }
+    // Verify the quorum under the CALLER's pins, never anything the peer
+    // served. Hybrid pins present ⇒ the PQ path: a signer counts only when
+    // BOTH its halves verify against the ENROLLED keys. Classical-only ⇒ the
+    // QC vote path, with the count floor enforced against OUR threshold
+    // because the served `qc.threshold` is not hash-covered.
+    if ml_dsa_committee.is_empty() {
+        if checkpoint.qc.threshold < *threshold {
+            return Err(format!(
+                "served checkpoint quorum {} is below the admission threshold {}",
+                checkpoint.qc.threshold, threshold
+            ));
+        }
+        checkpoint
+            .verify(nodes)
+            .map_err(|e| format!("checkpoint quorum does not verify under pinned roster: {e:?}"))?;
+    } else {
+        let committee: Vec<dregg_federation::types::PublicKey> =
+            nodes.iter().map(|n| n.public_key).collect();
+        checkpoint
+            .verify_hybrid(&committee, ml_dsa_committee, *threshold)
+            .map_err(|e| {
+                format!("checkpoint hybrid quorum does not verify under pinned roster: {e:?}")
+            })?;
+    }
+    // The evidence must be AT the peer-claimed executed frontier. A checkpoint
+    // signed for any other height does not bind H — refuse rather than admit a
+    // frontier nobody vouched for.
+    if checkpoint.height != peer_height {
+        return Err(format!(
+            "signed checkpoint height {} does not bind the peer-claimed executed frontier {peer_height}",
+            checkpoint.height
+        ));
+    }
+    // The decoded ledger must reconstruct to the SIGNED canonical root. This
+    // is the consumer twin of the finalized producer's publication binding
+    // (`canonical_ledger_root` against the finalized commit authority's
+    // ledger_root) — the peer's own blake3 over its cell vector authenticates
+    // nothing.
+    let mut ledger = dregg_cell::Ledger::new();
+    for (id, cell) in cells {
+        if *id != cell.id() {
+            return Err("ledger snapshot cell id disagrees with its paired cell".to_string());
+        }
+        ledger.insert_cell(cell.clone()).map_err(|e| {
+            format!("ledger snapshot is not a well-formed cell set: {e:?}")
+        })?;
+    }
+    let decoded_root = dregg_persist::canonical_ledger_root(&ledger);
+    if decoded_root != checkpoint.ledger_state_root {
+        return Err(
+            "decoded ledger root diverges from the signed checkpoint ledger root".to_string(),
+        );
+    }
+    Ok(())
+}
+
 pub fn load_blocklace_checkpoint(
     store: &dregg_persist::PersistentStore,
     height: u64,
@@ -20357,10 +20813,22 @@ pub fn latest_blocklace_checkpoint_height(store: &dregg_persist::PersistentStore
         .unwrap_or(0)
 }
 
+/// Bootstrap from a peer's checkpoint.
+///
+/// ⚑ ADMISSION CONTRACT (task/4116): decoding the peer's checkpoint stays
+/// UNTRUSTED — every byte below is decoded and re-authenticated block-by-block
+/// (signature/closure/equivocation) exactly as before — but returning it as a
+/// bootstrap requires INDEPENDENT FINALIZED AUTHORITY via `authority`. The
+/// peer fully self-asserts the response (its height, its DAG, its ledger, its
+/// own hashes); nothing remote about the ledger/order/executed height is
+/// authenticated by the peer's own hashes. `authority == None` refuses
+/// (fail closed): a caller with no independent authority gets no bootstrap,
+/// never a peer-trusted one.
 pub async fn bootstrap_from_checkpoint(
     peer_url: &str,
     self_key: ed25519_dalek::SigningKey,
     quorum_threshold: usize,
+    authority: Option<&BootstrapFinalizedAuthority>,
 ) -> Option<(
     dregg_blocklace::finality::Blocklace,
     Vec<(dregg_cell::CellId, dregg_cell::Cell)>,
@@ -20444,6 +20912,31 @@ pub async fn bootstrap_from_checkpoint(
                 return None;
             }
         };
+
+    // ── FINALIZED ADMISSION (task/4116) ─────────────────────────────────────
+    // Everything above decoded the peer UNTRUSTED. Returning it as a bootstrap
+    // requires independent authority: refuse a caller that supplied none, and
+    // refuse evidence that does not bind the peer-claimed frontier.
+    let Some(authority) = authority else {
+        warn!(
+            peer = %peer_url,
+            height = checkpoint_resp.height,
+            "refusing checkpoint bootstrap: no independent finalized authority \
+             (peer height/ledger/order are self-asserted)"
+        );
+        return None;
+    };
+    if let Err(e) =
+        admit_checkpoint_to_finalized_authority(authority, checkpoint_resp.height, &cells)
+    {
+        warn!(
+            peer = %peer_url,
+            height = checkpoint_resp.height,
+            error = %e,
+            "refusing checkpoint bootstrap: finalized admission failed"
+        );
+        return None;
+    }
 
     info!(
         peer = %peer_url,
