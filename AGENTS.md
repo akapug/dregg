@@ -226,13 +226,14 @@ trusting an import cleanup.
 
 ## Swarm-safety (if you're a subagent in a fleet)
 
-- The **main loop commits**; subagents don't run git (unless explicitly deputized).
-  Never `git stash`, never `git checkout`/revert to discard WIP — it is not
-  swarm-safe (every parallel agent shares the working tree).
-- **Never branch or worktree.** Commit to the current branch (`main`) — never
-  `git checkout -b` / `switch -c` / `worktree add`. It strands work and drifts the
-  shared HEAD off `main` for every other terminal on this tree. If
-  `git branch --show-current` ≠ `main` after you commit, you branched by mistake.
+- The **main loop commits**; subagents don't run mutating git unless explicitly
+  deputized. Never `git stash`, never `git checkout`/revert to discard WIP:
+  preserve foreign WIP and disjoint writer custody.
+- **Never switch or branch the shared checkout, and never create an unregistered
+  worktree.** Explicitly delegated Helm builders work and commit only in a
+  normally registered leased private lane; read-only/shared-tree subagents do not
+  run mutating git. Use `helm work claim <lane> --repo <path> --task task/N
+  --whole|--part`, not raw `git checkout -b` / `switch -c` / `worktree add`.
 - **Don't edit a file another lane is in.** If a cutover/HARDSWAP is rewriting a
   crate, segregate or work elsewhere; report a needed change rather than racing it.
 - Concurrent persvati build collisions are normal — sleep 60s and retry, don't roll

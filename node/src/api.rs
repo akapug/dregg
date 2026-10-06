@@ -14124,6 +14124,9 @@ mod tests {
         // lock/router futures return. Full is a real one-slot queue filled through
         // enqueue_async_proof; accepting checks admission, not proof completion.
         async fn producer(route: &str, mode: PoolMode) {
+            let _ = crate::install_mldsa_verified_keygen_core_real();
+            let _ = crate::install_mldsa_verified_sign_core_real();
+            let _ = crate::install_mldsa_verified_verify_core();
             let tmp = tempfile::tempdir().expect("synthetic node directory");
             let state = NodeState::new(tmp.path(), vec![]).expect("synthetic node");
             let (agent, turn, signed, unsealer) = {
@@ -14289,6 +14292,64 @@ mod tests {
         producer_controls!("/turns/submit", signed_absent, signed_off, signed_full, signed_accepted);
         producer_controls!("/turns/submit-encrypted", encrypted_absent, encrypted_off, encrypted_full, encrypted_accepted);
         producer_controls!("/api/faucet", faucet_absent, faucet_off, faucet_full, faucet_accepted);
+
+        #[tokio::test]
+        async fn identity_gets_follow_actual_pending_and_proof_material() {
+            let tmp = tempfile::tempdir().unwrap();
+            let state = NodeState::new(tmp.path(), vec![]).unwrap();
+            let receipt = dregg_turn::TurnReceipt {
+                turn_hash: [0x51; 32],
+                agent: CellId([0x52; 32]),
+                executor_signature: Some(vec![0; 64]),
+                emitted_events: vec![dregg_turn::EmittedEvent {
+                    cell: CellId([0x52; 32]),
+                    topic: [0x53; 32],
+                    data: vec![],
+                }],
+                ..Default::default()
+            };
+            state.write().await.cclerk.append_receipt(receipt).unwrap();
+            let receipt = state.read().await.cclerk.receipt_chain()[0].clone();
+            let hash = receipt.receipt_hash();
+            let turn_hash = hex_encode(&receipt.turn_hash);
+            let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+            let app = router(state.clone(), false, recorder.handle());
+            for expected in ["unattested", "proof_pending", "proof_generation_failed", "proved"] {
+                {
+                    let mut s = state.write().await;
+                    match expected {
+                        "proof_pending" => s.mark_proof_pending(hash),
+                        "proof_generation_failed" => {
+                            s.clear_proof_pending(&hash);
+                            s.store.set_config(
+                                &crate::turn_proving::turn_proof_failure_config_key(&turn_hash),
+                                b"synthetic failure",
+                            ).unwrap();
+                        }
+                        "proved" => {
+                            s.store.set_config(
+                                &crate::turn_proving::turn_proof_config_key(&turn_hash),
+                                b"synthetic attached proof bytes",
+                            ).unwrap();
+                        }
+                        _ => {}
+                    }
+                }
+                for route in ["events", "credentials", "proof-checkpoints"] {
+                    let (code, body) = get_json(
+                        &app,
+                        &format!("/api/starbridge/identity/{route}"),
+                    ).await;
+                    assert_eq!(code, StatusCode::OK);
+                    assert_eq!(body.as_array().unwrap().len(), 1, "{route}: {body}");
+                    assert_eq!(body[0]["proof_status"], expected, "{route}: {body}");
+                    if route == "proof-checkpoints" {
+                        assert_eq!(body[0]["executor_signed"], true);
+                        assert_eq!(body[0]["witness_count"], 0);
+                    }
+                }
+            }
+        }
 
         #[tokio::test]
         async fn signed_receipt_is_pending_only_when_a_job_is_pending() {
