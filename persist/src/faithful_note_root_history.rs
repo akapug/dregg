@@ -1088,7 +1088,7 @@ impl PersistentStore {
         let records = rows.len() as u64;
         let mut authentic = vec![true; sealed];
         authentic.extend(authenticate_rows(&rows[sealed..], &authenticate));
-        let mut history = FaithfulNoteRootHistoryV1::new(anchor);
+        let mut history = FaithfulNoteRootHistoryV1::new(anchor.clone());
         for (envelope, authentic) in rows.into_iter().zip(authentic) {
             if !authentic {
                 return Err(integrity(
