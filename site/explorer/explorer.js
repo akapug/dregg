@@ -279,7 +279,7 @@ function proofStatusPill(s) {
     case "proof_pending":
       return '<span class="pill warn" title="an async proof job was accepted; its attestation is not attached yet">proof pending</span>';
     case "unattested":
-      return '<span class="pill warn" title="no attestation is attached and no async proof job was accepted">unattested</span>';
+      return '<span class="pill warn" title="no attestation is attached and no async proof job is pending">unattested</span>';
     case "not_required":
       return '<span class="pill mute" title="this node does not require a proof for this turn">not required</span>';
     case "missing_pre_state":

@@ -1199,8 +1199,9 @@ pub enum ActivityProofStatus {
     /// An async proof job was accepted; its attestation has not yet attached.
     /// This is queue acceptance, not a promise that proof generation will succeed.
     ProofPending,
-    /// No attestation is attached and no async proof job was accepted. The
-    /// executor's successful commit/admission is unchanged; no proof is in flight.
+    /// No attestation is attached and no async proof job is recorded as pending.
+    /// At HTTP admission this means no job was accepted; a receipt view does not
+    /// claim that no past attempt failed. Commit/admission success is unchanged.
     Unattested,
     NotRequired,
     MissingPreState,
