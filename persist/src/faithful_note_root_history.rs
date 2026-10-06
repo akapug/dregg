@@ -2398,6 +2398,256 @@ mod tests {
         assert_eq!((prefix.unwrap().sealed_records(), checked), (0, 1));
     }
 
+    /// Build a one-row history whose row is signed by `signers[0]` and return
+    /// the store plus the exact expectation a load must meet.  The controls
+    /// below drive only the PUBLIC audited API, so the same test bodies compile
+    /// and run against the pre-cure tree, which is what makes their RED capture
+    /// (the old code accepting) meaningful rather than a compile error.
+    fn one_row_history(
+        signers: &[HybridSigner],
+        block: u8,
+    ) -> (PersistentStore, FaithfulNoteRootExpectationV1) {
+        let store = PersistentStore::open_in_memory().unwrap();
+        let (tree, anchor) = empty_anchor();
+        store
+            .initialize_faithful_note_root_history(&anchor)
+            .unwrap();
+        let row = signed_planned(&signers[0], &tree, &anchor, block, &[[block; 32]]);
+        store.append_faithful_note_root_verified(&row).unwrap();
+        let expected = store.faithful_note_root_expectation().unwrap().unwrap();
+        (store, expected)
+    }
+
+    /// Control (weak mint 1 / strong seal 3): a seal minted while the row was
+    /// authenticated under a 1-of-3 policy must NOT authenticate that row when
+    /// the audited load runs under a 3-of-3 policy, even though a genuine 3-of-3
+    /// quorum signs the statement.  The old statement bound no policy, so it was
+    /// honoured; the cure binds the mint policy, so the row is re-checked and
+    /// refused under the stronger policy it was never minted under.
+    #[test]
+    fn strong_seal_does_not_authenticate_a_row_minted_under_a_weaker_policy() {
+        let signers = [0x81, 0x82, 0x83].map(HybridSigner::new);
+        let committee = signers.each_ref().map(|signer| signer.ed_pk);
+        let pq_committee = signers.each_ref().map(|signer| signer.pq_pk.clone());
+        let store = PersistentStore::open_in_memory().unwrap();
+        let (tree, anchor) = empty_anchor();
+        store
+            .initialize_faithful_note_root_history(&anchor)
+            .unwrap();
+        let row = signed_planned(&signers[0], &tree, &anchor, 0x81, &[[0x81; 32]]);
+        assert!(
+            row.verify_hybrid(&committee, &pq_committee, 1),
+            "row mints under threshold 1"
+        );
+        assert!(
+            !row.verify_hybrid(&committee, &pq_committee, 3),
+            "row is NOT a 3-of-3 row"
+        );
+        store.append_faithful_note_root_verified(&row).unwrap();
+        let expected = store.faithful_note_root_expectation().unwrap().unwrap();
+
+        // Mint the prefix (and so the policy the seal binds) under the WEAK policy.
+        let (_, prefix) = store
+            .load_faithful_note_root_history_hybrid_audited(&committee, &pq_committee, 1, expected)
+            .unwrap();
+        assert_eq!(prefix.sealed_records(), 0);
+        // A STRONG 3-of-3 quorum over exactly that statement: real signers.
+        let strong: Vec<HybridQuorumSig> = signers
+            .iter()
+            .flat_map(|signer| seal_quorum(signer, prefix.statement()))
+            .collect();
+        assert!(dregg_federation::receipt::verify_hybrid_quorum_sigs(
+            &strong,
+            prefix.statement(),
+            &committee,
+            &pq_committee,
+            3,
+        ));
+        store
+            .store_faithful_note_root_audit_seal(&prefix, strong)
+            .unwrap();
+
+        // Honoured for the policy it was minted under...
+        let (_, honored) = store
+            .load_faithful_note_root_history_hybrid_audited(&committee, &pq_committee, 1, expected)
+            .unwrap();
+        assert_eq!(honored.sealed_records(), 1);
+        // ...but it must NOT cover the row under the stronger policy.
+        let refusal = store
+            .load_faithful_note_root_history_hybrid_audited(&committee, &pq_committee, 3, expected)
+            .unwrap_err();
+        assert_eq!(
+            refusal.to_string(),
+            integrity(FaithfulNoteRootHistoryError::AuthenticationFailed).to_string()
+        );
+    }
+
+    /// Control (roster reorder / member change / PQ change): a seal is minted
+    /// under one exact ordered enrollment.  Loading under any other roster --
+    /// reordered, a replaced member, or a changed PQ key for a member that did
+    /// not sign the row (so the seal's own quorum still verifies) -- must NOT let
+    /// that seal cover the row.  The row is re-checked, so the load still
+    /// succeeds but reports `sealed_records() == 0`.
+    #[test]
+    fn seal_does_not_carry_to_a_different_enrollment() {
+        let signers = [0x84, 0x85, 0x86].map(HybridSigner::new);
+        let committee = signers.each_ref().map(|signer| signer.ed_pk);
+        let pq_committee = signers.each_ref().map(|signer| signer.pq_pk.clone());
+        let (store, expected) = one_row_history(&signers, 0x84);
+        let (_, prefix) = store
+            .load_faithful_note_root_history_hybrid_audited(&committee, &pq_committee, 1, expected)
+            .unwrap();
+        store
+            .store_faithful_note_root_audit_seal(
+                &prefix,
+                seal_quorum(&signers[0], prefix.statement()),
+            )
+            .unwrap();
+        // Sanity: the exact roster the seal was minted under still honours it.
+        let (_, same) = store
+            .load_faithful_note_root_history_hybrid_audited(&committee, &pq_committee, 1, expected)
+            .unwrap();
+        assert_eq!(same.sealed_records(), 1);
+
+        // (a) Reordered roster: same members, different order.
+        let reordered = [committee[2], committee[1], committee[0]];
+        let reordered_pq = [
+            pq_committee[2].clone(),
+            pq_committee[1].clone(),
+            pq_committee[0].clone(),
+        ];
+        let (_, reordered_prefix) = store
+            .load_faithful_note_root_history_hybrid_audited(&reordered, &reordered_pq, 1, expected)
+            .unwrap();
+        assert_eq!(reordered_prefix.sealed_records(), 0);
+
+        // (b) A replaced member (the replacement did not sign the row).
+        let replacement = HybridSigner::new(0x87);
+        let replaced = [committee[0], committee[1], replacement.ed_pk];
+        let replaced_pq = [
+            pq_committee[0].clone(),
+            pq_committee[1].clone(),
+            replacement.pq_pk.clone(),
+        ];
+        let (_, replaced_prefix) = store
+            .load_faithful_note_root_history_hybrid_audited(&replaced, &replaced_pq, 1, expected)
+            .unwrap();
+        assert_eq!(replaced_prefix.sealed_records(), 0);
+
+        // (c) Same members, changed PQ enrollment for a NON-signer: the seal's
+        // quorum still verifies, so only the bound policy can catch the swap.
+        let changed = HybridSigner::new(0x88);
+        let changed_pq = [
+            pq_committee[0].clone(),
+            pq_committee[1].clone(),
+            changed.pq_pk.clone(),
+        ];
+        let (_, changed_prefix) = store
+            .load_faithful_note_root_history_hybrid_audited(&committee, &changed_pq, 1, expected)
+            .unwrap();
+        assert_eq!(changed_prefix.sealed_records(), 0);
+    }
+
+    /// Control (invalid policy): a roster that cannot define a cache policy
+    /// (here a duplicated classical identity) still authenticates the rows, but
+    /// its prefix must NOT be sealable.  The old code persisted it regardless.
+    #[test]
+    fn a_prefix_without_a_bindable_policy_cannot_be_sealed() {
+        let signers = [0x89, 0x8a, 0x8b].map(HybridSigner::new);
+        let (store, expected) = one_row_history(&signers, 0x89);
+        let duplicated = [signers[0].ed_pk, signers[0].ed_pk, signers[2].ed_pk];
+        let duplicated_pq = [
+            signers[0].pq_pk.clone(),
+            signers[0].pq_pk.clone(),
+            signers[2].pq_pk.clone(),
+        ];
+        let (_, prefix) = store
+            .load_faithful_note_root_history_hybrid_audited(
+                &duplicated,
+                &duplicated_pq,
+                1,
+                expected,
+            )
+            .unwrap();
+        assert_eq!(prefix.sealed_records(), 0);
+        let refusal = store
+            .store_faithful_note_root_audit_seal(
+                &prefix,
+                seal_quorum(&signers[0], prefix.statement()),
+            )
+            .unwrap_err();
+        assert_eq!(
+            refusal.to_string(),
+            integrity(FaithfulNoteRootHistoryError::AuthenticationFailed).to_string()
+        );
+    }
+
+    /// Control (reopen + legacy seal): a version-1 seal written to disk must be
+    /// ignored after a reopen, so every row is re-authenticated.  The old reader
+    /// accepted the v1 statement and skipped the row across the reopen.
+    #[test]
+    fn legacy_seal_does_not_survive_a_reopen_as_cache_evidence() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("legacy-audit-policy.redb");
+        let signer = HybridSigner::new(0x8c);
+        let (tree, anchor) = empty_anchor();
+        let row = signed_planned(&signer, &tree, &anchor, 0x8c, &[[0x8c; 32]]);
+        {
+            let store = PersistentStore::open(&path).unwrap();
+            store
+                .initialize_faithful_note_root_history(&anchor)
+                .unwrap();
+            store.append_faithful_note_root_verified(&row).unwrap();
+            let expected = store.faithful_note_root_expectation().unwrap().unwrap();
+            let committee = [signer.ed_pk];
+            let pq_committee = [signer.pq_pk.clone()];
+            let (_, prefix) = store
+                .load_faithful_note_root_history_hybrid_audited(
+                    &committee,
+                    &pq_committee,
+                    1,
+                    expected,
+                )
+                .unwrap();
+            assert_eq!(prefix.sealed_records(), 0);
+            // Hand-write a LEGACY version-1 seal over that statement: the first
+            // 176 bytes carry the anchor/records/digest the old reader accepted.
+            let mut statement = prefix.statement()[..176].to_vec();
+            statement[4..6].copy_from_slice(&VERSION_V1.to_le_bytes());
+            let hybrid_quorum = seal_quorum(&signer, &statement);
+            let bytes = postcard::to_stdvec(&AuditSealWireV1 {
+                version: VERSION_V1,
+                statement,
+                hybrid_quorum,
+            })
+            .unwrap();
+            let write = store.db.begin_write().unwrap();
+            {
+                let mut metadata = write.open_table(tables::METADATA_BYTES).unwrap();
+                metadata
+                    .insert(tables::META_FAITHFUL_NOTE_ROOT_AUDIT, bytes.as_slice())
+                    .unwrap();
+            }
+            write.commit().unwrap();
+        }
+        let reopened = PersistentStore::open(&path).unwrap();
+        let expected = reopened.faithful_note_root_expectation().unwrap().unwrap();
+        let (history, prefix) = reopened
+            .load_faithful_note_root_history_hybrid_audited(
+                &[signer.ed_pk],
+                &[signer.pq_pk.clone()],
+                1,
+                expected,
+            )
+            .unwrap();
+        assert_eq!(history.envelopes().len(), 1);
+        assert_eq!(
+            prefix.sealed_records(),
+            0,
+            "the legacy seal must not cover the row"
+        );
+    }
+
     /// An audit seal from the row roster stands in for the per-row checks of
     /// exactly the rows it names; rows appended later are still checked, and a
     /// row edited under the seal, or a seal from another key, is not trusted.
