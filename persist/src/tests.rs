@@ -1423,6 +1423,43 @@ fn attested_root_count() {
     assert_eq!(store.attested_root_count().unwrap(), 3);
 }
 
+/// The summary equals the full-scan computation (latest by height + count) on
+/// out-of-order inserts and after a prune, and never decodes a non-latest row:
+/// an undecodable lower row breaks `all_attested_roots` but not the summary.
+#[test]
+fn attested_root_summary_matches_full_scan_without_decoding_it() {
+    let store = new_store();
+    assert_eq!(store.attested_root_summary().unwrap(), (None, 0));
+
+    for h in [4, 9, 2, 7, 5] {
+        store.store_attested_root(&sample_attested_root(h)).unwrap();
+    }
+    let full = |s: &PersistentStore| {
+        let all = s.all_attested_roots().unwrap();
+        (
+            all.iter().max_by_key(|r| r.height).cloned(),
+            all.len() as u64,
+        )
+    };
+    assert_eq!(store.attested_root_summary().unwrap(), full(&store));
+    assert_eq!(store.attested_root_summary().unwrap().0.unwrap().height, 9);
+
+    store.prune_before(5).unwrap();
+    assert_eq!(store.attested_root_summary().unwrap(), full(&store));
+    assert_eq!(store.attested_root_summary().unwrap().1, 3);
+
+    let write = store.db.begin_write().unwrap();
+    write
+        .open_table(crate::tables::ATTESTED_ROOTS)
+        .unwrap()
+        .insert(6u64, [0xFFu8; 3].as_slice())
+        .unwrap();
+    write.commit().unwrap();
+    assert!(store.all_attested_roots().is_err());
+    let (latest, count) = store.attested_root_summary().unwrap();
+    assert_eq!((latest.unwrap().height, count), (9, 4));
+}
+
 #[test]
 fn attested_root_all_ordered() {
     let store = new_store();
