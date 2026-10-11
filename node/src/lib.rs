@@ -284,7 +284,10 @@ pub enum Command {
         /// Disable path: solo + no peers (or future --solo-only).
 
         /// Blocklace checkpoint interval in finalized blocks (default 100, matches devnet genesis).
-        #[arg(long, default_value = "100")]
+        /// 0 = produce none. Each checkpoint serializes and stores the whole lace, so
+        /// its CPU, transient memory and store growth scale with history; a node that
+        /// no peer bootstraps from (solo) can turn it off.
+        #[arg(long, default_value = "100", env = "DREGG_BLOCKLACE_CHECKPOINT_INTERVAL")]
         blocklace_checkpoint_interval: u64,
 
         /// Blocklace constitution wave timeout in milliseconds (default 10000).
@@ -3206,6 +3209,10 @@ async fn run_node(
         sorted.sort();
         info!(origins = ?sorted, "CORS: allowing extra cross-origin origins (plus localhost/extensions)");
     }
+
+    // Seal the faithful note-root rows this run appends as it goes, so the next
+    // boot does not re-verify them all.
+    state::spawn_faithful_note_root_seal_extension(node_state.clone());
 
     // Build and serve the HTTP API.
     let app = api::router_with_cors(

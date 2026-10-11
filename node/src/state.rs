@@ -73,9 +73,34 @@ fn restore_and_verify_faithful_note_tree(
     // one seal (their exact bytes must still hash to its digest); the rest are
     // checked one by one, and the seal is then extended over them.
     let seed = cclerk.gossip_signing_key().to_bytes();
-    let local_ed = cclerk.public_key();
-    let (local_pq, local_pq_signer) = dregg_federation::frost::MlDsaSigningKey::from_seed(&seed);
     let started = std::time::Instant::now();
+    let (records, checked) =
+        authenticate_and_seal_faithful_note_root_history(store, &seed, cclerk.public_key(), expected)?;
+    tracing::info!(
+        records,
+        sealed = records - checked,
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "faithful note-root history authenticated"
+    );
+    Ok(tree)
+}
+
+/// Authenticate the faithful note-root history against this node's own hybrid
+/// identity and extend the audit seal over every row it did not yet cover.
+/// Returns (rows in the history, rows checked one by one).
+///
+/// Boot runs this before the node serves. The running node runs it again on a
+/// timer ([`spawn_faithful_note_root_seal_extension`]) so the rows it appends
+/// are sealed while it runs: otherwise every row since the last boot is
+/// re-verified at the next boot, and that replay (a full ML-DSA verify per row)
+/// grows with uptime and restarts into hours of CPU.
+pub(crate) fn authenticate_and_seal_faithful_note_root_history(
+    store: &PersistentStore,
+    seed: &[u8; 32],
+    local_ed: dregg_types::PublicKey,
+    expected: dregg_persist::FaithfulNoteRootExpectationV1,
+) -> Result<(u64, u64), String> {
+    let (local_pq, local_pq_signer) = dregg_federation::frost::MlDsaSigningKey::from_seed(seed);
     let (_, prefix) = store
         .load_faithful_note_root_history_hybrid_audited(
             std::slice::from_ref(&local_ed),
@@ -84,21 +109,13 @@ fn restore_and_verify_faithful_note_tree(
             expected,
         )
         .map_err(|e| format!("faithful note-root authenticated replay refused: {e}"))?;
-    tracing::info!(
-        records = prefix.records(),
-        sealed = prefix.sealed_records(),
-        elapsed_ms = started.elapsed().as_millis() as u64,
-        "faithful note-root history authenticated"
-    );
-    if prefix.sealed_records() < prefix.records() {
+    let checked = prefix.records() - prefix.sealed_records();
+    if checked > 0 {
         let statement = prefix.statement();
         let quorum = local_pq_signer.sign(statement).map(|pq_signature| {
             vec![dregg_types::HybridQuorumSig {
                 pubkey: local_ed,
-                signature: dregg_types::sign(
-                    &dregg_types::SigningKey::from_bytes(&seed),
-                    statement,
-                ),
+                signature: dregg_types::sign(&dregg_types::SigningKey::from_bytes(seed), statement),
                 ml_dsa_pubkey: local_pq.0.to_vec(),
                 pq_signature,
             }]
@@ -110,7 +127,69 @@ fn restore_and_verify_faithful_note_tree(
             None => tracing::warn!("faithful note-root audit seal not signed"),
         }
     }
-    Ok(tree)
+    Ok((prefix.records(), checked))
+}
+
+/// The env setting for how often, in seconds, the running node extends the
+/// faithful note-root audit seal over the rows it appended. 0 turns it off.
+pub const FAITHFUL_SEAL_INTERVAL_ENV: &str = "DREGG_FAITHFUL_SEAL_INTERVAL_SECS";
+
+/// One hour: a few hundred rows per run on a busy chat node, so each run is a
+/// short burst rather than an hours-long replay at the next boot.
+pub const DEFAULT_FAITHFUL_SEAL_INTERVAL_SECS: u64 = 3600;
+
+/// Extend the faithful note-root audit seal on a timer while the node runs
+/// (see [`authenticate_and_seal_faithful_note_root_history`]). A run that sees
+/// the history move under it (a row appended between reading the expected head
+/// and replaying) refuses with a snapshot mismatch, stores nothing, and the next
+/// run retries; a boot still authenticates everything the seal does not cover.
+pub fn spawn_faithful_note_root_seal_extension(state: NodeState) {
+    let secs = std::env::var(FAITHFUL_SEAL_INTERVAL_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(DEFAULT_FAITHFUL_SEAL_INTERVAL_SECS);
+    if secs == 0 {
+        tracing::info!("faithful note-root audit seal extension off ({FAITHFUL_SEAL_INTERVAL_ENV}=0)");
+        return;
+    }
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(secs));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            let (store, seed, local_ed) = {
+                let s = state.read().await;
+                (s.store.clone(), s.cclerk.gossip_signing_key().to_bytes(), s.cclerk.public_key())
+            };
+            let run = tokio::task::spawn_blocking(move || {
+                let Some(expected) = store
+                    .faithful_note_root_expectation()
+                    .map_err(|e| format!("faithful note-root expectation unreadable: {e}"))?
+                else {
+                    return Ok(None);
+                };
+                let started = std::time::Instant::now();
+                authenticate_and_seal_faithful_note_root_history(&store, &seed, local_ed, expected)
+                    .map(|done| Some((done, started.elapsed())))
+            })
+            .await;
+            match run {
+                Ok(Ok(Some(((records, checked), elapsed)))) if checked > 0 => tracing::info!(
+                    records,
+                    checked,
+                    elapsed_ms = elapsed.as_millis() as u64,
+                    "faithful note-root audit seal extended while running"
+                ),
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => tracing::warn!(
+                    error = %e,
+                    "faithful note-root audit seal not extended this run (retried next run)"
+                ),
+                Err(e) => tracing::warn!(error = %e, "faithful note-root seal task failed"),
+            }
+        }
+    });
 }
 
 /// THE SWAP (FLIPPED DEFAULT) — the verified Lean executor is now the authoritative state producer
@@ -753,7 +832,7 @@ pub struct NodeStateInner {
     /// MCP/devnet mutation paths can produce `WitnessedReceipt`s at commit time.
     /// Keeping them here lets later HTTP, explorer, and verifier flows retrieve
     /// the same artifact instead of relying on the original tool response.
-    pub witnessed_receipts: HashMap<[u8; 32], Vec<WitnessedReceipt>>,
+    pub witnessed_receipts: WitnessedReceiptIndex,
     witnessed_receipt_order: VecDeque<[u8; 32]>,
 
     /// Receipt hashes whose state is COMMITTED but whose async STARK
@@ -872,47 +951,104 @@ fn apply_overlay_op(ledger: &mut Ledger, op: dregg_persist::CellOverlayOp) {
     }
 }
 
-fn load_witnessed_receipts(
-    store: &PersistentStore,
-) -> (HashMap<[u8; 32], Vec<WitnessedReceipt>>, VecDeque<[u8; 32]>) {
-    let mut witnessed_receipts = HashMap::new();
-    let mut witnessed_receipt_order = VecDeque::new();
-    match store.load_witnessed_receipts_raw() {
-        Ok(entries) => {
-            let mut raw_by_hash: HashMap<[u8; 32], Vec<u8>> = entries.into_iter().collect();
-            let ordered_hashes = store
-                .get_config(WITNESSED_RECEIPT_ORDER_CONFIG)
-                .ok()
-                .flatten()
-                .and_then(|bytes| postcard::from_bytes::<Vec<[u8; 32]>>(&bytes).ok())
-                .filter(|order| !order.is_empty())
-                .unwrap_or_else(|| raw_by_hash.keys().copied().collect());
-            let skip = ordered_hashes.len().saturating_sub(MAX_WITNESSED_RECEIPTS);
-            for receipt_hash in ordered_hashes.into_iter().skip(skip) {
-                let Some(encoded) = raw_by_hash.remove(&receipt_hash) else {
-                    continue;
-                };
-                match decode_witnessed_receipt_artifacts(&encoded) {
-                    Ok(witnesses) => {
-                        witnessed_receipt_order.push_back(receipt_hash);
-                        witnessed_receipts.insert(receipt_hash, witnesses);
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            receipt_hash = ?receipt_hash,
-                            error = %e,
-                            "skipping corrupt persisted witnessed receipt artifact"
-                        );
-                    }
-                }
+/// Node-local witness artifacts by receipt hash, read from the store on demand.
+///
+/// Only the per-receipt witness COUNT stays in memory. The artifacts carry
+/// proofs (about 1.3 MB per receipt measured on the chat node), and holding the
+/// last [`MAX_WITNESSED_RECEIPTS`] of them decoded kept about 1.3 GB resident
+/// for the node's whole life whether or not anything read them.
+pub struct WitnessedReceiptIndex {
+    store: Arc<PersistentStore>,
+    counts: HashMap<[u8; 32], usize>,
+}
+
+impl WitnessedReceiptIndex {
+    fn new(store: Arc<PersistentStore>) -> Self {
+        Self { store, counts: HashMap::new() }
+    }
+
+    /// The stored witnesses for `receipt_hash`, or `None` when it has none. A
+    /// stored entry that no longer decodes is reported and treated as none.
+    pub fn get(&self, receipt_hash: &[u8; 32]) -> Option<Vec<WitnessedReceipt>> {
+        if !self.counts.contains_key(receipt_hash) {
+            return None;
+        }
+        let read = self
+            .store
+            .load_witnessed_receipt_raw(receipt_hash)
+            .map_err(|e| e.to_string())
+            .and_then(|raw| raw.ok_or_else(|| "missing from the store".to_string()))
+            .and_then(|raw| decode_witnessed_receipt_artifacts(&raw));
+        match read {
+            Ok(witnesses) => Some(witnesses),
+            Err(e) => {
+                tracing::warn!(
+                    receipt_hash = ?receipt_hash,
+                    error = %e,
+                    "persisted witnessed receipt artifacts unreadable"
+                );
+                None
             }
         }
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "failed to load persisted witnessed receipt artifacts"
-            );
+    }
+
+    pub fn count(&self, receipt_hash: &[u8; 32]) -> usize {
+        self.counts.get(receipt_hash).copied().unwrap_or(0)
+    }
+
+    pub fn contains_key(&self, receipt_hash: &[u8; 32]) -> bool {
+        self.counts.contains_key(receipt_hash)
+    }
+
+    pub fn len(&self) -> usize {
+        self.counts.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.counts.is_empty()
+    }
+}
+
+fn load_witnessed_receipts(store: &Arc<PersistentStore>) -> (WitnessedReceiptIndex, VecDeque<[u8; 32]>) {
+    let mut witnessed_receipts = WitnessedReceiptIndex::new(store.clone());
+    let mut witnessed_receipt_order = VecDeque::new();
+    // One entry decoded at a time, kept only as its witness count.
+    let mut counts: HashMap<[u8; 32], usize> = HashMap::new();
+    let scanned = store.for_each_witnessed_receipt_raw(|receipt_hash, encoded| {
+        match decode_witnessed_receipt_artifacts(encoded) {
+            Ok(witnesses) => {
+                counts.insert(receipt_hash, witnesses.len());
+            }
+            Err(e) => {
+                tracing::warn!(
+                    receipt_hash = ?receipt_hash,
+                    error = %e,
+                    "skipping corrupt persisted witnessed receipt artifact"
+                );
+            }
         }
+    });
+    if let Err(e) = scanned {
+        tracing::warn!(
+            error = %e,
+            "failed to load persisted witnessed receipt artifacts"
+        );
+        return (witnessed_receipts, witnessed_receipt_order);
+    }
+    let ordered_hashes = store
+        .get_config(WITNESSED_RECEIPT_ORDER_CONFIG)
+        .ok()
+        .flatten()
+        .and_then(|bytes| postcard::from_bytes::<Vec<[u8; 32]>>(&bytes).ok())
+        .filter(|order| !order.is_empty())
+        .unwrap_or_else(|| counts.keys().copied().collect());
+    let skip = ordered_hashes.len().saturating_sub(MAX_WITNESSED_RECEIPTS);
+    for receipt_hash in ordered_hashes.into_iter().skip(skip) {
+        let Some(count) = counts.remove(&receipt_hash) else {
+            continue;
+        };
+        witnessed_receipt_order.push_back(receipt_hash);
+        witnessed_receipts.counts.insert(receipt_hash, count);
     }
     (witnessed_receipts, witnessed_receipt_order)
 }
@@ -2560,11 +2696,13 @@ impl NodeStateInner {
     /// keys at capacity. Multiple witnesses may share one receipt hash, e.g. a
     /// bilateral turn with per-side witnessed receipts.
     pub fn push_witnessed_receipt(&mut self, receipt_hash: [u8; 32], witnessed: WitnessedReceipt) {
-        if !self.witnessed_receipts.contains_key(&receipt_hash) {
+        let mut witnesses = if self.witnessed_receipts.contains_key(&receipt_hash) {
+            self.witnessed_receipts.get(&receipt_hash).unwrap_or_default()
+        } else {
             if self.witnessed_receipt_order.len() >= MAX_WITNESSED_RECEIPTS
                 && let Some(oldest) = self.witnessed_receipt_order.pop_front()
             {
-                self.witnessed_receipts.remove(&oldest);
+                self.witnessed_receipts.counts.remove(&oldest);
                 if let Err(e) = self.store.remove_witnessed_receipts_raw(&oldest) {
                     tracing::warn!(
                         receipt_hash = ?oldest,
@@ -2575,41 +2713,32 @@ impl NodeStateInner {
             }
             self.witnessed_receipt_order.push_back(receipt_hash);
             persist_witnessed_receipt_order(&self.store, &self.witnessed_receipt_order);
-        }
-        self.witnessed_receipts
-            .entry(receipt_hash)
-            .or_default()
-            .push(witnessed);
-        if let Some(witnesses) = self.witnessed_receipts.get(&receipt_hash) {
-            match encode_witnessed_receipt_artifacts(witnesses) {
-                Ok(encoded) => {
-                    if let Err(e) = self
-                        .store
-                        .store_witnessed_receipts_raw(&receipt_hash, &encoded)
-                    {
-                        tracing::warn!(
-                            receipt_hash = ?receipt_hash,
-                            error = %e,
-                            "failed to persist witnessed receipt artifacts"
-                        );
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        receipt_hash = ?receipt_hash,
-                        error = %e,
-                        "failed to serialize witnessed receipt artifacts"
-                    );
-                }
+            Vec::new()
+        };
+        witnesses.push(witnessed);
+        // The store is where witnesses are served from, so a witness that is not
+        // stored is not counted either.
+        let stored = encode_witnessed_receipt_artifacts(&witnesses).and_then(|encoded| {
+            self.store
+                .store_witnessed_receipts_raw(&receipt_hash, &encoded)
+                .map_err(|e| e.to_string())
+        });
+        match stored {
+            Ok(()) => {
+                self.witnessed_receipts.counts.insert(receipt_hash, witnesses.len());
+            }
+            Err(e) => {
+                tracing::warn!(
+                    receipt_hash = ?receipt_hash,
+                    error = %e,
+                    "failed to persist witnessed receipt artifacts; this witness is not served"
+                );
             }
         }
     }
 
     pub fn witnessed_receipt_count(&self, receipt_hash: &[u8; 32]) -> usize {
-        self.witnessed_receipts
-            .get(receipt_hash)
-            .map(Vec::len)
-            .unwrap_or(0)
+        self.witnessed_receipts.count(receipt_hash)
     }
 
     /// Mark a committed receipt as awaiting its async STARK attestation
