@@ -20123,7 +20123,7 @@ mod tests {
 
     fn checkpoint_committee() -> (
         Vec<dregg_types::PublicKey>,
-        Vec<dregg_persist::MlDsaPublicKey>,
+        Vec<dregg_federation::frost::MlDsaPublicKey>,
     ) {
         CHECKPOINT_MEMBERS
             .iter()
@@ -20131,7 +20131,7 @@ mod tests {
                 let (sk, pq_pk, _) = checkpoint_member(*seed);
                 (
                     dregg_types::PublicKey(sk.verifying_key().to_bytes()),
-                    dregg_persist::MlDsaPublicKey(pq_pk.0),
+                    dregg_federation::frost::MlDsaPublicKey(pq_pk.0),
                 )
             })
             .unzip()
@@ -20743,7 +20743,7 @@ pub async fn bootstrap_from_checkpoint(
     self_key: ed25519_dalek::SigningKey,
     quorum_threshold: usize,
     committee: &[dregg_types::PublicKey],
-    ml_dsa_committee: &[dregg_persist::MlDsaPublicKey],
+    ml_dsa_committee: &[dregg_federation::frost::MlDsaPublicKey],
 ) -> Option<(
     dregg_blocklace::finality::Blocklace,
     Vec<(dregg_cell::CellId, dregg_cell::Cell)>,
@@ -20901,7 +20901,7 @@ fn verify_checkpoint_authority(
     cells: &[(dregg_cell::CellId, dregg_cell::Cell)],
     blocklace: &dregg_blocklace::finality::Blocklace,
     committee: &[dregg_types::PublicKey],
-    ml_dsa_committee: &[dregg_persist::MlDsaPublicKey],
+    ml_dsa_committee: &[dregg_federation::frost::MlDsaPublicKey],
 ) -> Result<(), String> {
     // Coverage: the root must describe the snapshot's ledger, i.e. the newest
     // finalized turn at-or-below the checkpoint height (cells only move on turn
