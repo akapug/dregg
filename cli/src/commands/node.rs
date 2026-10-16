@@ -377,6 +377,17 @@ async fn blocklace_checkpoint(
     ));
     ctx.kv("Blocklace hash", &abbrev_hex(bl_hash, 8, 4));
     ctx.kv("Ledger hash", &abbrev_hex(ld_hash, 8, 4));
+    // The authority leg: `attested_root` carries the committee's finalization
+    // quorum (what `bootstrap_from_checkpoint` verifies); absent means the
+    // checkpoint is self-asserted only — UNVERIFIED, never authority.
+    ctx.kv(
+        "Finality authority",
+        if data["attested_root"].is_object() {
+            "committee-quorum attested root attached (verifiable)"
+        } else {
+            "none — self-asserted only (UNVERIFIED)"
+        },
+    );
     ctx.info("  Use --json for full DAG + snapshot (large). Supports fast sync for new nodes.");
     ctx.info("  See node/src/blocklace_sync.rs for checkpoint format.");
 
