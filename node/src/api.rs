@@ -9651,7 +9651,10 @@ async fn post_faucet(
             // has_proof once the pool lands the proof. `push_witnessed_receipt` is
             // keyed by receipt hash, not by a position in the receipt log, so this
             // is well-defined before finalization appends the canonical receipt.
-            let proof_status = witness_outcome
+            //
+            // The disposition is not returned: the closure records it on the event,
+            // and the faucet reports through `/api/receipts`, not `FaucetResponse`.
+            witness_outcome
                 .enqueue_and_record(&state, receipt.clone(), receipt_hash, &turn_hash_hex, |s, status| {
                     push_committed_event(
                         s, tx_hash.clone(), req.recipient.clone(),
