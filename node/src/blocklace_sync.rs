@@ -20343,11 +20343,9 @@ mod tests {
                 (sk.verifying_key().to_bytes(), pq_pk)
             })
             .collect();
-        let mut collector = crate::finalization_votes::VoteCollector::new(
-            pq_map.keys().copied(),
-            pq_map,
-            3,
-        );
+        let stranger_keys: Vec<[u8; 32]> = pq_map.keys().copied().collect();
+        let mut collector =
+            crate::finalization_votes::VoteCollector::new(stranger_keys, pq_map, 3);
         for seed in strangers {
             let (sk, _, pq_sk) = checkpoint_member(seed);
             let vote = crate::finalization_votes::FinalizationVote::sign(
