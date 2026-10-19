@@ -5840,10 +5840,16 @@ async fn handle_blocklace_gossip_inner(
             debug!(
                 from = %from,
                 height = height,
-                "peer announced checkpoint available"
+                "peer announced checkpoint available (UNVERIFIED advertisement — not recorded)"
             );
-            // Record that this peer has a checkpoint at the given height.
-            // The actual checkpoint data is fetched via HTTP when needed (during bootstrap).
+            // An announcement is PEER-SELF-ASSERTED and is deliberately NOT
+            // recorded as authority: `checkpoint_hash` is a bare hash the
+            // announcing peer computed over its own snapshot, and it proves
+            // nothing about whether the checkpoint was ever finalized. The
+            // bootstrap path (`bootstrap_from_checkpoint`) fetches the data via
+            // HTTP when needed and admits it only when the served
+            // `attested_root`'s committee finalization quorum verifies against
+            // OUR genesis-known roster — see `verify_checkpoint_authority`.
             let _ = (height, checkpoint_hash);
         }
         BlocklaceGossipMessage::PeerAddrs(addrs) => {
@@ -20096,6 +20102,418 @@ mod tests {
             );
         }
     }
+
+    // ─── Checkpoint bootstrap: the verified-authority bind ──────────────────
+    //
+    // `bootstrap_from_checkpoint` used to admit a peer's snapshot on nothing but
+    // the peer's own `*_hash` fields — the same peer computed the bytes and the
+    // hashes, so those checks authenticated DELIVERY, never FINALITY: a peer
+    // could serve honestly-signed blocks plus a ledger that was never
+    // finalized, or a checkpoint no authority ever produced. The bind is now
+    // `verify_checkpoint_authority`: a >=supermajority hybrid committee quorum
+    // over (block, ledger-root, receipt-stream) verified against OUR roster,
+    // the served cells byte-folding to the attested `merkle_root`, and the
+    // voted-on block present in the authenticated DAG. These tests pin all
+    // three legs — and, just as hard, that nothing LESS passes.
+
+    /// One committee member's identity, derived the way the node derives it:
+    /// the ML-DSA-65 keypair comes from the same 32 seed bytes as the ed25519
+    /// key (`genesis.rs` publishes the public half; `blocklace_sync` re-derives
+    /// the secret from `node.key`).
+    fn checkpoint_member(
+        seed: u8,
+    ) -> (
+        ed25519_dalek::SigningKey,
+        dregg_federation::frost::MlDsaPublicKey,
+        dregg_federation::frost::MlDsaSigningKey,
+    ) {
+        let sk = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]);
+        let (pq_pk, pq_sk) = dregg_federation::frost::MlDsaSigningKey::from_seed(&[seed; 32]);
+        (sk, pq_pk, pq_sk)
+    }
+
+    /// The 3-validator federation these tests run against —
+    /// `supermajority_threshold(3) == 3`, so NOTHING below reaches quorum on
+    /// one or two members, and the proof-required / refused arms measure a
+    /// real bar rather than a solo self-sign.
+    const CHECKPOINT_MEMBERS: [u8; 3] = [0x51, 0x52, 0x53];
+
+    fn checkpoint_committee() -> (
+        Vec<dregg_types::PublicKey>,
+        Vec<dregg_federation::frost::MlDsaPublicKey>,
+    ) {
+        CHECKPOINT_MEMBERS
+            .iter()
+            .map(|seed| {
+                let (sk, pq_pk, _) = checkpoint_member(*seed);
+                (
+                    dregg_types::PublicKey(sk.verifying_key().to_bytes()),
+                    dregg_federation::frost::MlDsaPublicKey(pq_pk.0),
+                )
+            })
+            .unzip()
+    }
+
+    /// A ledger snapshot the checkpoint would serve: `(CellId, Cell)` pairs in
+    /// the exact wire shape `maybe_produce_checkpoint` serializes.
+    fn served_cells() -> Vec<(dregg_cell::CellId, dregg_cell::Cell)> {
+        [([0xA1; 32], [0xB1; 32], 5_000i64), ([0xA2; 32], [0xB2; 32], 7_500)]
+            .iter()
+            .map(|(pk, token, balance)| {
+                let cell = dregg_cell::Cell::with_balance(*pk, *token, *balance);
+                (cell.id(), cell)
+            })
+            .collect()
+    }
+
+    /// A restored blocklace holding ONE authenticated block, and that block's
+    /// id — the `blocklace_block_id` the committee's votes bind. The block is
+    /// created by a committee member so it is genuine committee content.
+    fn lace_with_member_block() -> (Blocklace, BlockId) {
+        let (sk, _, _) = checkpoint_member(CHECKPOINT_MEMBERS[0]);
+        let mut lace = Blocklace::new_simple(sk.clone());
+        let block = Block::new(&sk, 0, Payload::Data(b"finalized".to_vec()), vec![]);
+        let id = block.id();
+        lace.receive_block(block)
+            .expect("a genuine committee genesis block must be admitted");
+        (lace, id)
+    }
+
+    /// The authority a REAL committee attaches: every member in `voting` signs
+    /// a genuine hybrid `FinalizationVote` over
+    /// `(block_id, merkle_root, receipt_stream_root)` through the REAL
+    /// `VoteCollector` — the same `record` / `assembled_quorum` the node runs —
+    /// and the assembled quorum lands on the root exactly as
+    /// `backfill_finalization_quorums` attaches it. Nothing here hand-builds a
+    /// `QuorumSignature`; if the production vote shape moves this stops
+    /// compiling rather than quietly testing the old one.
+    fn committee_attested_root(
+        block_id: BlockId,
+        merkle_root: [u8; 32],
+        receipt_stream_root: Option<[u8; 32]>,
+        height: u64,
+        voting: &[u8],
+    ) -> dregg_persist::StoredAttestedRoot {
+        let (committee, ml_dsa_committee) = checkpoint_committee();
+        let pq_map: HashMap<[u8; 32], dregg_federation::frost::MlDsaPublicKey> = CHECKPOINT_MEMBERS
+            .iter()
+            .zip(ml_dsa_committee.iter())
+            .map(|(seed, pq)| {
+                let (sk, _, _) = checkpoint_member(*seed);
+                (sk.verifying_key().to_bytes(), dregg_federation::frost::MlDsaPublicKey(pq.0))
+            })
+            .collect();
+        let threshold = dregg_blocklace::ordering::supermajority_threshold(committee.len());
+        let mut collector = crate::finalization_votes::VoteCollector::new(
+            committee.iter().map(|pk| pk.0),
+            pq_map,
+            threshold,
+        );
+        for seed in voting {
+            let (sk, _, pq_sk) = checkpoint_member(*seed);
+            let vote = crate::finalization_votes::FinalizationVote::sign(
+                &sk,
+                &pq_sk,
+                block_id,
+                FinalityLevel::Ordered,
+                merkle_root,
+                receipt_stream_root,
+            )
+            .expect("hybrid vote signing");
+            collector.record(&vote);
+        }
+        let (pair, quorum) = collector
+            .assembled_quorum(&block_id)
+            .expect("the voters passed in must assemble a quorum — check `voting`");
+        assert_eq!(
+            pair,
+            (merkle_root, receipt_stream_root),
+            "the assembled quorum must bind the pair the fixture signed"
+        );
+        dregg_persist::StoredAttestedRoot {
+            merkle_root,
+            note_tree_root: None,
+            nullifier_set_root: None,
+            height,
+            timestamp: 1_800_000_000,
+            blocklace_block_id: Some(block_id.0),
+            finality_round: Some(1),
+            quorum_signatures: Vec::new(),
+            threshold_qc: None,
+            threshold,
+            federation_id: dregg_types::FederationId::default(),
+            receipt_stream_root,
+            finalization_quorum: quorum,
+        }
+    }
+
+    /// **PROOF REQUIRED — the happy arm.** A checkpoint carrying the
+    /// committee's assembled finalization quorum over the exact served ledger,
+    /// voted on a block the authenticated DAG holds, verifies. Every refusal
+    /// arm below mutates ONE leg of this fixture, so a refusal is attributable
+    /// to that leg and not to a broken fixture.
+    #[test]
+    fn checkpoint_authority_accepts_a_quorum_bound_checkpoint() {
+        let cells = served_cells();
+        let merkle_root =
+            dregg_persist::canonical_ledger_root_from_pairs(&cells).expect("well-formed pairs");
+        let (lace, block_id) = lace_with_member_block();
+        let root =
+            committee_attested_root(block_id, merkle_root, None, 10, &CHECKPOINT_MEMBERS);
+        let (committee, ml_dsa) = checkpoint_committee();
+        assert_eq!(
+            verify_checkpoint_authority(&root, 10, &cells, &lace, &committee, &ml_dsa),
+            Ok(()),
+            "a checkpoint carrying the committee's verified finalization quorum MUST be admitted"
+        );
+    }
+
+    /// A retained checkpoint must keep its own usable proof as the live store
+    /// advances. Its height counts ALL executed DAG blocks, not just turns, so
+    /// later attested roots can have smaller heights than the old checkpoint.
+    #[test]
+    fn checkpoint_serving_keeps_snapshot_authority_after_later_turns() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store =
+            dregg_persist::PersistentStore::open(&dir.path().join("dregg.redb")).expect("store");
+        let cells = served_cells();
+        let merkle_root =
+            dregg_persist::canonical_ledger_root_from_pairs(&cells).expect("well-formed pairs");
+        let (lace, block_id) = lace_with_member_block();
+        let root = committee_attested_root(block_id, merkle_root, None, 10, &CHECKPOINT_MEMBERS);
+        let checkpoint_height = 100;
+        store
+            .set_config(
+                &format!("blocklace_checkpoint_{checkpoint_height}"),
+                &compress_checkpoint_data(&postcard::to_stdvec(&lace.checkpoint()).expect("DAG")),
+            )
+            .expect("persist checkpoint");
+        store
+            .set_config(
+                &format!("blocklace_ledger_snapshot_{checkpoint_height}"),
+                &compress_checkpoint_data(&postcard::to_stdvec(&cells).expect("cells")),
+            )
+            .expect("persist snapshot");
+        store.store_attested_root(&root).expect("snapshot authority");
+        let (committee, ml_dsa) = checkpoint_committee();
+        let assert_snapshot_authority = || {
+            let response =
+                load_blocklace_checkpoint(&store, checkpoint_height).expect("retained checkpoint");
+            let selected = response.attested_root.expect("snapshot still has authority");
+            assert_eq!(
+                selected, root,
+                "later roots must not displace the snapshot's proof"
+            );
+            assert_eq!(
+                verify_checkpoint_authority(
+                    &selected,
+                    response.height,
+                    &cells,
+                    &lace,
+                    &committee,
+                    &ml_dsa,
+                ),
+                Ok(()),
+            );
+        };
+        assert_snapshot_authority();
+
+        let (sk, _, _) = checkpoint_member(CHECKPOINT_MEMBERS[0]);
+        let later_block = Block::new(&sk, 1, Payload::Data(b"later".to_vec()), vec![block_id]);
+        let mut later_cells = cells.clone();
+        later_cells[0].1 = dregg_cell::Cell::with_balance([0xA1; 32], [0xB1; 32], 6_000);
+        let later_ledger =
+            dregg_persist::canonical_ledger_root_from_pairs(&later_cells).expect("later ledger");
+        let later_root = committee_attested_root(
+            later_block.id(),
+            later_ledger,
+            None,
+            11,
+            &CHECKPOINT_MEMBERS,
+        );
+        store
+            .store_attested_root(&later_root)
+            .expect("later authority");
+        assert_snapshot_authority();
+
+        // Even if later turns restore the SAME ledger image, a quorum over a
+        // block outside this checkpoint's DAG is not its bootstrap authority.
+        let restored_ledger_root = committee_attested_root(
+            later_block.id(),
+            merkle_root,
+            None,
+            12,
+            &CHECKPOINT_MEMBERS,
+        );
+        store
+            .store_attested_root(&restored_ledger_root)
+            .expect("later identical ledger authority");
+        assert_snapshot_authority();
+    }
+
+    /// **SELF-ASSERTED REFUSED — the defect's arm.** The same checkpoint with a
+    /// root that carries NO finalization quorum: the peer's word for "this was
+    /// finalized". `finalization_quorum` empty is exactly what a self-asserted
+    /// record looks like — and the committee-verifier leg must refuse it even
+    /// though the ledger root still matches.
+    #[test]
+    fn checkpoint_authority_refuses_a_self_asserted_root() {
+        let cells = served_cells();
+        let merkle_root =
+            dregg_persist::canonical_ledger_root_from_pairs(&cells).expect("well-formed pairs");
+        let (lace, block_id) = lace_with_member_block();
+        let mut root =
+            committee_attested_root(block_id, merkle_root, None, 10, &CHECKPOINT_MEMBERS);
+        root.finalization_quorum = Vec::new(); // the self-asserted shape
+        let (committee, ml_dsa) = checkpoint_committee();
+        let err = verify_checkpoint_authority(&root, 10, &cells, &lace, &committee, &ml_dsa)
+            .expect_err("a root with no quorum is UNVERIFIED, never authority");
+        assert!(
+            err.contains("quorum"),
+            "the refusal must name the missing committee proof, got: {err}"
+        );
+    }
+
+    /// An under-quorum root (2 of 3 on a threshold-3 committee) is refused —
+    /// self-asserted *near*-authority is still not authority.
+    #[test]
+    fn checkpoint_authority_refuses_an_under_quorum_root() {
+        let cells = served_cells();
+        let merkle_root =
+            dregg_persist::canonical_ledger_root_from_pairs(&cells).expect("well-formed pairs");
+        let (lace, block_id) = lace_with_member_block();
+        // Two committee members vote; `assembled_quorum` returns None at
+        // threshold 3, so build the quorum bag by hand from their votes — the
+        // point is the persisted record holding fewer than the bar.
+        let mut root =
+            committee_attested_root(block_id, merkle_root, None, 10, &CHECKPOINT_MEMBERS);
+        root.finalization_quorum.truncate(2);
+        let (committee, ml_dsa) = checkpoint_committee();
+        assert!(
+            verify_checkpoint_authority(&root, 10, &cells, &lace, &committee, &ml_dsa).is_err(),
+            "two signatures on a threshold-3 committee is self-asserted near-authority — refused"
+        );
+    }
+
+    /// A quorum over a DIFFERENT ledger does not launder the served snapshot:
+    /// the cells fold to a root the committee never attested, and leg 1 refuses
+    /// before the crypto runs.
+    #[test]
+    fn checkpoint_authority_refuses_a_fabricated_ledger() {
+        let cells = served_cells();
+        let honest_root =
+            dregg_persist::canonical_ledger_root_from_pairs(&cells).expect("well-formed pairs");
+        let (lace, block_id) = lace_with_member_block();
+        // The committee voted on an HONEST ledger — but the peer serves a
+        // DIFFERENT one (one balance inflated). The quorum is genuine; the
+        // bind still fails because the folded roots differ.
+        let root = committee_attested_root(block_id, honest_root, None, 10, &CHECKPOINT_MEMBERS);
+        let fabricated = {
+            let mut c = cells.clone();
+            c[0].1 = dregg_cell::Cell::with_balance([0xA1; 32], [0xB1; 32], 9_999_999);
+            c
+        };
+        let (committee, ml_dsa) = checkpoint_committee();
+        let err =
+            verify_checkpoint_authority(&root, 10, &fabricated, &lace, &committee, &ml_dsa)
+                .expect_err("a fabricated ledger must not ride a quorum over a different root");
+        assert!(
+            err.contains("folds to"),
+            "the refusal must name the ledger-root mismatch, got: {err}"
+        );
+    }
+
+    /// A quorum assembled by strangers — real signatures, wrong committee —
+    /// counts nobody: `verify_finalization_quorum` counts only enrolled
+    /// members, so the attacker committee's unanimous vote is self-assertion.
+    #[test]
+    fn checkpoint_authority_refuses_a_foreign_committee_quorum() {
+        let cells = served_cells();
+        let merkle_root =
+            dregg_persist::canonical_ledger_root_from_pairs(&cells).expect("well-formed pairs");
+        let (lace, block_id) = lace_with_member_block();
+        // Three STRANGERS (not in our committee) all vote — unanimous on their
+        // own roster, zero members on ours. Build their quorum through the same
+        // collector so the signatures themselves are genuine.
+        let strangers: [u8; 3] = [0xE1, 0xE2, 0xE3];
+        let pq_map: HashMap<[u8; 32], dregg_federation::frost::MlDsaPublicKey> = strangers
+            .iter()
+            .map(|seed| {
+                let (sk, pq_pk, _) = checkpoint_member(*seed);
+                (sk.verifying_key().to_bytes(), pq_pk)
+            })
+            .collect();
+        let stranger_keys: Vec<[u8; 32]> = pq_map.keys().copied().collect();
+        let mut collector =
+            crate::finalization_votes::VoteCollector::new(stranger_keys, pq_map, 3);
+        for seed in strangers {
+            let (sk, _, pq_sk) = checkpoint_member(seed);
+            let vote = crate::finalization_votes::FinalizationVote::sign(
+                &sk,
+                &pq_sk,
+                block_id,
+                FinalityLevel::Ordered,
+                merkle_root,
+                None,
+            )
+            .expect("hybrid vote signing");
+            collector.record(&vote);
+        }
+        let (_, foreign_quorum) = collector
+            .assembled_quorum(&block_id)
+            .expect("the strangers' own collector must assemble their quorum");
+        let mut root =
+            committee_attested_root(block_id, merkle_root, None, 10, &CHECKPOINT_MEMBERS);
+        root.finalization_quorum = foreign_quorum; // genuine sigs, zero OUR members
+        let (committee, ml_dsa) = checkpoint_committee();
+        assert!(
+            verify_checkpoint_authority(&root, 10, &cells, &lace, &committee, &ml_dsa).is_err(),
+            "a unanimous quorum of non-members is self-assertion, not authority"
+        );
+    }
+
+    /// The vote must bind a block the AUTHENTICATED DAG holds: a root whose
+    /// `blocklace_block_id` names a phantom is refused even with a real quorum
+    /// — the checkpoint's DAG and the quorum's subject must be the same object.
+    #[test]
+    fn checkpoint_authority_refuses_a_quorum_over_an_absent_block() {
+        let cells = served_cells();
+        let merkle_root =
+            dregg_persist::canonical_ledger_root_from_pairs(&cells).expect("well-formed pairs");
+        let (lace, _held) = lace_with_member_block();
+        // The committee genuinely voted — on a block id the restored lace does
+        // NOT contain (e.g. the peer served a checkpoint whose DAG was pruned
+        // below the anchor, or a quorum re-anchored onto a phantom).
+        let phantom = BlockId([0xFE; 32]);
+        let root =
+            committee_attested_root(phantom, merkle_root, None, 10, &CHECKPOINT_MEMBERS);
+        let (committee, ml_dsa) = checkpoint_committee();
+        let err = verify_checkpoint_authority(&root, 10, &cells, &lace, &committee, &ml_dsa)
+            .expect_err("a quorum over an absent block does not bind THIS checkpoint");
+        assert!(
+            err.contains("blocklace_block_id"),
+            "the refusal must name the phantom anchor, got: {err}"
+        );
+    }
+
+    /// A root ABOVE the checkpoint height binds a ledger this snapshot predates
+    /// — refused at the coverage check before any crypto runs.
+    #[test]
+    fn checkpoint_authority_refuses_a_root_above_the_checkpoint() {
+        let cells = served_cells();
+        let merkle_root =
+            dregg_persist::canonical_ledger_root_from_pairs(&cells).expect("well-formed pairs");
+        let (lace, block_id) = lace_with_member_block();
+        let root =
+            committee_attested_root(block_id, merkle_root, None, 42, &CHECKPOINT_MEMBERS);
+        let (committee, ml_dsa) = checkpoint_committee();
+        let err = verify_checkpoint_authority(&root, 10, &cells, &lace, &committee, &ml_dsa)
+            .expect_err("a root at height 42 cannot authorize a checkpoint at height 10");
+        assert!(
+            err.contains("exceeds"),
+            "the refusal must name the coverage gap, got: {err}"
+        );
+    }
 }
 
 // ─── Periodic Ledger Checkpointing ─────────────────────────────────────────
@@ -20324,6 +20742,20 @@ pub struct BlocklaceCheckpointResponse {
     pub ledger: String,
     pub blocklace_hash: String,
     pub ledger_hash: String,
+    /// The verified-finalized authority covering this checkpoint: the newest
+    /// quorum-carrying `StoredAttestedRoot` at-or-below `height` whose ledger
+    /// root matches the snapshot and whose anchor block is in its DAG.
+    /// Everything else in this response is SELF-ASSERTED (the serving peer
+    /// computes both `*_hash`
+    /// fields itself); this field is the one a bootstrap node can check against
+    /// ITS OWN genesis-known committee via
+    /// `StoredAttestedRoot::verify_finalization_quorum`, and the one that binds
+    /// the served ledger snapshot (`merkle_root == canonical_ledger_root`).
+    /// `None` = this node has no root at-or-below the checkpoint height, so it
+    /// CANNOT prove the checkpoint was ever finalized — a verifying bootstrap
+    /// must refuse the response as UNVERIFIED rather than accept the raw data.
+    #[serde(default)]
+    pub attested_root: Option<dregg_persist::StoredAttestedRoot>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -20350,12 +20782,43 @@ pub fn load_blocklace_checkpoint(
     let blocklace_hash = *blake3::hash(&blocklace_raw).as_bytes();
     let ledger_hash = *blake3::hash(&ledger_raw).as_bytes();
 
+    // Checkpoint height counts executed DAG blocks, whereas attested height
+    // counts committed turns. Later turns can therefore remain below an OLD
+    // checkpoint's height: choosing only by height replaces its usable proof
+    // with a quorum over a different ledger, or a block absent from its DAG.
+    // Select authority for the actual retained snapshot, not the live head.
+    // The bootstrap side still cryptographically verifies the chosen quorum.
+    let cells: Vec<(dregg_cell::CellId, dregg_cell::Cell)> =
+        postcard::from_bytes(&ledger_raw).ok()?;
+    let ledger_root = dregg_persist::canonical_ledger_root_from_pairs(&cells)?;
+    let checkpoint: dregg_blocklace::finality::CheckpointData =
+        postcard::from_bytes(&blocklace_raw).ok()?;
+    let checkpoint_blocks: std::collections::HashSet<BlockId> = checkpoint
+        .blocks
+        .iter()
+        .map(|bytes| Block::from_bytes(bytes).map(|block| block.id()))
+        .collect::<Option<_>>()?;
+    let attested_root = store
+        .all_attested_roots()
+        .ok()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|r| {
+            r.height <= height
+                && r.has_finalization_quorum()
+                && r.merkle_root == ledger_root
+                && r.blocklace_block_id
+                    .is_some_and(|id| checkpoint_blocks.contains(&BlockId(id)))
+        })
+        .max_by_key(|r| r.height);
+
     Some(BlocklaceCheckpointResponse {
         height,
         blocklace: hex_encode(&blocklace_data),
         ledger: hex_encode(&ledger_data),
         blocklace_hash: hex_encode(&blocklace_hash),
         ledger_hash: hex_encode(&ledger_hash),
+        attested_root,
     })
 }
 
@@ -20374,10 +20837,23 @@ pub fn latest_blocklace_checkpoint_height(store: &dregg_persist::PersistentStore
         .unwrap_or(0)
 }
 
+/// Bootstrap this node's blocklace + ledger from a peer's served checkpoint —
+/// bound to VERIFIED finalized authority, not the peer's self-asserted hashes.
+///
+/// `committee` / `ml_dsa_committee` are THIS node's genesis-known committee
+/// rosters (ed25519 + index-aligned enrolled ML-DSA-65 keys): the trust anchor
+/// the served `attested_root` is verified against via
+/// `verify_checkpoint_authority`. They are supplied by the caller, NEVER read
+/// from the response — a peer that gets to name its own judges needs no proof.
+/// A checkpoint whose served root fails the committee-quorum check, binds a
+/// different ledger, or is simply absent is refused as UNVERIFIED: the function
+/// returns `None` rather than recording self-asserted state as authority.
 pub async fn bootstrap_from_checkpoint(
     peer_url: &str,
     self_key: ed25519_dalek::SigningKey,
     quorum_threshold: usize,
+    committee: &[dregg_types::PublicKey],
+    ml_dsa_committee: &[dregg_federation::frost::MlDsaPublicKey],
 ) -> Option<(
     dregg_blocklace::finality::Blocklace,
     Vec<(dregg_cell::CellId, dregg_cell::Cell)>,
@@ -20462,6 +20938,38 @@ pub async fn bootstrap_from_checkpoint(
             }
         };
 
+    // ⚑ THE AUTHORITY BIND — the change this lane exists for. Everything above
+    // is integrity, not authority: `from_checkpoint` proves the blocks are
+    // genuine committee-signed objects, but nothing yet proves the peer's
+    // SNAPSHOT was ever finalized — a malicious or merely diverged peer could
+    // serve honest blocks plus a fabricated ledger and name both hashes itself.
+    // The served `attested_root` is the only field carrying committee proof, so
+    // the checkpoint is admitted ONLY when the local verifier accepts it: a
+    // >=supermajority hybrid quorum over THIS root's (block, ledger, receipts)
+    // under OUR enrolled committee, the ledger snapshot byte-folding to the
+    // attested `merkle_root`, and the voted-on block present in the
+    // authenticated DAG. Self-asserted hashes without that proof are refused.
+    let Some(attested_root) = checkpoint_resp.attested_root.as_ref() else {
+        warn!(
+            peer = %peer_url,
+            height = checkpoint_resp.height,
+            "checkpoint bootstrap refused: response carries no attested root — \
+             the checkpoint is UNVERIFIED (self-asserted hashes are not authority)"
+        );
+        return None;
+    };
+    if let Err(reason) = verify_checkpoint_authority(
+        attested_root,
+        checkpoint_resp.height,
+        &cells,
+        &blocklace,
+        committee,
+        ml_dsa_committee,
+    ) {
+        warn!(peer = %peer_url, %reason, "checkpoint bootstrap refused: UNVERIFIED authority");
+        return None;
+    }
+
     info!(
         peer = %peer_url,
         height = checkpoint_resp.height,
@@ -20471,6 +20979,89 @@ pub async fn bootstrap_from_checkpoint(
     );
 
     Some((blocklace, cells))
+}
+
+/// The local-verifier check that rebinds a fetched checkpoint to VERIFIED
+/// finalized authority — the reason [`bootstrap_from_checkpoint`] can admit a
+/// peer-served snapshot at all. `Err(reason)` names the leg that failed; every
+/// failure refuses the WHOLE checkpoint (there is no "record it anyway" leg —
+/// an unproven snapshot is UNVERIFIED, never authority).
+///
+/// Three legs, all required:
+///   * **the ledger is what the committee attested** — the served cell pairs
+///     fold (via [`dregg_persist::canonical_ledger_root_from_pairs`], the
+///     byte-pinned whole-ledger construction the attested root's `merkle_root`
+///     commits to) to exactly `attested_root.merkle_root`;
+///   * **the committee actually finalized it** —
+///     [`dregg_persist::StoredAttestedRoot::verify_finalization_quorum`], the
+///     same >=supermajority hybrid (ed25519 ∧ ML-DSA-65, PQ pinned to the
+///     enrolled roster) check the restart anchor uses, against the CALLER's
+///     committee — a self-asserted root, a lone signature, or a quorum over a
+///     different block/ledger does not pass;
+///   * **the quorum's vote binds a block we hold** — `blocklace_block_id` must
+///     name a block in the authenticated restored DAG (its signature and
+///     closure were re-verified by `from_checkpoint`), so the quorum's
+///     statement attaches to real DAG content, not a phantom id.
+///
+/// `committee` / `ml_dsa_committee` are the bootstrapping node's OWN
+/// genesis-known rosters — supplied out of band, never read from the peer.
+fn verify_checkpoint_authority(
+    attested_root: &dregg_persist::StoredAttestedRoot,
+    checkpoint_height: u64,
+    cells: &[(dregg_cell::CellId, dregg_cell::Cell)],
+    blocklace: &dregg_blocklace::finality::Blocklace,
+    committee: &[dregg_types::PublicKey],
+    ml_dsa_committee: &[dregg_federation::frost::MlDsaPublicKey],
+) -> Result<(), String> {
+    // Coverage: the root must describe the snapshot's ledger, i.e. the newest
+    // finalized turn at-or-below the checkpoint height (cells only move on turn
+    // commits; the serve side picked the greatest such root). A root ABOVE the
+    // checkpoint height would bind a ledger this snapshot predates.
+    if attested_root.height > checkpoint_height {
+        return Err(format!(
+            "attested root height {} exceeds the checkpoint height {}",
+            attested_root.height, checkpoint_height
+        ));
+    }
+
+    // Leg 1 — the ledger bind. `None` means a pair's key was not the cell's own
+    // content id: no ledger the insert path builds corresponds to this list.
+    let served_root = dregg_persist::canonical_ledger_root_from_pairs(cells)
+        .ok_or_else(|| {
+            "ledger snapshot holds a (CellId, Cell) pair whose key is not the cell's own id"
+                .to_string()
+        })?;
+    if served_root != attested_root.merkle_root {
+        return Err(format!(
+            "ledger snapshot folds to {} but the attested root commits {}",
+            hex_encode(&served_root[..8]),
+            hex_encode(&attested_root.merkle_root[..8])
+        ));
+    }
+
+    // Leg 2 — the committee proof. The SAME verifier the restart anchor runs:
+    // >=supermajority of OUR enrolled committee, both signature halves, over
+    // THIS root's (block, ledger-root, receipt-stream) preimage.
+    if !attested_root.verify_finalization_quorum(committee, ml_dsa_committee) {
+        return Err(
+            "attested root carries no verifiable >=supermajority committee quorum \
+             (self-asserted or under-quorum)"
+                .to_string(),
+        );
+    }
+
+    // Leg 3 — the vote binds a block in the authenticated restored DAG.
+    match attested_root.blocklace_block_id {
+        Some(id) if blocklace.contains(&BlockId(id)) => {}
+        _ => {
+            return Err(
+                "attested root's blocklace_block_id names no block in the authenticated checkpoint DAG"
+                    .to_string(),
+            );
+        }
+    }
+
+    Ok(())
 }
 
 async fn fetch_checkpoint_http(url: &str) -> Option<Vec<u8>> {

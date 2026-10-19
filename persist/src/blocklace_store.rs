@@ -318,6 +318,13 @@ mod tests {
     /// A small honest lace persisted the way the node persists it (blocks
     /// individually + meta blob).
     fn persist_honest_lace(store: &PersistentStore, sk: &ed25519_dalek::SigningKey) -> Blocklace {
+        // `Blocklace::new` / `Block::new` / `add_block` derive + sign with the
+        // creator's ML-DSA-65 half — `dregg-pq` aborts the process with no
+        // verified core installed, and `blocklace/src/pq.rs`'s own `#[cfg(test)]`
+        // install is inert here (this crate is a dependency of ITS lib-test, not
+        // the other way). The kit's install is once-per-process; the lib-test
+        // binary died as a bare SIGABRT on the first lace fixture without it.
+        dregg_pq_testkit::install_or_panic();
         let mut lace = Blocklace::new(sk.clone(), 1);
         lace.add_block(dregg_blocklace::finality::Payload::Ack);
         lace.add_block(dregg_blocklace::finality::Payload::Ack);

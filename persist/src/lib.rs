@@ -226,6 +226,28 @@ pub fn canonical_ledger_root_from_leaves(entries: &[([u8; 32], [u8; 32])]) -> [u
     canonical_ledger_root_from_sorted(entries.len(), entries.iter().map(|(id, h)| (id, h)))
 }
 
+/// The canonical root over a `(CellId, Cell)` pair list — the wire-shape twin
+/// of [`canonical_ledger_root`] for a caller holding serialized pairs rather
+/// than a live `Ledger` (a checkpoint bootstrap re-derives the root over the
+/// SERVED snapshot before trusting it). `None` when a pair's key is not the
+/// cell's own content id: such a list describes no ledger the insert path would
+/// ever build, so there is no root to compare. The leaf construction and the
+/// sort are exactly [`canonical_ledger_leaves`]' — byte-identical by calling the
+/// same two functions, not by re-implementing them.
+pub fn canonical_ledger_root_from_pairs(
+    cells: &[(dregg_cell::CellId, dregg_cell::Cell)],
+) -> Option<[u8; 32]> {
+    let mut leaves: Vec<([u8; 32], [u8; 32])> = Vec::with_capacity(cells.len());
+    for (id, cell) in cells {
+        if *id != cell.id() {
+            return None;
+        }
+        leaves.push((*id.as_bytes(), canonical_ledger_leaf(cell)));
+    }
+    leaves.sort_by_key(|a| a.0);
+    Some(canonical_ledger_root_from_leaves(&leaves))
+}
+
 /// The allocation-free twin of [`canonical_ledger_root_from_leaves`]: fold the
 /// canonical root over an ALREADY-SORTED `(id, leaf)` iterator of known length.
 ///
