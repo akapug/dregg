@@ -12351,7 +12351,7 @@ mod tests {
             },
         },
 
-        // ── The 2 RefusedResiduals: the PQ identity authority plane has no AIR row.
+        // ── The 4 RefusedResiduals: PQ identity and shielded verbs have no AIR row.
         // The payloads are ARBITRARY BYTES, not a real ML-DSA keypair, and that is
         // safe here because the refusal is decided on the VARIANT before any
         // primitive is touched — minting a real key would drag `dregg-pq`'s
@@ -12448,13 +12448,13 @@ mod tests {
             mismatched.len(),
             mismatched.join("\n  ")
         );
-        // The 29/5/3 split mirrors the Descriptor/NamedResidual/RefusedResidual split
+        // The 29/5/4 split mirrors the Descriptor/NamedResidual/RefusedResidual split
         // of `circuit/tests/effect_enum_descriptor_residual_gate.rs`. Pinning it here
         // makes a verb SILENTLY changing posture (a residual quietly gaining or losing
         // a producer arm) red rather than invisible.
         assert_eq!(
             counts,
-            (29, 5, 3),
+            (29, 5, 4),
             "attestable / no-actor-transition / refused split moved; reconcile against \
              effect_enum_descriptor_residual_gate.rs before editing the pin"
         );
